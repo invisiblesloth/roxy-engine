@@ -1,0 +1,83 @@
+-- 
+-- mainTemplate.lua
+-- 
+-- Use this template as a guide for creating your main.lua for your game.
+-- Copy this file to your source directory and rename it.
+-- 
+
+-- Initialize the Roxy game engine
+import "libraries/roxy/Roxy"
+local roxy = Roxy()
+
+-- 
+-- Register scenes
+-- Import your scenes and register them with Roxy
+-- 
+import "scenes/MainMenu"
+import "scenes/MySceneOne"
+import "scenes/MySceneTwo"
+local scenes = {
+	MainMenu = MainMenu,
+	MySceneOne = MySceneOne,
+	MySceneTwo = MySceneTwo
+}
+roxy:registerScenes(scenes)
+
+-- Set the game to run at 30 FPS (optional but recommended)
+-- This setting is recommended because sprite animations in Roxy are frame-based.
+-- Running at 30 FPS ensures that animations progress as intended by matching the timing expectations.
+playdate.display.setRefreshRate(30)
+
+-- Set up game settings (optional)
+-- You can configure initial game settings here.
+-- The setup method parameters are:
+-- @param `settings` (table, required): Initial game settings.
+-- @param `saveToDisk` (boolean, optional): Whether to save settings to disk. Default: true.
+-- @param `updateValuesIfChanged` (boolean, optional): Whether to update existing settings on disk with these new values. Default: true.
+-- @param `retainOldKeys` (boolean, optional): Whether to keep settings that are not in the provided `settings` table. Default: true.
+local settings = {
+	Difficulty = "Med"  -- Example setting
+	
+	-- 
+	-- Define your settings *HERE*
+	-- 
+	
+}
+roxy:settingsSetup(settings, true, true, true)
+
+-- Set up game data (optional)
+-- You can configure initial game data (e.g., player score, lives) here.
+-- The setup method parameters are:
+-- @param `gameData` (table, required): Initial game data.
+-- @param `numberOfSlots` (integer, optional): Number of save slots. This can also be controlled in config.json. Default: 1.
+-- @param `saveToDisk` (boolean, optional): Whether to save game data to disk. Default: true.
+-- @param `modifyExistingData` (boolean, optional): Whether to override existing data on disk with these new values. Default: true.
+local data = {
+	-- Example game data
+	score = 0,
+	lives = 3
+	
+	-- 
+	-- Define your game data *HERE*
+	-- 
+	
+}
+roxy:gameDataSetup(data, 3, true, true)
+
+-- Launch the game
+-- You can pass a configuration table to customize the engine's behavior.
+-- Note: These settings can also be configured via the `config.json` file.
+-- The `roxy:new()` method parameters are:
+-- @param `initialScene` (RoxyScene, required): The initial scene to launch.
+-- @param `transitionType` (string, optional): Transition type to use when launching the scene.
+-- @param `transitionDuration` (number, optional): Duration of the transition in seconds.
+-- @param `holdTime` (number, optional): Hold time before the transition completes, in seconds.
+-- @param `extraTransitionData` (any, optional): Additional data to pass to the transition.
+-- @param `config` (table, optional): Engine configuration options.
+local config = {
+	defaultTransition = "CrossDissolve",
+	defaultTransitionDuration = 1.5,
+	defaultTransitionHoldTime = 0.25,
+	showFPS = true
+}
+roxy:new(MainMenu, "Cut", 0, 0, nil, config)

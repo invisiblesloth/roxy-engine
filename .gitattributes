@@ -1,0 +1,18 @@
+# Normalize all text files (important for cross-platform development)
+* text=auto
+
+# Mark binary files so that Git doesn't attempt to diff them
+*.png binary
+*.jpg binary
+*.gif binary
+*.zip binary
+*.dll binary
+*.so binary
+*.dylib binary
+
+# Lua scripts
+*.lua linguist-language=Lua
+
+# C source code
+*.c linguist-language=C
+*.h linguist-language=C
