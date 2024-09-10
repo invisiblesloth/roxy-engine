@@ -1,3 +1,13 @@
+### Version 0.5.0 - 10-Sep 2024
+
+- **Version Maturity**:
+  - This release marks the transition to a stricter adherence to **Semantic Versioning (SemVer) 2.0.0**. Future releases will follow this structured approach, ensuring that the version number accurately reflects changes in functionality, bug fixes, and API stability.
+  
+- **Version Number Update**:
+  - Updated the version number in `roxy.lua` to reflect `v0.5.0` as part of this shift towards formalized versioning.
+  
+This update primarily focuses on process changes related to versioning, without introducing new features or bug fixes.
+
 ### Version 0.4.4 - 10-Sep 2024
 
 - **Repository Cleanup:**
