@@ -54,6 +54,7 @@ build/
 # Logs and temporary files
 *.log
 *.tmp
+.DS_Store
 
 # Editor swap files
 *.swo
