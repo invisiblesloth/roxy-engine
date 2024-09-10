@@ -1,3 +1,14 @@
+### Version 0.4.4 - 10-Sep 2024
+
+- **Repository Cleanup:**
+  - Removed the `.nova/Tasks/Playdate Simulator.json` file and the associated `.nova` folder that were unintentionally included in the repository. These files were not needed for the engine’s functionality.
+  - Removed all `.DS_Store` files from the repository and updated the `.gitignore` file to ensure these macOS system files are no longer included in future commits.
+
+- **Version Correction:**
+  - Corrected the version number in `roxy.lua`, which was erroneously marked as v0.4.4 in version 0.4.3. This has been updated to reflect the correct version in alignment with the repository.
+
+These updates focus on cleaning up unnecessary files and preventing them from being reintroduced, ensuring a more polished and professional repository.
+
 ### Version 0.4.3 - 19-Aug 2024
 
 - **README.md Enhancements:**
