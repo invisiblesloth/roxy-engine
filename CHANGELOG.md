@@ -1,3 +1,20 @@
+### Version 0.5.2 - 11-Sep 2024
+
+- **Retrospective Release Notes for v0.5.1**:
+  - Added the previously missing release notes for **Version 0.5.1**, which had been inadvertently excluded from that release. These notes cover documentation improvements and the correction of minor misspellings in repository files.
+
+There are no functional changes or bug fixes in this release. The update focuses on accurately reflecting prior development work by incorporating the missing documentation for version 0.5.1.
+
+### Version 0.5.1 - 10-Sep 2024
+
+- **Misspelling Fix**:
+  - Corrected the filename of `CHANAGELOG.md` to the proper `CHANGELOG.md` for clarity and accuracy.
+
+- **Documentation Update**:
+  - This minor version focuses on ensuring the repository's documentation is properly structured and named, enhancing the professional presentation of Roxy's development.
+
+No new features or functionality changes were introduced in this version. The update focuses on improving the repository's organization and documentation in line with the project's evolving structure.
+
 ### Version 0.5.0 - 10-Sep 2024
 
 - **Version Maturity**:
