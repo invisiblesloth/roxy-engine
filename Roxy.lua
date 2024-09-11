@@ -1,5 +1,5 @@
 -- Roxy Game Engine
--- version: 0.5.0
+-- version: 0.5.2
 -- License: MIT
 
 -- Import Playdate SDK core libraries
