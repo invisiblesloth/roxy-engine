@@ -2,7 +2,7 @@ local pd <const> = playdate
 local Object <const> = pd.object
 local Display <const> = pd.display
 local Graphics <const> = pd.graphics
-local Ease <const> = pd.easingFunctions
+local Ease <const> = roxy.easingFunctions
 
 class("RoxyAnimation").extends()
 
