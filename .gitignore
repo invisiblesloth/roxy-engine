@@ -66,6 +66,9 @@ nbproject/
 *.swp
 *.swo
 
+# Local project-specific notes
+support/ # Ignore support folder for local notes and tasks
+
 # Build directories and files
 build/
 *.d
