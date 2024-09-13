@@ -1,3 +1,26 @@
+### Version 0.5.3 - 13-Sep 2024
+
+- **Easing Functions Reference Update:**
+  - Updated references from `pd.easingFunctions` to `roxy.easingFunctions` in `Roxy.lua` and `RoxyAnimation.lua`. This change aligns the easing functions with Roxy's own implementation.
+
+- **.gitignore Enhancements:**
+  - Expanded the `.gitignore` file to include common IDE and editor files (e.g., `.vscode/`, `.idea/`, `.xcworkspace`, etc.) to prevent unintentional inclusion of these files in the repository.
+  - Added `support/` to `.gitignore` to exclude support files like todos and notes, ensuring they remain local and are not tracked by Git.
+
+- **CMake and Makefile Updates:**
+  - Updated `CMakeLists.txt` and `Makefile` references from `Roxy` to a more generic `GameName`, aligning with the project template's generic naming conventions. This change facilitates easier project setup and customization when using the template.
+
+- **Documentation Improvements:**
+  - **README.md Corrections:**
+  - Fixed a typo in the Features section regarding High-Performance Math and Easing Functions, correcting an extra asterisk for proper formatting.
+  - **Project Template Integration:**
+  - Added detailed information about the Roxy Engine Project Template to the README.md in the Features and Setup sections, providing users with guidance on using the template for quicker project initiation.
+  - Removed the "Example Project Template" item from the roadmap since the template is now available.
+  - **Sponsorship & Support Section:**
+  - Introduced a new "Sponsorship & Support" section in the README.md, informing users about ways to support the project through GitHub Sponsors and itch.io. Emphasized that contributions are entirely voluntary and that Roxy remains free under the MIT License.
+
+This release focuses on refining the codebase for consistency, improving documentation, and making it easier for developers to start new projects using Roxy. The updates ensure a smoother development experience and provide clear pathways for community support.
+
 ### Version 0.5.2 - 11-Sep 2024
 
 - **Retrospective Release Notes for v0.5.1**:
