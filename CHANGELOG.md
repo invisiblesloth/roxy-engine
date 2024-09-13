@@ -1,3 +1,14 @@
+### Version 0.5.4 - 13-Sep 2024
+
+- **.gitignore File Refinements:**
+  - Removed an in-line comment from the `support/` folder entry in the `.gitignore` file to improve clarity.
+  - Adjusted the `.gitignore` file to simplify the exclusion of local project-specific notes and tasks stored in the `support/` folder.
+
+- **Folder and File Cleanup:**
+  - Untracked and removed the `support/` folder from the repository. This folder was previously included by mistake and is intended to remain local for development notes and tasks. The folder will now be ignored in future commits as per the updated `.gitignore`.
+
+This release focuses on improving repository cleanliness and maintaining the exclusion of local development files that should not be tracked. It ensures that unintentional commits of the `support/` folder will no longer occur, adhering to the repository's organizational standards.
+
 ### Version 0.5.3 - 13-Sep 2024
 
 - **Easing Functions Reference Update:**
