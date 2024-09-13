@@ -12,11 +12,12 @@ Roxy is a fast and easy-to-use game engine for Playdate – or at least, that's 
 - **Settings and Save Game API:** Easily manage game settings and save data, ensuring persistent and customizable game experiences.
 - **Base Menu Object:** Quickly create simple, one-column text menus with an easy-to-use base menu object.
 - **Dynamic Sequencer:** Craft complex animations by combining customizable easings.
-- **High-Performance Math and Easing Functions:*** Written in C for optimal performance and  accessible for your game.
+- **High-Performance Math and Easing Functions:** Written in C for optimal performance and accessible for your game.
 - **Powerful Input Handling:** Manage input events, including button presses, holds, and the Playdate crank, with flexible and customizable handlers.
 - **Configurable Engine:** Easily customize Roxy’s behavior and settings through a `config.json` file, allowing fine-tuned control over transitions, input thresholds, save slots, and more.
 - **Extensible Framework:** Built with extensibility in mind, Roxy allows you to add your own custom features and modules without hassle.
 - **Utility Goodies:** Load JSON files, manipulate tables, and more with convenient utilities included in Roxy.
+- **Simplify Setup with Ready-to-Use Template:** Use the [project template](https://github.com/invisiblesloth/roxy-engine-project-template) to streamline the integration of Roxy into your game.
 
 ***
 
@@ -24,27 +25,58 @@ Roxy is a fast and easy-to-use game engine for Playdate – or at least, that's 
 
 Before you begin, make sure you have the Playdate SDK installed and configured correctly on your system.
 
-Follow these steps to set up Roxy in your project:
+#### Option 1: Use the Roxy Project Template (Recommended)
 
-1. **Download or Clone:** Get the repository and place it into the `libraries/roxy/` directory within your new or existing project.
+The easiest way to get started is to use the [Roxy Engine Project Template](https://github.com/invisiblesloth/roxy-engine-project-template). This template includes the Roxy game engine as a submodule and is set up with all necessary files and configurations.
+
+1. **Clone the Template Repository:**
+
+   ```bash
+   git clone --recurse-submodules https://github.com/invisiblesloth/roxy-engine-project-template.git YourProjectName
+   ```
+
+   Replace `YourProjectName` with the desired name for your project.
+
+2. **Update Submodules (if necessary):**
+
+   Navigate into your project directory and ensure that the Roxy submodule is up to date:
+
+   ```bash
+   cd YourProjectName
+   git submodule update --init --recursive
+   ```
+
+3. **Start Developing:**
+
+   The template comes with a basic setup to start developing your game immediately. Modify the `main.lua` and create your scenes in the `scenes` directory.
+   
+*Note: Detailed setup instructions and additional information are available in the project template's [README.md](https://github.com/invisiblesloth/roxy-engine-project-template/blob/main/README.md).*
+
+#### Option 2: Manual Setup
+
+If you prefer to manually add Roxy to your existing project, follow these steps:
+
+1. **Download or Clone:** Get the Roxy repository and place it into the `libraries/roxy/` directory within your new or existing project.
 
 2. **Add to Project:**
     - Ensure `CMakeLists.txt` and `Makefile` are in the root directory of your project.
     - Note: Your `main.lua` file might be located in a subdirectory such as `source`. Regardless, `CMakeLists.txt` and `Makefile` should be at the top level of your project's directory structure.
 
 3. **Import and Use:**
+
     Add the following to your `main.lua` file to start using Roxy:
 
     ```lua
     import "libraries/roxy/Roxy"
     import "scenes/MyStartingScene"  -- Replace with your game's starting scene
-    
+
     local roxy = Roxy()
     roxy:registerScenes(MyStartingScene)
     roxy:new(MyStartingScene)
     ```
 
 4. **Start with the Scene Template:**
+
     To speed up development, use the provided `SceneTemplate.lua` as a foundation for your scenes. This template includes detailed instructions and examples to help you set up scenes efficiently. Simply copy `SceneTemplate.lua` into your "scenes" directory, rename it, and modify it to fit your game's needs.
 
 ***
@@ -88,7 +120,6 @@ For a detailed history of changes and updates, please refer to the [CHANGELOG.md
 - **Custom Graphics for Roxy:** Add custom graphics specifically for the Roxy game engine.
 - **Roxy Name Inspiration:** Add notes to the README.md file explaining the inspiration behind the name "Roxy."
 - **Additional Example Templates:** Expand the available templates to include examples for using RoxyMenu, RoxySprite, and RoxyAnimation. Currently, we have templates for RoxyScene and main.lua.
-- **Example Project Template:** Create a separate GitHub repository featuring a project template that includes the Roxy game engine as a submodule.
 - **C Integration Instructions:** Provide detailed instructions on how to adjust `CMakeLists.txt` and `Makefile` for projects that include native C code alongside Roxy.
 - **RoxySprite and RoxyAnimation Improvements:** Review, test, and update these older components to ensure they meet current standards and performance expectations.
 - **Expanded Engine Configurations:** Introduce more options for engine-specific configurations to give developers greater control. *(See `config.json` for current configuration options.)*
@@ -132,6 +163,20 @@ Note: We're not certain how to approach these features yet or if they are even p
 - **RoxySprite and RoxyAnimation Stability:** These components are older and require more rigorous testing. They may need significant updates to meet current standards, so expect potential changes or improvements.
 
 - **Object Pools:** While object pools help manage memory, they come with challenges, such as potential complications in managing state across different scenes or transitions. Additionally, they might contain more objects than needed, leading to higher memory usage. We are evaluating whether this approach is the best fit for Roxy.
+
+***
+
+### Sponsorship & Support
+
+While Roxy and the project template are free and open-source under the MIT License, we welcome any support from the community. We're developing Roxy primarily for our own use in creating Playdate games, and while financial contributions are appreciated, they're entirely voluntary and not expected.
+
+- **GitHub Sponsors:** The easiest way to support us is through [GitHub Sponsors](https://github.com/sponsors/invisiblesloth). Any contribution is entirely voluntary and greatly appreciated.
+
+- **Itch.io:** We also have a "name your own price" download available on [itch.io](https://invisiblesloth.itch.io/roxy-engine), which directs users to this GitHub repository.
+
+**Important Note:** Payment is entirely voluntary. Roxy and the project template are both free under the MIT License. No one should feel obligated to pay for this project. In fact, since Roxy is currently in a pre-release (v0.x.x) state, it might be best to wait before investing significant time or money into a Roxy-based project. However, if you'd like to support our work and help us improve Roxy, these are the ways you can do so.
+
+Thank you for your support!
 
 ***
 
