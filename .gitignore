@@ -40,7 +40,34 @@ luac.out
 *.hex
 
 # IDE and editor files
-.vscode
+.vscode/
+.nova/
+.idea/
+*.xcworkspace
+*.xcodeproj
+*.xcuserdata
+*.xcuserstate
+*.xcscheme
+DerivedData/
+*.hmap
+.settings/
+.project
+.classpath
+*.sublime-project
+*.sublime-workspace
+nbproject/
+.vs/
+*.vcxproj
+*.user
+*.suo
+*.sln
+*~
+.#*
+*.swp
+*.swo
+
+# Local project-specific notes
+support/ # Ignore support folder for local notes and tasks
 
 # Build directories and files
 build/

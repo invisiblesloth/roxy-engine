@@ -65,7 +65,7 @@ local Graphics <const> = pd.graphics
 local Sprite <const> = Graphics.sprite
 local Timer <const> = pd.timer
 local FrameTimer <const> = pd.frameTimer
-local Ease <const> = pd.easingFunctions
+local Ease <const> = roxy.easingFunctions
 local Geometry <const> = pd.geometry
 local UI <const> = pd.ui
 
