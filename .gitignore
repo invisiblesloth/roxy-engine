@@ -1,0 +1,40 @@
+# Archives
+*.zip
+
+# Build Artifacts
+*.elf
+*.bin
+*.log
+*.tmp
+
+# Shared Libraries
+*.dll
+*.so
+*.so.*
+*.dylib
+lib*.dylib
+
+# Playdate
+*.pdx/
+*.pdc
+*.dSYM/
+
+#IDE
+.vscode/
+.nova/
+
+# CMake / Build
+build*/
+CMakeFiles/
+cmake*/
+CMakeCache.txt
+*.cmake
+
+# macOS / System Files
+.DS_Store
+
+# Project Notes
+support/
+
+# Includes
+!.gitmodules

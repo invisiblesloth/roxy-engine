@@ -1,0 +1,32 @@
+# Normalize text files
+* text=auto
+
+# Treat these as binary
+*.dll   binary
+*.dylib binary
+*.gif   binary
+*.jpg   binary
+*.png   binary
+*.pdc   binary
+*.pdx   binary
+*.so    binary
+*.zip   binary
+
+# Override GitHub language detection
+*.lua linguist-language=Lua
+*.c linguist-language=C
+*.h linguist-language=C
+
+# Exclude build and support from language stats
+build/**   linguist-generated
+support/** linguist-generated
+
+# Exclude dev-only files
+/.vscode/       export-ignore
+/.nova/         export-ignore
+/build/        export-ignore
+/support/       export-ignore
+/.gitmodules    export-ignore
+/.editorconfig  export-ignore
+/.gitattributes export-ignore
+/.gitignore     export-ignore
