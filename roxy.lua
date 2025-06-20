@@ -71,6 +71,12 @@ function r.new(startingScene)
     return
   end
 
+  --#DEBUG START
+  if not startingScene then
+    error("[*][roxy.new] startingScene is required for roxy.new.", 2)
+  end
+  --#DEBUG END
+
   -- (1) Seed random number generator
   randomseed(getSecondsSinceEpoch())
 
@@ -85,7 +91,7 @@ function r.new(startingScene)
 
   --#DEBUG START
   if type(scene) ~= "table" then
-    error("[*][roxy.new] StartingScene function must return a scene table.", 2)
+    error("[*][roxy.new] startingScene initialization must return a scene table.", 2)
   end
   --#DEBUG END
 
