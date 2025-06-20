@@ -3,7 +3,7 @@
 roxy = roxy or {}
 roxy.Scene = roxy.Scene or {}
 local Scene <const> = roxy.Scene
- 
+
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
@@ -42,15 +42,15 @@ local function rebuildLists()
       bgList[bgCount] = scene
     end
   end
-  
+
   -- Trim tails
-  for i = updateCount + 1, #updateList do 
+  for i = updateCount + 1, #updateList do
     updateList[i] = nil
   end
   for i = bgCount + 1, #bgList do
     bgList[i] = nil
   end
-  
+
   print("[D][Scene.rebuildLists] update=".. updateCount .. " bg=" .. bgCount) --#DEBUG
 end
 
@@ -74,11 +74,11 @@ end
 function Scene.registerScenes(...)
   local params = { ... }
   local paramCount = #params
-  
+
   -- Case 1: registerScenes("name", sceneTable)
   if paramCount == 2 then
     local sceneName, sceneTable = params[1], params[2]
-  
+
     if type(sceneName) ~= "string" then
       error("[*][Scene.registerScenes] First argument must be a string scene name.", 2) --#DEBUG
       return
@@ -87,20 +87,20 @@ function Scene.registerScenes(...)
       error("[*][Scene.registerScenes] Second argument must be a table.", 2) --#DEBUG
       return
     end
-  
+
     scenes[sceneName] = sceneTable
     return
   end
-  
+
   -- Case 2: registerScenes({ name1 = table1, name2 = table2, ... })
   if paramCount == 1 then
     local sceneTable = params[1]
-  
+
     if type(sceneTable) ~= "table" then
       error("[*][Scene.registerScenes] Single argument must be a table of scenes.", 2) --#DEBUG
       return
     end
-  
+
     for name, table in pairs(sceneTable) do
       -- TODO: Should the if statement be removed from release build or just the error log?
       if type(name) ~= "string" then
@@ -115,7 +115,7 @@ function Scene.registerScenes(...)
     end
     return
   end
-  
+
   error("[*][Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
 end
 
@@ -126,9 +126,9 @@ function Scene.replaceScene(scene)
     error("[*][Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
-  
+
   print("[D][Scene.replaceScene] Stack cleared. Set '" .. (scene.name or "Unnamed") .. "' as sole scene.") --#DEBUG
-  
+
   -- Clean up every scene currently on the stack
   for i = #stack, 1, -1 do
     local scene = stack[i]
@@ -140,7 +140,7 @@ function Scene.replaceScene(scene)
     end
     stack[i] = nil
   end
-  
+
   -- Make new scene the sole occupant
   stack[1] = scene
   activateScene(scene)
@@ -154,21 +154,20 @@ function Scene.pushScene(scene)
     error("[*][Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
-  
-  logDebug("Pushing Scene") --#DEBUG
+
   print("[D][Scene.pushScene] Pushing Scene " .. (scene.name or "Unnamed")) --#DEBUG
-  
+
   -- Soft stack overflow cap
   if #stack >= MAX_SCENE_DEPTH then
     error("[*][Scene.pushScene] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
     return
   end
-  
+
   local current = Scene.currentScene
   if current and current.pause then
     current:pause()
   end
-  
+
   stack[#stack + 1] = scene
   activateScene(scene)
   rebuildLists()
@@ -183,20 +182,20 @@ function Scene.popScene()
     Scene.currentScene = nil
     return
   end
-  
+
   local scene = stack[depth]
   print("[D][Scene.popScene] Popping Scene " .. (scene.name or "Unnamed")) --#DEBUG
-  
+
   if scene.cleanup and not scene._didCleanup then
     scene:cleanup()
   end
-  
+
   stack[depth] = nil
   local previous = stack[depth - 1]
   if previous and previous.resume and previous.isPaused then
     previous:resume()
   end
-  
+
   activateScene(previous)
   rebuildLists()
 end
