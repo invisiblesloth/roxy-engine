@@ -68,9 +68,13 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
   self._dispatchStart = function()
     print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' started.") --#DEBUG
 
-    if self.stackOp == STACK_OP_REPLACE then
-      local oldScene = self._currentScene
-      if oldScene then oldScene:exit() end
+    local oldScene  = self._currentScene
+    local stackOp   = self.stackOp
+
+    if stackOp == STACK_OP_REPLACE then
+      if oldScene then
+        oldScene:exit()
+      end
     end
   end
 
@@ -89,22 +93,31 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
     if stackOp == STACK_OP_PUSH then
       pushRaw(newScene)
     elseif stackOp == STACK_OP_POP then
-      local popped = popRaw()
+      popRaw()
       newScene = Scene.currentScene
     else -- Replace Scene
       replaceRaw(newScene)
-      if oldScene then
-        oldScene:pause()
-      end
     end
 
     -- Lifecycle hook
     if stackOp == STACK_OP_POP then
-      local resumedScene = Scene.currentScene
-      if resumedScene then
-        resumedScene:resume()
+      if oldScene then
+        oldScene:cleanup()
       end
-    else -- Replace or Push Scene
+      if newScene then
+        newScene:resume()
+      end
+    elseif stackOp == STACK_OP_PUSH then
+      if oldScene then
+        oldScene:pause()
+      end
+      if newScene then
+        newScene:enter()
+      end
+    else -- Replace Scene
+      if oldScene then
+        oldScene:cleanup()
+      end
       if newScene then
         newScene:enter()
       end
@@ -124,7 +137,6 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
     Transition.isTransitioning = false
     self:cleanup()
     Transition.currentTransition = nil
-    Transition.stackOp = STACK_OP_REPLACE
 
     print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' completed.") --#DEBUG
   end
