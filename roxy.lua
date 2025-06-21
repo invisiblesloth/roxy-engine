@@ -17,8 +17,13 @@ import "CoreLibs/timer"
 import "CoreLibs/ui/crankIndicator"
 import "CoreLibs/ui/gridview"
 
+-- Utilities
+import "libraries/roxy/utilities/Math"
+import "libraries/roxy/utilities/Graphics"
+
 -- Core Modules
 import "libraries/roxy/core/modules/Scene"
+import "libraries/roxy/core/modules/Transition"
 
 -- Core Components
 import "libraries/roxy/core/scenes/RoxyScene"
@@ -29,22 +34,13 @@ roxy = roxy or {}
 -- Local State
 local engineInitialized = false
 
--- SDK & Modules
+-- Aliases
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 
 local r     <const> = roxy
 local Scene <const> = r.Scene
 
--- Constants
-local COLOR_BLACK     <const> = Graphics.kColorBlack
-local COLOR_WHITE     <const> = Graphics.kColorWhite
-local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
-
-local DEFAULT_FPS_X <const> = 385 --#DEBUG
-local DEFAULT_FPS_Y <const> = 228 --#DEBUG
-
--- Aliases
 local getDeltaTime  <const> = r.getDeltaTime
 
 local randomseed            <const> = math.randomseed
@@ -59,8 +55,21 @@ local replaceScene      <const> = Scene.replaceScene
 local getUpdateList     <const> = Scene.getUpdateList
 local getBackgroundList <const> = Scene.getBackgroundList
 
+-- Constants
+local COLOR_BLACK     <const> = Graphics.kColorBlack
+local COLOR_WHITE     <const> = Graphics.kColorWhite
+local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
+
+local DEFAULT_FPS_X <const> = 385 --#DEBUG
+local DEFAULT_FPS_Y <const> = 228 --#DEBUG
+
+-- Import Transitions
+import "libraries/roxy/core/transitions/RoxyTransition"
+import "libraries/roxy/core/transitions/RoxyCutTransition"
+import "libraries/roxy/core/transitions/Cut"
+
 -- ----------------------------------------
--- Public API
+-- Engine
 -- ----------------------------------------
 
 -- ! New
@@ -98,6 +107,10 @@ function r.new(startingScene)
   replaceScene(scene)
 end
 
+-- ----------------------------------------
+-- Pause and Resume
+-- ----------------------------------------
+
 -- ! Game Will Pause
 function r.gameWillPause()
   local currentScene = Scene.currentScene
@@ -115,10 +128,10 @@ function r.gameWillResume()
 end
 
 -- ----------------------------------------
--- Implementation
+-- Main Game Loop
 -- ----------------------------------------
 
--- ! Main Loop
+-- ! Update
 function pd.update()
   local dt = getDeltaTime()
   r.deltaTime = dt
