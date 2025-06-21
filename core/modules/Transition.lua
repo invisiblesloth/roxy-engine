@@ -30,7 +30,7 @@ local setDrawMode <const> = Graphics.setImageDrawMode
 -- Global
 Transition.currentTransition  = nil
 Transition.isTransitioning    = false
-Transition._stackOp           = STACK_OP_REPLACE
+Transition.stackOp            = STACK_OP_REPLACE
 Transition.STACK_OP_REPLACE   = STACK_OP_REPLACE
 Transition.STACK_OP_PUSH      = STACK_OP_PUSH
 Transition.STACK_OP_POP       = STACK_OP_POP
@@ -64,13 +64,13 @@ end
 
 -- ! Push Scene
 function Transition.pushScene(newSceneClass, transitionName, duration, holdTime, opts)
-  Transition._stackOp = STACK_OP_PUSH
+  Transition.stackOp = STACK_OP_PUSH
   Transition.transitionToScene(newSceneClass, transitionName, duration, holdTime, opts)
 end
 
 -- ! Pop Scene
 function Transition.popScene(transitionName, duration, holdTime, opts)
-  Transition._stackOp = STACK_OP_POP
+  Transition.stackOp = STACK_OP_POP
   Transition.transitionToScene(nil, transitionName, duration, holdTime, opts)
 end
 
@@ -84,7 +84,7 @@ function Transition.transitionToScene(newSceneClass, transitionName, duration, h
   end
   --#DEBUG END
 
-  local stackOp = Transition._stackOp
+  local stackOp = Transition.stackOp
   local newScene = nil
   if stackOp ~= STACK_OP_POP then
     newScene = newSceneClass()

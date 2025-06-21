@@ -42,7 +42,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
   self.y = opts.y or 0
 
   -- Accept stackOp
-  self._stackOp = stackOp or STACK_OP_REPLACE
+  self.stackOp = stackOp or STACK_OP_REPLACE
 
   -- Timing
   self.holdTime = holdTime or opts.holdTime or DEFAULT_HOLD_TIME_MEDIUM
@@ -68,7 +68,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
   self._dispatchStart = function()
     print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' started.") --#DEBUG
 
-    if self._stackOp == STACK_OP_REPLACE then
+    if self.stackOp == STACK_OP_REPLACE then
       local oldScene = self._currentScene
       if oldScene then oldScene:exit() end
     end
@@ -81,10 +81,10 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
     if self.state & STATE_MIDPOINT_REACHED ~= 0 then return end
     self.state |= STATE_MIDPOINT_REACHED
 
-    local stackOp   = self._stackOp
+    local stackOp   = self.stackOp
     local newScene  = self._newScene
     local oldScene  = self._currentScene
-    
+
     -- Perform raw stack op without managed hooks
     if stackOp == STACK_OP_PUSH then
       pushRaw(newScene)
@@ -109,7 +109,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
         newScene:enter()
       end
     end
-    
+
     self._newScene = newScene
   end
 
@@ -124,7 +124,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
     Transition.isTransitioning = false
     self:cleanup()
     Transition.currentTransition = nil
-    Transition._stackOp = STACK_OP_REPLACE
+    Transition.stackOp = STACK_OP_REPLACE
 
     print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' completed.") --#DEBUG
   end
