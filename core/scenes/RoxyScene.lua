@@ -3,13 +3,11 @@
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 
--- Constants
-local BLACK       <const> = Graphics.kColorBlack
-local CLEAR_COLOR <const> = BLACK
-
--- Aliases
 local clearScreen   <const> = Graphics.clear
 local setDrawOffset <const> = Graphics.setDrawOffset
+
+local COLOR_BLACK <const> = Graphics.kColorBlack
+local CLEAR_COLOR <const> = COLOR_BLACK
 
 -- ----------------------------------------
 -- Class Definition & Init
@@ -29,7 +27,7 @@ function RoxyScene:init()
 end
 
 -- ----------------------------------------
--- Scene Lifecycle (Core Methods)
+-- Scene Lifecycle
 -- ----------------------------------------
 
 -- ! Enter
@@ -79,7 +77,7 @@ end
 -- TODO: Add sprite management methods etc. HERE
 
 -- ----------------------------------------
--- ! Public API
+-- ! Render Utilities
 -- ----------------------------------------
 
 function RoxyScene:resetDrawOffset()
