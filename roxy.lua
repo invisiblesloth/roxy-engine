@@ -38,10 +38,12 @@ local engineInitialized = false
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 
-local r     <const> = roxy
-local Scene <const> = r.Scene
+local r           <const> = roxy
+local Scene       <const> = r.Scene
+local Transition  <const> = r.Transition
 
-local getDeltaTime  <const> = r.getDeltaTime
+local getDeltaTime    <const> = r.getDeltaTime
+local loadTransitions <const> = Transition.loadTransitions
 
 local randomseed            <const> = math.randomseed
 local getSecondsSinceEpoch  <const> = pd.getSecondsSinceEpoch
@@ -89,12 +91,17 @@ function r.new(startingScene)
   -- (1) Seed random number generator
   randomseed(getSecondsSinceEpoch())
 
-  -- (2) Set initial graphics state
+  -- (2) Load transitions
+  loadTransitions({
+    Cut = Cut,
+  })
+
+  -- (3) Set initial graphics state
   setColor(COLOR_WHITE)
   setBgColor(COLOR_BLACK)
   setDrawMode(DRAW_MODE_COPY)
 
-  -- (3) Start starting scene
+  -- (4) Start starting scene
   engineInitialized = true
   local scene = startingScene()
 
