@@ -62,6 +62,12 @@ function Transition.loadTransitions(transitionsTable)
   transitions = transitionsTable
 end
 
+-- ! Replace Scene
+function Transition.replaceScene(newSceneClass, transitionName, duration, holdTime, opts)
+  Transition.stackOp = STACK_OP_REPLACE
+  Transition.transitionToScene(newSceneClass, transitionName, duration, holdTime, opts)
+end
+
 -- ! Push Scene
 function Transition.pushScene(newSceneClass, transitionName, duration, holdTime, opts)
   Transition.stackOp = STACK_OP_PUSH
@@ -97,13 +103,13 @@ function Transition.transitionToScene(newSceneClass, transitionName, duration, h
 
   Transition.isTransitioning = true
   local currentScene = Scene.currentScene
-  local transitionClass = transitions[transitionName] or transitions[TRANSITION_DEFAULT]
 
-  --#DEBUG START
+  -- Use transition or fallback to default
+  local transitionClass = transitions[(transitionName or TRANSITION_DEFAULT)]
   if not transitionClass then
-    error("[*][Transition.transitionToScene] Undefined transition type ".. transitionName .. ".")
+    warn("[W][Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. TRANSITION_DEFAULT) --#DEBUG
+    transitionClass = transitions[TRANSITION_DEFAULT]
   end
-  --#DEBUG END
 
   -- Construct and execute the transition instance
   local transitionInstance = transitionClass(duration, holdTime, opts, stackOp)
