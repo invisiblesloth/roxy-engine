@@ -8,11 +8,9 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
--- Constants
-local MAX_SCENE_DEPTH <const> = 32
-
--- Aliases
 local redrawBackground <const> = Sprite.redrawBackground
+
+local MAX_SCENE_DEPTH <const> = 32
 
 -- Global
 Scene.currentScene = nil  -- Currently active scene (top of stack)
@@ -59,15 +57,13 @@ end
 local function activateScene(scene)
   Scene.currentScene = scene
   if scene then
-    if scene.enter and not scene._didEnter then
-      scene:enter()
-    end
+    scene:enter()
     redrawBackground()
   end
 end
 
 -- ----------------------------------------
--- Core Logic
+-- Scene Registration
 -- ----------------------------------------
 
 -- ! Register Scenes
@@ -119,89 +115,122 @@ function Scene.registerScenes(...)
   error("[*][Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
 end
 
+-- ----------------------------------------
+-- Scene Stack Management
+-- ----------------------------------------
+
+-- ! Replace Scene Raw
+function Scene.replaceRaw(newScene)
+  if type(newScene) ~= "table" then
+    error("[*][Scene.replaceRaw] A valid scene table must be provided.", 2) --#DEBUG
+    return
+  end
+
+  -- Clear every scene currently on the stack
+  for i = #stack, 1, -1 do
+    stack[i] = nil
+  end
+  -- Make new scene the sole occupant
+  stack[1] = newScene
+  Scene.currentScene = newScene
+  rebuildLists()
+
+  print("[D][Scene.replaceRaw] Stack cleared. Set '" .. (newScene.name or "Unnamed") .. "' as sole scene.") --#DEBUG
+end
+
 -- ! Replace Scene
--- Clears the stack and sets the provided scene as the only active scene.
-function Scene.replaceScene(scene)
-  if type(scene) ~= "table" then
+function Scene.replaceScene(newScene)
+  if type(newScene) ~= "table" then
     error("[*][Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
-  print("[D][Scene.replaceScene] Stack cleared. Set '" .. (scene.name or "Unnamed") .. "' as sole scene.") --#DEBUG
+  local oldScene = Scene.currentScene
+  Scene.replaceRaw(newScene)
 
-  -- Clean up every scene currently on the stack
-  for i = #stack, 1, -1 do
-    local scene = stack[i]
-    if scene.exit and not scene._didExit then
-      scene:exit()
-    end
-    if scene.cleanup and not scene._didCleanup then
-      scene:cleanup()
-    end
-    stack[i] = nil
+  if oldScene then
+    oldScene:exit()
+    oldScene:cleanup()
   end
 
-  -- Make new scene the sole occupant
-  stack[1] = scene
-  activateScene(scene)
+  activateScene(newScene)
+end
+
+-- ! Push Scene Raw
+function Scene.pushRaw(newScene)
+  if type(newScene) ~= "table" then
+    error("[*][Scene.pushRaw] A valid scene table must be provided.", 2) --#DEBUG
+    return
+  end
+
+  -- Soft stack overflow cap
+  if #stack >= MAX_SCENE_DEPTH then
+    error("[*][Scene.pushRaw] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
+    return
+  end
+
+  stack[#stack+1] = newScene
+  Scene.currentScene = newScene
   rebuildLists()
+
+  print("[D][Scene.pushRaw] Pushing Scene " .. (newScene.name or "Unnamed")) --#DEBUG
 end
 
 -- ! Push Scene
--- Pauses the current scene and pushes a new scene onto the stack.
-function Scene.pushScene(scene)
-  if type(scene) ~= "table" then
+function Scene.pushScene(newScene)
+  if type(newScene) ~= "table" then
     error("[*][Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
-  print("[D][Scene.pushScene] Pushing Scene " .. (scene.name or "Unnamed")) --#DEBUG
+  local oldScene = Scene.currentScene
+  if oldScene then
+    oldScene:pause()
+  end
 
-  -- Soft stack overflow cap
-  if #stack >= MAX_SCENE_DEPTH then
-    error("[*][Scene.pushScene] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
+  Scene.pushRaw(newScene)
+
+  activateScene(newScene)
+end
+
+-- ! Pop Scene Raw
+function Scene.popRaw()
+  local depth = #stack
+  if depth == 0 then
+    warn("[W][Scene.popRaw] Stack already empty.")
+    Scene.currentScene = nil
+    rebuildLists()
     return
   end
 
-  local current = Scene.currentScene
-  if current and current.pause then
-    current:pause()
-  end
-
-  stack[#stack + 1] = scene
-  activateScene(scene)
+  local popped = stack[depth]
+  stack[depth] = nil
+  Scene.currentScene = stack[#stack] -- Now top
   rebuildLists()
+
+  print("[D][Scene.popRaw] Popping Scene " .. (popped.name or "Unnamed")) --#DEBUG
+
+  return popped
 end
 
 -- ! Pop Scene
--- Removes the current scene and resumes the previous one.
 function Scene.popScene()
-  local depth = #stack
-  if depth == 0 then
-    warn("[W][Scene.popScene] Stack is already empty.", 2) --#DEBUG
-    Scene.currentScene = nil
-    return
+  local oldScene = Scene.popRaw()
+
+  if oldScene then
+    oldScene:cleanup()
   end
 
-  local scene = stack[depth]
-  print("[D][Scene.popScene] Popping Scene " .. (scene.name or "Unnamed")) --#DEBUG
-
-  if scene.cleanup and not scene._didCleanup then
-    scene:cleanup()
+  local newScene = Scene.currentScene
+  if newScene then
+    newScene:resume()
   end
 
-  stack[depth] = nil
-  local previous = stack[depth - 1]
-  if previous and previous.resume and previous.isPaused then
-    previous:resume()
-  end
-
-  activateScene(previous)
-  rebuildLists()
+  activateScene(newScene)
 end
 
 -- ----------------------------------------
--- Public API
+-- Scene State / Getters
 -- ----------------------------------------
 
 -- ! Get Current Scene
@@ -228,4 +257,3 @@ end
 function Scene.getBackgroundList()
   return bgList
 end
-
