@@ -24,7 +24,7 @@ local STATE_HOLD_ELAPSED     <const> = 2 -- Flag for hold time elapsed
 local isHoldTimeAddedToDuration <const> = false
 
 -- ----------------------------------------
--- ! Class Definition & Initialization
+-- ! Class Definition & Init
 -- ----------------------------------------
 
 class("RoxyTransition").extends()
