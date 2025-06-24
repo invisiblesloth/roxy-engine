@@ -2,6 +2,8 @@
 
 #include "pd_api.h"
 #include "utilities/roxy_math.h"
+#include "utilities/roxy_ease.h"
+#include "core/sequences/roxy_sequence.h"
 
 static PlaydateAPI* pd = NULL;
 static uint32_t previousTime = 0;
@@ -20,7 +22,8 @@ static float clampDeltaTime(float deltaTime, float min, float max);
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
-int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg) {
+int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
+{
     (void)arg;
 
     if (event != kEventInitLua) {
@@ -70,6 +73,107 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg) {
         }
     }
 
+    roxy_easingFunctions_setPlaydateAPI(pd);
+
+    // ! Register Easing Functions
+    const char* easingFunctions[] = {
+        "roxy.EasingFunctions.flat",
+        "roxy.EasingFunctions.linear",
+        "roxy.EasingFunctions.inQuad",
+        "roxy.EasingFunctions.outQuad",
+        "roxy.EasingFunctions.inOutQuad",
+        "roxy.EasingFunctions.outInQuad",
+        "roxy.EasingFunctions.inCubic",
+        "roxy.EasingFunctions.outCubic",
+        "roxy.EasingFunctions.inOutCubic",
+        "roxy.EasingFunctions.outInCubic",
+        "roxy.EasingFunctions.inQuart",
+        "roxy.EasingFunctions.outQuart",
+        "roxy.EasingFunctions.inOutQuart",
+        "roxy.EasingFunctions.outInQuart",
+        "roxy.EasingFunctions.inQuint",
+        "roxy.EasingFunctions.outQuint",
+        "roxy.EasingFunctions.inOutQuint",
+        "roxy.EasingFunctions.outInQuint",
+        "roxy.EasingFunctions.inSine",
+        "roxy.EasingFunctions.outSine",
+        "roxy.EasingFunctions.inOutSine",
+        "roxy.EasingFunctions.outInSine",
+        "roxy.EasingFunctions.inExpo",
+        "roxy.EasingFunctions.outExpo",
+        "roxy.EasingFunctions.inOutExpo",
+        "roxy.EasingFunctions.outInExpo",
+        "roxy.EasingFunctions.inCirc",
+        "roxy.EasingFunctions.outCirc",
+        "roxy.EasingFunctions.inOutCirc",
+        "roxy.EasingFunctions.outInCirc",
+        "roxy.EasingFunctions.inElastic",
+        "roxy.EasingFunctions.outElastic",
+        "roxy.EasingFunctions.inOutElastic",
+        "roxy.EasingFunctions.outInElastic",
+        "roxy.EasingFunctions.inBack",
+        "roxy.EasingFunctions.outBack",
+        "roxy.EasingFunctions.inOutBack",
+        "roxy.EasingFunctions.outInBack",
+        "roxy.EasingFunctions.outBounce",
+        "roxy.EasingFunctions.inBounce",
+        "roxy.EasingFunctions.inOutBounce",
+        "roxy.EasingFunctions.outInBounce"
+    };
+    int (*easingFuncs[])(lua_State*) = {
+        roxy_ease_flat_l,
+        roxy_ease_linear_l,
+        roxy_ease_in_quad_l,
+        roxy_ease_out_quad_l,
+        roxy_ease_in_out_quad_l,
+        roxy_ease_out_in_quad_l,
+        roxy_ease_in_cubic_l,
+        roxy_ease_out_cubic_l,
+        roxy_ease_in_out_cubic_l,
+        roxy_ease_out_in_cubic_l,
+        roxy_ease_in_quart_l,
+        roxy_ease_out_quart_l,
+        roxy_ease_in_out_quart_l,
+        roxy_ease_out_in_quart_l,
+        roxy_ease_in_quint_l,
+        roxy_ease_out_quint_l,
+        roxy_ease_in_out_quint_l,
+        roxy_ease_out_in_quint_l,
+        roxy_ease_in_sine_l,
+        roxy_ease_out_sine_l,
+        roxy_ease_in_out_sine_l,
+        roxy_ease_out_in_sine_l,
+        roxy_ease_in_expo_l,
+        roxy_ease_out_expo_l,
+        roxy_ease_in_out_expo_l,
+        roxy_ease_out_in_expo_l,
+        roxy_ease_in_circ_l,
+        roxy_ease_out_circ_l,
+        roxy_ease_in_out_circ_l,
+        roxy_ease_out_in_circ_l,
+        roxy_ease_in_elastic_l,
+        roxy_ease_out_elastic_l,
+        roxy_ease_in_out_elastic_l,
+        roxy_ease_out_in_elastic_l,
+        roxy_ease_in_back_l,
+        roxy_ease_out_back_l,
+        roxy_ease_in_out_back_l,
+        roxy_ease_out_in_back_l,
+        roxy_ease_out_bounce_l,
+        roxy_ease_in_bounce_l,
+        roxy_ease_in_out_bounce_l,
+        roxy_ease_out_in_bounce_l
+    };
+    for (int i = 0; i < sizeof(easingFunctions) / sizeof(easingFunctions[0]); ++i) {
+        if (!pd->lua->addFunction(easingFuncs[i], easingFunctions[i], &error)) {
+            pd->system->logToConsole("%s:%i: addFunction failed, %s", __FILE__, __LINE__, error);
+            return -1;
+        }
+    }
+
+    // ! Register RoxySequenceC Class
+    registerRoxySequenceC(pd);
+
     return 0;
 }
 
@@ -87,7 +191,8 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg) {
 //   local dt = roxy.getDeltaTime()
 //   player.x = player.x + (player.speed * dt)
 //
-static int getDeltaTime_l(lua_State* L) {
+static int getDeltaTime_l(lua_State* L)
+{
     if (pd == NULL) {
         return 0;
     }

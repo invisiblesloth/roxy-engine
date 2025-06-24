@@ -19,13 +19,17 @@ import "CoreLibs/ui/gridview"
 
 -- Utilities
 import "libraries/roxy/utilities/Math"
+import "libraries/roxy/utilities/Table"
+import "libraries/roxy/utilities/Ease"
 import "libraries/roxy/utilities/Graphics"
 
 -- Core Modules
+import "libraries/roxy/core/modules/Sequencer"
 import "libraries/roxy/core/modules/Scene"
 import "libraries/roxy/core/modules/Transition"
 
 -- Core Components
+import "libraries/roxy/core/sequences/RoxySequence"
 import "libraries/roxy/core/scenes/RoxyScene"
 
 -- Create global Roxy table if it does not already exist
@@ -39,6 +43,7 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 
 local r           <const> = roxy
+local Sequencer   <const> = r.Sequencer
 local Scene       <const> = r.Scene
 local Transition  <const> = r.Transition
 
@@ -53,9 +58,14 @@ local setBgColor  <const> = Graphics.setBackgroundColor
 local getDrawMode <const> = Graphics.getImageDrawMode
 local setDrawMode <const> = Graphics.setImageDrawMode
 
+local updateSequences <const> = Sequencer.update
+
 local replaceScene      <const> = Scene.replaceScene
 local getUpdateList     <const> = Scene.getUpdateList
 local getBackgroundList <const> = Scene.getBackgroundList
+
+local prepareTransitionScreenshot <const> = Transition.prepareTransitionScreenshot
+local executeTransitionDrawing    <const> = Transition.executeTransitionDrawing
 
 -- Constants
 local COLOR_BLACK     <const> = Graphics.kColorBlack
@@ -69,6 +79,8 @@ local DEFAULT_FPS_Y <const> = 228 --#DEBUG
 import "libraries/roxy/core/transitions/RoxyTransition"
 import "libraries/roxy/core/transitions/RoxyCutTransition"
 import "libraries/roxy/core/transitions/Cut"
+import "libraries/roxy/core/transitions/RoxyCoverTransition"
+import "libraries/roxy/core/transitions/FadeToBlack"
 
 -- ----------------------------------------
 -- Engine
@@ -94,6 +106,7 @@ function r.new(startingScene)
   -- (2) Load transitions
   loadTransitions({
     Cut = Cut,
+    FadeToBlack = FadeToBlack
   })
 
   -- (3) Set initial graphics state
@@ -143,6 +156,8 @@ function pd.update()
   local dt = getDeltaTime()
   r.deltaTime = dt
 
+  updateSequences(dt)
+
   local updateList = getUpdateList()
   for i = 1, #updateList do
     updateList[i]:update(dt)
@@ -151,5 +166,13 @@ function pd.update()
   local bgList = getBackgroundList()
   for i = 1, #bgList do
     bgList[i]:updateBackground(dt)
+  end
+
+  if Transition.isTransitioning then
+    local currentTransition = Transition.currentTransition
+    if currentTransition.captureScreenshotsDuringTransition then
+      prepareTransitionScreenshot()
+    end
+    executeTransitionDrawing()
   end
 end

@@ -6,7 +6,6 @@ local RoxyGraphics <const> = roxy.Graphics
 
 local pd        <const> = playdate
 local Display   <const> = pd.display
-local Graphics  <const> = pd.graphics
 
 local DEFAULT_REFRESH_RATE <const>  = 30  -- Fallback to 30 FPS
 local PLAYDATE_WIDTH <const>        = 400 -- Native Playdate screen width (px)
