@@ -5,7 +5,8 @@
 
 static PlaydateAPI* pd = NULL;
 
-void roxy_math_setPlaydateAPI(PlaydateAPI* playdate) {
+void roxy_math_setPlaydateAPI(PlaydateAPI* playdate)
+{
     pd = playdate;
 }
 
@@ -67,7 +68,7 @@ float roxy_math_map(float value, float fromLow, float fromHigh, float toLow, flo
 }
 
 // ----------------------------------------
-// ! Lua-Exposed Functions  
+// ! Lua-Exposed Functions
 // ----------------------------------------
 
 
