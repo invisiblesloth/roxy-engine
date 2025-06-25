@@ -38,9 +38,9 @@ The fastest way to start a new Roxy project is to use the [Project Template](htt
 
 Questions or feedback? Contact us at [support@invisiblesloth.com](mailto:support@invisiblesloth.com). We would love to hear about your experience using Roxy!
 
-## License ✅
+## License ⚖️
 
-MIT License.
+This project is licensed under the MIT License. Portions of Roxy are inspired by Noble Engine and Nic Magnier's Playdate Sequence library. Easing functions in C adapted from Robert Penner's Easing Equations.
 
 [👉 Details](./LICENSE)
 
