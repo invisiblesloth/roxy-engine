@@ -8,7 +8,8 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local redrawBackground <const> = Sprite.redrawBackground
+local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
+local redrawBackground      <const> = Sprite.redrawBackground
 
 local MAX_SCENE_DEPTH <const> = 32
 
@@ -58,6 +59,8 @@ local function activateScene(scene)
   Scene.currentScene = scene
   if scene then
     scene:enter()
+    local backgroundDrawFn = scene.backgroundDrawFn or function(x, y, width, height) end
+    setBackgroundDrawing(backgroundDrawFn)
     redrawBackground()
   end
 end
