@@ -1,10 +1,15 @@
 -- core/transitions/RoxyTransition.lua
 
 local pd          <const> = playdate
+local Sprite      <const> = pd.graphics.sprite
 local Scene       <const> = roxy.Scene
 local Transition  <const> = roxy.Transition
 
 local max             <const> = math.max
+
+local redrawBackground      <const> = Sprite.redrawBackground
+local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
+
 local pushRaw         <const> = Scene.pushRaw
 local popRaw          <const> = Scene.popRaw
 local replaceRaw      <const> = Scene.replaceRaw
@@ -120,6 +125,9 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
       end
       if newScene then
         newScene:enter()
+        local backgroundDrawFn = newScene.backgroundDrawFn or function(x, y, width, height) end
+        setBackgroundDrawing(backgroundDrawFn)
+        redrawBackground()
       end
     end
 
