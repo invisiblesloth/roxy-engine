@@ -24,6 +24,7 @@ import "libraries/roxy/utilities/Ease"
 import "libraries/roxy/utilities/Graphics"
 
 -- Core Modules
+import "libraries/roxy/core/modules/Input"
 import "libraries/roxy/core/modules/Sequencer"
 import "libraries/roxy/core/modules/Scene"
 import "libraries/roxy/core/modules/Transition"
@@ -41,6 +42,7 @@ local engineInitialized = false
 -- Aliases
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
+local Sprite    <const> = Graphics.sprite
 
 local r           <const> = roxy
 local Sequencer   <const> = r.Sequencer
@@ -57,6 +59,12 @@ local setColor    <const> = Graphics.setColor
 local setBgColor  <const> = Graphics.setBackgroundColor
 local getDrawMode <const> = Graphics.getImageDrawMode
 local setDrawMode <const> = Graphics.setImageDrawMode
+
+local spriteUpdate <const> = Sprite.update
+
+local Input               <const> = r.Input
+local handleInput         <const> = Input.handleInput
+local drawCrankIndicator  <const> = Input.drawCrankIndicator
 
 local updateSequences <const> = Sequencer.update
 
@@ -109,12 +117,7 @@ function r.new(startingScene)
     FadeToBlack = FadeToBlack
   })
 
-  -- (3) Set initial graphics state
-  setColor(COLOR_WHITE)
-  setBgColor(COLOR_BLACK)
-  setDrawMode(DRAW_MODE_COPY)
-
-  -- (4) Start starting scene
+  -- (3) Start starting scene
   engineInitialized = true
   local scene = startingScene()
 
@@ -156,7 +159,9 @@ function pd.update()
   local dt = getDeltaTime()
   r.deltaTime = dt
 
+  handleInput()
   updateSequences(dt)
+  spriteUpdate()
 
   local updateList = getUpdateList()
   for i = 1, #updateList do
@@ -175,4 +180,6 @@ function pd.update()
     end
     executeTransitionDrawing()
   end
+
+  drawCrankIndicator()
 end
