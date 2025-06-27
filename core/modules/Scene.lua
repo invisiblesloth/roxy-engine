@@ -8,6 +8,8 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
+local getDisplayImage       <const> = Graphics.getDisplayImage
+
 local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
 local redrawBackground      <const> = Sprite.redrawBackground
 
@@ -180,7 +182,7 @@ function Scene.pushRaw(newScene)
 end
 
 -- ! Push Scene
-function Scene.pushScene(newScene)
+function Scene.pushScene(newScene, captureScreenshot)
   if type(newScene) ~= "table" then
     error("[*][Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
     return
@@ -189,6 +191,10 @@ function Scene.pushScene(newScene)
   local oldScene = Scene.currentScene
   if oldScene then
     oldScene:pause()
+  end
+
+  if captureScreenshot then
+    newScene.frozenBackground = getDisplayImage()
   end
 
   Scene.pushRaw(newScene)
