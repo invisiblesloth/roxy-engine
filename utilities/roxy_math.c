@@ -23,7 +23,23 @@ int roxy_math_truncateDecimal(float n) {
 // ! Round
 // Rounds a floating-point number to the nearest integer
 float roxy_math_round(float n) {
-    return floorf(n + 0.5f);
+    // Use roundf if available (C99+), otherwise manual rounding logic.
+    #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
+    return roundf(n);
+    #else
+    return n >= 0.0f ? floorf(n + 0.5f) : ceilf(n - 0.5f);
+    #endif
+}
+
+// ! Round Int
+// Rounds a floating-point number to the nearest integer
+int roxy_math_roundInt(float n) {
+    // Use roundf if available (C99+), otherwise manual rounding logic.
+    #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
+    return (int)roundf(n);
+    #else
+    return (int)(n >= 0.0f ? floorf(n + 0.5f) : ceilf(n - 0.5f));
+    #endif
 }
 
 // ! Round Down
@@ -89,6 +105,16 @@ int roxy_math_round_l(lua_State* L) {
     float result = roxy_math_round(n);
 
     pd->lua->pushFloat(result);
+    return 1;
+}
+
+int roxy_math_roundInt_l(lua_State* L) {
+    (void)L;
+
+    float n = pd->lua->getArgFloat(1);
+    int result = roxy_math_roundInt(n);
+
+    pd->lua->pushInt(result);
     return 1;
 }
 
