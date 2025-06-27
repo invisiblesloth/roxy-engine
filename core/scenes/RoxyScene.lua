@@ -23,10 +23,10 @@ local CLEAR_COLOR <const> = COLOR_WHITE
 local _colorCallbacks = {} -- Cache: color --> fn
 
 -- ----------------------------------------
--- Helpers
+-- Helper
 -- ----------------------------------------
 
--- ! Get Color Callback
+-- ! Helper: Get Color Callback
 -- builds (and returns) a drawing callback for a solid color
 local function _getColorCallback(color)
   local fn = _colorCallbacks[color]
@@ -117,7 +117,8 @@ function RoxyScene:cleanup()
 
   self.backgroundColor = nil
   self.backgroundImage = nil
-  self.backgroundDrawFn = function(x, y, width, height) end
+  self.backgroundDrawFn = nil
+  self.frozenBackground = nil
 end
 
 -- TODO: Add sprite management methods etc. HERE

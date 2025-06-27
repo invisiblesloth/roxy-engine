@@ -12,8 +12,11 @@ void roxy_math_setPlaydateAPI(PlaydateAPI* playdate);
 // Truncates a floating-point number's decimal portion
 int roxy_math_truncateDecimal(float n);
 
-// Rounds a floating-point number to the nearest integer
+// Rounds a floating-point number to the nearest integer (returns float)
 float roxy_math_round(float n);
+
+// Rounds a floating-point number to the nearest integer (returns int)
+int roxy_math_roundInt(float n);
 
 // Rounds a floating-point number down to the nearest integer
 float roxy_math_roundDown(float n);
@@ -39,6 +42,7 @@ float roxy_math_map(float value, float fromLow, float fromHigh, float toLow, flo
 
 int roxy_math_truncateDecimal_l(lua_State* L);
 int roxy_math_round_l(lua_State* L);
+int roxy_math_roundInt_l(lua_State* L);
 int roxy_math_roundDown_l(lua_State* L);
 int roxy_math_roundUp_l(lua_State* L);
 int roxy_math_hypot_l(lua_State* L);
