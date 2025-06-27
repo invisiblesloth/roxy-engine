@@ -3,6 +3,7 @@
 #include "pd_api.h"
 #include "utilities/roxy_math.h"
 #include "utilities/roxy_ease.h"
+#include "core/animations/roxy_animation.h"
 #include "core/modules/roxy_input.h"
 #include "core/sequences/roxy_sequence.h"
 
@@ -44,12 +45,12 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         return -1;
     }
 
-    roxy_math_setPlaydateAPI(pd);
-
     // ! Register Math Functions
+    roxy_math_setPlaydateAPI(pd);
     const char* mathFunctions[] = {
         "roxy.Math.truncateDecimal",
         "roxy.Math.round",
+        "roxy.Math.roundInt",
         "roxy.Math.roundDown",
         "roxy.Math.roundUp",
         "roxy.Math.hypot",
@@ -60,6 +61,7 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
     int (*mathFuncs[])(lua_State*) = {
         roxy_math_truncateDecimal_l,
         roxy_math_round_l,
+        roxy_math_roundInt_l,
         roxy_math_roundDown_l,
         roxy_math_roundUp_l,
         roxy_math_hypot_l,
@@ -74,9 +76,8 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         }
     }
 
-    roxy_easingFunctions_setPlaydateAPI(pd);
-
     // ! Register Easing Functions
+    roxy_easingFunctions_setPlaydateAPI(pd);
     const char* easingFunctions[] = {
         "roxy.EasingFunctions.flat",
         "roxy.EasingFunctions.linear",
@@ -172,9 +173,8 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         }
     }
 
-    roxy_input_setPlaydateAPI(pd);
-
     // ! Register Input Functions
+    roxy_input_setPlaydateAPI(pd);
     const char* inputFunctions[] = {
         "roxy.Input.setButtonHoldBufferAmount",
         "roxy.Input.processAllButtons"
@@ -192,6 +192,21 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
 
     // ! Register RoxySequenceC Class
     registerRoxySequenceC(pd);
+
+    // ! Register Animation Functions
+    roxy_animation_setPlaydateAPI(pd);
+    const char* animationFunctions[] = {
+        "roxy.Animation.update"
+    };
+    int (*animationFuncs[])(lua_State*) = {
+        roxy_animation_update_l
+    };
+    for (int i = 0; i < sizeof(animationFunctions) / sizeof(animationFunctions[0]); ++i) {
+        if (!pd->lua->addFunction(animationFuncs[i], animationFunctions[i], &error)) {
+            pd->system->logToConsole("%s:%i: addFunction failed, %s", __FILE__, __LINE__, error);
+            return -1;
+        }
+    }
 
     return 0;
 }

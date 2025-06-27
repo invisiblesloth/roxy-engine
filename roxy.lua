@@ -26,18 +26,19 @@ import "libraries/roxy/utilities/Graphics"
 -- Core Modules
 import "libraries/roxy/core/modules/Input"
 import "libraries/roxy/core/modules/Sequencer"
+import "libraries/roxy/core/modules/Camera"
 import "libraries/roxy/core/modules/Scene"
 import "libraries/roxy/core/modules/Transition"
 
 -- Core Components
 import "libraries/roxy/core/sequences/RoxySequence"
+import "libraries/roxy/core/sprites/RoxySprite"
+import "libraries/roxy/core/sprites/RoxyActor"
+import "libraries/roxy/core/animations/RoxyAnimation"
 import "libraries/roxy/core/scenes/RoxyScene"
 
 -- Create global Roxy table if it does not already exist
 roxy = roxy or {}
-
--- Local State
-local engineInitialized = false
 
 -- Aliases
 local pd        <const> = playdate
@@ -75,6 +76,8 @@ local getBackgroundList <const> = Scene.getBackgroundList
 local prepareTransitionScreenshot <const> = Transition.prepareTransitionScreenshot
 local executeTransitionDrawing    <const> = Transition.executeTransitionDrawing
 
+local drawFPS <const> = pd.drawFPS --#DEBUG
+
 -- Constants
 local COLOR_BLACK     <const> = Graphics.kColorBlack
 local COLOR_WHITE     <const> = Graphics.kColorWhite
@@ -89,6 +92,13 @@ import "libraries/roxy/core/transitions/RoxyCutTransition"
 import "libraries/roxy/core/transitions/Cut"
 import "libraries/roxy/core/transitions/RoxyCoverTransition"
 import "libraries/roxy/core/transitions/FadeToBlack"
+
+-- Local State
+local engineInitialized = false
+
+local showFPS = true          --#DEBUG
+local fpsX    = DEFAULT_FPS_X --#DEBUG
+local fpsY    = DEFAULT_FPS_Y --#DEBUG
 
 -- ----------------------------------------
 -- Engine
@@ -167,7 +177,6 @@ function pd.update()
   for i = 1, #updateList do
     updateList[i]:update(dt)
   end
-
   local bgList = getBackgroundList()
   for i = 1, #bgList do
     bgList[i]:updateBackground(dt)
@@ -182,4 +191,5 @@ function pd.update()
   end
 
   drawCrankIndicator()
+  if showFPS then drawFPS(fpsX, fpsY) end --#DEBUG
 end
