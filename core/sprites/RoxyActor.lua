@@ -261,11 +261,11 @@ function RoxyActor:addPhysics(body)
   return self
 end
 
-function RoxyActor:updatePhysics(props)
-  props = props or {}
-  local vx        = props.vx        or 0
-  local vy        = props.vy        or 0
-  local desiredVx = props.intentVX  or vx
+function RoxyActor:updatePhysics(opts)
+  opts = opts or {}
+  local vx        = opts.vx        or 0
+  local vy        = opts.vy        or 0
+  local desiredVx = opts.intentVX  or vx
 
   self:setFacing(vx)
 
@@ -277,18 +277,18 @@ function RoxyActor:updatePhysics(props)
       for key, value in pairs(rule.conditions) do
         if key:find("GreaterThan$") then
           local prop = key:gsub("GreaterThan$", "")
-          if not (props[prop] and props[prop] > value) then ok = false break end
+          if not (opts[prop] and opts[prop] > value) then ok = false break end
         elseif key:find("LessThan$") then
           local prop = key:gsub("LessThan$", "")
-          if not (props[prop] and props[prop] < value) then ok = false break end
+          if not (opts[prop] and opts[prop] < value) then ok = false break end
         elseif key:find("AtLeast$") then
           local prop = key:gsub("AtLeast$", "")
-          if not (props[prop] and props[prop] >= value) then ok = false break end
+          if not (opts[prop] and opts[prop] >= value) then ok = false break end
         elseif key:find("AtMost$") then
           local prop = key:gsub("AtMost$", "")
-          if not (props[prop] and props[prop] <= value) then ok = false break end
+          if not (opts[prop] and opts[prop] <= value) then ok = false break end
         else
-          if props[key] ~= value then ok = false break end
+          if opts[key] ~= value then ok = false break end
         end
       end
       if ok and rule.state ~= self.currentState then
@@ -305,7 +305,7 @@ function RoxyActor:updatePhysics(props)
 
   -- Generic fallback (idle / run / jump / fall)
   local targetState
-  if props.onGround == false then
+  if opts.onGround == false then
     targetState = (vy < 0) and "jump" or "fall"
   elseif abs(desiredVx) > 0 then
     self.facing = desiredVx < 0 and -1 or 1

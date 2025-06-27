@@ -24,6 +24,8 @@ import "libraries/roxy/utilities/Ease"
 import "libraries/roxy/utilities/Graphics"
 
 -- Core Modules
+import "libraries/roxy/core/modules/Cache"
+import "libraries/roxy/core/modules/Assets"
 import "libraries/roxy/core/modules/Input"
 import "libraries/roxy/core/modules/Sequencer"
 import "libraries/roxy/core/modules/Camera"
@@ -44,37 +46,32 @@ roxy = roxy or {}
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
+local r         <const> = roxy
 
-local r           <const> = roxy
+local Input       <const> = r.Input
 local Sequencer   <const> = r.Sequencer
 local Scene       <const> = r.Scene
 local Transition  <const> = r.Transition
 
-local getDeltaTime    <const> = r.getDeltaTime
-local loadTransitions <const> = Transition.loadTransitions
+local randomseed <const> = math.randomseed
 
-local randomseed            <const> = math.randomseed
 local getSecondsSinceEpoch  <const> = pd.getSecondsSinceEpoch
+local spriteUpdate          <const> = Sprite.update
 
-local setColor    <const> = Graphics.setColor
-local setBgColor  <const> = Graphics.setBackgroundColor
-local getDrawMode <const> = Graphics.getImageDrawMode
-local setDrawMode <const> = Graphics.setImageDrawMode
+local getDeltaTime <const> = r.getDeltaTime
 
-local spriteUpdate <const> = Sprite.update
-
-local Input               <const> = r.Input
 local handleInput         <const> = Input.handleInput
 local drawCrankIndicator  <const> = Input.drawCrankIndicator
 
 local updateSequences <const> = Sequencer.update
 
+local loadTransitions             <const> = Transition.loadTransitions
+local prepareTransitionScreenshot <const> = Transition.prepareTransitionScreenshot
+local executeTransitionDrawing    <const> = Transition.executeTransitionDrawing
+
 local replaceScene      <const> = Scene.replaceScene
 local getUpdateList     <const> = Scene.getUpdateList
 local getBackgroundList <const> = Scene.getBackgroundList
-
-local prepareTransitionScreenshot <const> = Transition.prepareTransitionScreenshot
-local executeTransitionDrawing    <const> = Transition.executeTransitionDrawing
 
 local drawFPS <const> = pd.drawFPS --#DEBUG
 
