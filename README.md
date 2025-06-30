@@ -17,6 +17,7 @@ The fastest way to start a new Roxy project is to use the [Project Template](htt
 3. Choose "Create a new repository".
 4. Name your project and select visibility (public/private).
 5. Clone your new repository locally:
+
    ```bash
    git clone --recurse-submodules https://github.com/your-username/your-new-repo.git
    ```
