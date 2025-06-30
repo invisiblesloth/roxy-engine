@@ -17,9 +17,13 @@ import "CoreLibs/timer"
 import "CoreLibs/ui/crankIndicator"
 import "CoreLibs/ui/gridview"
 
+import "libraries/roxy/core/modules/Log"
+import "libraries/roxy/core/modules/Debug" --#DEBUG
+
 -- Utilities
-import "libraries/roxy/utilities/Math"
 import "libraries/roxy/utilities/Table"
+import "libraries/roxy/utilities/Math"
+import "libraries/roxy/utilities/JSON"
 import "libraries/roxy/utilities/Ease"
 import "libraries/roxy/utilities/Graphics"
 
@@ -36,18 +40,23 @@ import "libraries/roxy/core/modules/Transition"
 import "libraries/roxy/core/sequences/RoxySequence"
 import "libraries/roxy/core/sprites/RoxySprite"
 import "libraries/roxy/core/sprites/RoxyActor"
+import "libraries/roxy/core/sprites/RoxyParticles"
+import "libraries/roxy/core/physics/RoxyPhysicsBody"
 import "libraries/roxy/core/animations/RoxyAnimation"
+import "libraries/roxy/core/tilemaps/RoxyTilemap"
 import "libraries/roxy/core/scenes/RoxyScene"
 
 -- Create global Roxy table if it does not already exist
 roxy = roxy or {}
 
 -- Aliases
+
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
-local r         <const> = roxy
 
+local r         <const> = roxy
+local Debug       <const> = r.Debug
 local Input       <const> = r.Input
 local Sequencer   <const> = r.Sequencer
 local Scene       <const> = r.Scene
@@ -73,7 +82,8 @@ local replaceScene      <const> = Scene.replaceScene
 local getUpdateList     <const> = Scene.getUpdateList
 local getBackgroundList <const> = Scene.getBackgroundList
 
-local drawFPS <const> = pd.drawFPS --#DEBUG
+local updateDebug <const> = Debug.update --#DEBUG
+local drawFPS     <const> = pd.drawFPS --#DEBUG
 
 -- Constants
 local COLOR_BLACK     <const> = Graphics.kColorBlack
@@ -105,13 +115,13 @@ local fpsY    = DEFAULT_FPS_Y --#DEBUG
 -- Initializes the engine and transitions to the first scene
 function r.new(startingScene)
   if engineInitialized then
-    error("You can only run 'roxy.new()' once.") --#DEBUG
+    Log.error("You can only run 'roxy.new()' once.") --#DEBUG
     return
   end
 
   --#DEBUG START
   if not startingScene then
-    error("[*][roxy.new] startingScene is required for roxy.new.", 2)
+    Log.error("[*][roxy.new] startingScene is required for roxy.new.", 2)
   end
   --#DEBUG END
 
@@ -130,7 +140,7 @@ function r.new(startingScene)
 
   --#DEBUG START
   if type(scene) ~= "table" then
-    error("[*][roxy.new] startingScene initialization must return a scene table.", 2)
+    Log.error("[*][roxy.new] startingScene initialization must return a scene table.", 2)
   end
   --#DEBUG END
 
@@ -188,5 +198,7 @@ function pd.update()
   end
 
   drawCrankIndicator()
+
+  updateDebug() --#DEBUG
   if showFPS then drawFPS(fpsX, fpsY) end --#DEBUG
 end
