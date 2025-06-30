@@ -54,9 +54,9 @@ end
 
 -- ! Update
 -- Updates all running sequences with the given delta time.
-function Sequencer.update(deltaTime)
+function Sequencer.update(dt)
   for i = #runningSequences, 1, -1 do
     local sequence = runningSequences[i]
-    sequence:update(deltaTime)
+    sequence:update(dt)
   end
 end

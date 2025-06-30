@@ -2,6 +2,7 @@
 
 local pd       <const> = playdate
 local Graphics <const> = pd.graphics
+local r        <const> = roxy
 
 local abs <const> = math.abs
 
@@ -244,7 +245,7 @@ function RoxyActor:addPhysics(body)
 
   -- Override only this instance’s update(dt)
   function self:update(dt)
-    dt = dt or roxy.deltaTime or 0
+    dt = dt or r.deltaTime or 0
 
     -- (1) Step physics first
     if self.physicsBody and self.physicsBody.update then
@@ -276,17 +277,17 @@ function RoxyActor:updatePhysics(opts)
       local ok = true
       for key, value in pairs(rule.conditions) do
         if key:find("GreaterThan$") then
-          local prop = key:gsub("GreaterThan$", "")
-          if not (opts[prop] and opts[prop] > value) then ok = false break end
+          local option = key:gsub("GreaterThan$", "")
+          if not (opts[option] and opts[option] > value) then ok = false break end
         elseif key:find("LessThan$") then
-          local prop = key:gsub("LessThan$", "")
-          if not (opts[prop] and opts[prop] < value) then ok = false break end
+          local option = key:gsub("LessThan$", "")
+          if not (opts[option] and opts[option] < value) then ok = false break end
         elseif key:find("AtLeast$") then
-          local prop = key:gsub("AtLeast$", "")
-          if not (opts[prop] and opts[prop] >= value) then ok = false break end
+          local option = key:gsub("AtLeast$", "")
+          if not (opts[option] and opts[option] >= value) then ok = false break end
         elseif key:find("AtMost$") then
-          local prop = key:gsub("AtMost$", "")
-          if not (opts[prop] and opts[prop] <= value) then ok = false break end
+          local option = key:gsub("AtMost$", "")
+          if not (opts[option] and opts[option] <= value) then ok = false break end
         else
           if opts[key] ~= value then ok = false break end
         end
