@@ -46,15 +46,15 @@ local transitions = {}
 -- Loads a table of transition classes into the transition module.
 function Transition.loadTransitions(transitionsTable)
   if type(transitionsTable) ~= "table" then
-    error("[*][Transition.loadTransitions] transitionsTable must be a table.", 2) --#DEBUG
+    Log.error("[Transition.loadTransitions] transitionsTable must be a table.", 2) --#DEBUG
     return
   end
   for key, value in pairs(transitionsTable) do
     if type(key) ~= "string" then
-      error("[*][Transition.loadTransitions] Transition key must be a string.", 2) --#DEBUG
+      Log.error("[Transition.loadTransitions] Transition key must be a string.", 2) --#DEBUG
       return
     elseif type(value) ~= "table" or not value.__index then
-      error("[*][Transition.loadTransitions] Transition value must be a valid class.", 2) --#DEBUG
+      Log.error("[Transition.loadTransitions] Transition value must be a valid class.", 2) --#DEBUG
       return
     end
   end
@@ -85,7 +85,7 @@ end
 function Transition.transitionToScene(newSceneClass, transitionName, duration, holdTime, opts)
   --#DEBUG START
   if Transition.isTransitioning then
-    warn("[W][Transition.transitionToScene] Transition already in progress.")
+    Log.warn("[Transition.transitionToScene] Transition already in progress.")
     return
   end
   --#DEBUG END
@@ -96,7 +96,7 @@ function Transition.transitionToScene(newSceneClass, transitionName, duration, h
     newScene = newSceneClass()
     --#DEBUG START
     if not newScene then
-      error("[*][Transition.transitionToScene] Failed to instantiate newSceneClass.", 2)
+      Log.error("[Transition.transitionToScene] Failed to instantiate newSceneClass.", 2)
     end
     --#DEBUG END
   end
@@ -107,7 +107,7 @@ function Transition.transitionToScene(newSceneClass, transitionName, duration, h
   -- Use transition or fallback to default
   local transitionClass = transitions[(transitionName or TRANSITION_DEFAULT)]
   if not transitionClass then
-    warn("[W][Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. TRANSITION_DEFAULT) --#DEBUG
+    Log.warn("[Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. TRANSITION_DEFAULT) --#DEBUG
     transitionClass = transitions[TRANSITION_DEFAULT]
   end
 

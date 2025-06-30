@@ -23,7 +23,7 @@ function RoxyActor:init(manifest, defaultState)
 
   --#DEBUG START
   if not manifest.sheet then
-    warn("[W][RoxyActor:init] No spritesheet provided in manifest")
+    Log.warn("[RoxyActor:init] No spritesheet provided in manifest")
   end
   --#DEBUG END
 
@@ -44,7 +44,7 @@ function RoxyActor:init(manifest, defaultState)
   local perRow = manifest.frames or (imagetable and #imagetable) or 1
   local rows = manifest.rows
   if type(rows) ~= "table" then
-    warn("[W][RoxyActor:init] Manifest.rows missing or not a table; defaulting to empty") --#DEBUG
+    Log.warn("[RoxyActor:init] Manifest.rows missing or not a table; defaulting to empty") --#DEBUG
     rows = {}
   end
   local doLoop = manifest.loop or {}
@@ -81,7 +81,7 @@ function RoxyActor:init(manifest, defaultState)
       }
     end
   else --#DEBUG
-    warn("[W][RoxyActor:init] No valid imagetable; animation states not set up") --#DEBUG
+    Log.warn("[RoxyActor:init] No valid imagetable; animation states not set up") --#DEBUG
   end
 
   -- Ensure animations table is present
@@ -118,7 +118,7 @@ function RoxyActor:_cacheTransitionRules()
       end
       table.insert(self._transitionRulesCache, { state = rule.state, conditions = conds })
     else --#DEBUG
-      warn("[W][RoxyActor:_cacheTransitionRules] Invalid transition rule: missing state key") --#DEBUG
+      Log.warn("[RoxyActor:_cacheTransitionRules] Invalid transition rule: missing state key") --#DEBUG
     end
   end
 end
@@ -151,11 +151,11 @@ end
 function RoxyActor:setState(stateName, force)
   --#DEBUG START
   if type(stateName) ~= "string" then
-    warn("[W][RoxyActor:setState] Expected string for stateName, got", type(stateName))
+    Log.warn("[RoxyActor:setState] Expected string for stateName, got", type(stateName))
     return self
   end
   if not self.animations[stateName] then
-    warn("[W][RoxyActor:setState] Unknown state:", stateName)
+    Log.warn("[RoxyActor:setState] Unknown state:", stateName)
     return self
   end
   --#DEBUG END
@@ -183,11 +183,11 @@ end
 function RoxyActor:queueState(stateName)
   --#DEBUG START
   if type(stateName) ~= "string" then
-    warn("[W][RoxyActor:queueState] Expected string for queued stateName, got", type(stateName))
+    Log.warn("[RoxyActor:queueState] Expected string for queued stateName, got", type(stateName))
     return self
   end
   if not self.animations[stateName] then
-    warn("[W][RoxyActor:queueState] Unknown state to queue:", stateName)
+    Log.warn("[RoxyActor:queueState] Unknown state to queue:", stateName)
     return self
   end
   --#DEBUG END
@@ -202,11 +202,11 @@ end
 function RoxyActor:playOnce(stateName, onFinish)
   --#DEBUG START
   if type(stateName) ~= "string" then
-    warn("[W][RoxyActor:playOnce] Expected string for playOnce stateName, got", type(stateName))
+    Log.warn("[RoxyActor:playOnce] Expected string for playOnce stateName, got", type(stateName))
     return self
   end
   if not self.animations[stateName] then
-    warn("[W][RoxyActor:playOnce] Unknown one-shot state:", stateName)
+    Log.warn("[RoxyActor:playOnce] Unknown one-shot state:", stateName)
     return self
   end
   --#DEBUG END

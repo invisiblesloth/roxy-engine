@@ -118,7 +118,7 @@ end
 -- ! Add Handler
 -- Add (or replace) a handler for an owner at a given priority.
 function Input.addHandler(owner, tbl, priority)
-  assert(owner and tbl, "[*][Input.addHandler] Must provide owner and table.", 2) --#DEBUG
+  Log.assert(owner and tbl, "[Input.addHandler] Must provide owner and table.", 2) --#DEBUG
   priority = priority or 0
 
   -- Replace if already present
@@ -187,7 +187,7 @@ function Input.flush()
   activeMergedHandler = merged
   pushInputHandlers(merged, true)
   pendingRegistryDirty = false
-  print("[D][Input.flush] Flushed/merged handlers: count=" .. tostring(#handlerRegistry)) --#DEBUG
+  Log.debug("[Input.flush] Flushed/merged handlers: count=" .. tostring(#handlerRegistry)) --#DEBUG
 end
 
 -- ! Suspend Auto Flush
@@ -214,7 +214,7 @@ function Input.clearAllHandlers()
     activeMergedHandler = nil
   end
   pendingRegistryDirty = false
-  print("[D][Input.clearAllHandlers] Cleared all handlers.") --#DEBUG
+  Log.debug("[Input.clearAllHandlers] Cleared all handlers.") --#DEBUG
 end
 
 -- ! Make Modal Handler
@@ -262,7 +262,7 @@ end
 function Input.setCrankIndicatorStatus(active, evenWhenUndocked)
   crankIndicatorActive = active
   crankIndicatorForced = evenWhenUndocked == true
-  print("[D][Input.setCrankIndicatorStatus] Set crank indicator active = " .. tostring(active) .. ", forced = " .. tostring(evenWhenUndocked)) --#DEBUG
+  Log.debug("[Input.setCrankIndicatorStatus] Set crank indicator active = " .. tostring(active) .. ", forced = " .. tostring(evenWhenUndocked)) --#DEBUG
 end
 
 -- ! Get Crank Indicator
@@ -300,10 +300,10 @@ end
 function Input.setCrankDirection(direction)
   if direction == nil then
     Input.crankDirection = -Input.crankDirection
-    print("[D][Input.setCrankDirection] toggled crank direction.") --#DEBUG
+    Log.debug("[Input.setCrankDirection] toggled crank direction.") --#DEBUG
   elseif direction == 1 or direction == -1 then
     Input.crankDirection = direction
-    print("[D][Input.setCrankDirection] set crank direction to " .. direction) --#DEBUG
+    Log.debug("[Input.setCrankDirection] set crank direction to " .. direction) --#DEBUG
   end
 end
 
@@ -311,7 +311,7 @@ end
 -- Resets the crank direction to its default value.
 function Input.resetCrankDirection()
   Input.crankDirection = CRANK_DIRECTION_DEFAULT
-  print("[D][Input.resetCrankDirection] Reset crank direction to default.") --#DEBUG
+  Log.debug("[Input.resetCrankDirection] Reset crank direction to default.") --#DEBUG
 end
 
 -- ----------------------------------------
@@ -346,7 +346,7 @@ function Input.handleInput()
   if Input._blocked then
     local current = getButtonState()
     if current == 0 then
-      print("[D][Input.handleInput] Buttons released, unblocking input handler.") --#DEBUG
+      Log.debug("[Input.handleInput] Buttons released, unblocking input handler.") --#DEBUG
       Input._blocked = false
       getButtonState() -- Safety
     end
@@ -380,11 +380,11 @@ end
 -- Sets whether input processing is enabled.
 function Input.setIsEnabled(value)
   if value ~= true and value ~= false then
-    warn("[W][Input.setIsEnabled] setIsEnabled: Expected boolean.") --#DEBUG
+    Log.warn("[Input.setIsEnabled] setIsEnabled: Expected boolean.") --#DEBUG
     return
   end
   Input.isEnabled = value
-  print("[D][Input.setIsEnabled] set isEnabled = " .. tostring(value)) --#DEBUG
+  Log.debug("[Input.setIsEnabled] set isEnabled = " .. tostring(value)) --#DEBUG
 end
 
 --[[

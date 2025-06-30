@@ -107,20 +107,20 @@ local reverseFunctions = {
 -- ! Enter
 -- Returns the enter easing for a compound easing function.
 function Ease.enter(easingFunction)
-  assert(type(easingFunction) == "function", "[*][Ease.enter] easingFunction must be a function.") --#DEBUG
+  Log.assert(type(easingFunction) == "function", "[Ease.enter] easingFunction must be a function.") --#DEBUG
   return componentFunctions[easingFunction] and componentFunctions[easingFunction].enter or nil
 end
 
 -- ! Exit
 -- Returns the exit easing for a compound easing function.
 function Ease.exit(easingFunction)
-  assert(type(easingFunction) == "function", "[*][Ease.exit] easingFunction must be a function.") --#DEBUG
+  Log.assert(type(easingFunction) == "function", "[Ease.exit] easingFunction must be a function.") --#DEBUG
   return componentFunctions[easingFunction] and componentFunctions[easingFunction].exit or nil
 end
 
 -- ! Reverse
 -- Returns the reversed version of an easing function, if available.
 function Ease.reverse(easingFunction)
-  assert(type(easingFunction) == "function", "[*][Ease.reverse] easingFunction must be a function.") --#DEBUG
+  Log.assert(type(easingFunction) == "function", "[Ease.reverse] easingFunction must be a function.") --#DEBUG
   return reverseFunctions[easingFunction] or nil
 end

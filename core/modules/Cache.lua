@@ -121,14 +121,14 @@ function Cache.setMaxCacheSize(bucketOrSize, maybeSize)
 
   --#DEBUG START
   if newSize < 0 then
-    warn("[W][Cache.setMaxCacheSize] Invalid max cache size: " .. tostring(newSize) .. "; using 0")
+    Log.warn("[Cache.setMaxCacheSize] Invalid max cache size: " .. tostring(newSize) .. "; using 0")
     newSize = 0
   end
   --#DEBUG END
 
   bucket.maxCacheSize = newSize
 
-  print("[i][Cache.setMaxCacheSize] Cache max size set to " .. tostring(newSize)) --#DEBUG
+  Log.info("[Cache.setMaxCacheSize] Cache max size set to " .. tostring(newSize)) --#DEBUG
 
   if newSize == 0 and bucket.currentSize > 0 then
     bucket.cache = {}
@@ -151,23 +151,23 @@ function Cache.cacheAsset(bucketOrKey, keyOrLoader, maybeLoader)
 
   --#DEBUG START
   if type(key) ~= "string" and type(key) ~= "number" then
-    warn("[W][Cache.cacheAsset] Expected string or number for key, got " .. type(key))
+    Log.warn("[Cache.cacheAsset] Expected string or number for key, got " .. type(key))
     return false
   end
   --#DEBUG END
 
   if type(loaderFn) ~= "function" then
-    warn("[W][Cache.cacheAsset] loaderFunction is not callable for key '" .. tostring(key) .. "'.") --#DEBUG
+    Log.warn("[Cache.cacheAsset] loaderFunction is not callable for key '" .. tostring(key) .. "'.") --#DEBUG
     return false
   end
   if bucket.cache[key] then
-    warn("[W][Cache.cacheAsset] Asset with key '" .. tostring(key) .. "' already cached.") --#DEBUG
+    Log.warn("[Cache.cacheAsset] Asset with key '" .. tostring(key) .. "' already cached.") --#DEBUG
     return false
   end
 
   local asset = loaderFn()
   if not asset then
-    warn("[W][Cache.cacheAsset] loaderFunction failed for key '" .. tostring(key) .. "'.") --#DEBUG
+    Log.warn("[Cache.cacheAsset] loaderFunction failed for key '" .. tostring(key) .. "'.") --#DEBUG
     return false
   end
 
@@ -189,14 +189,14 @@ function Cache.getCachedAsset(bucketOrKey, maybeKey)
 
   --#DEBUG START
   if type(key) ~= "string" and type(key) ~= "number" then
-    warn("[W][Cache.getCachedAsset] Expected string or number for key, got " .. type(key))
+    Log.warn("[Cache.getCachedAsset] Expected string or number for key, got " .. type(key))
     return nil
   end
   --#DEBUG END
 
   local entry = bucket.cache[key]
   if not entry then
-    warn("[W][Cache.getCachedAsset] Asset with key '" .. tostring(key) .. "' not cached.") --#DEBUG
+    Log.warn("[Cache.getCachedAsset] Asset with key '" .. tostring(key) .. "' not cached.") --#DEBUG
     return nil
   end
 
@@ -211,7 +211,7 @@ function Cache.getOrLoadAsset(bucketOrKey, keyOrLoader, maybeLoader)
 
   --#DEBUG START
   if type(key) ~= "string" and type(key) ~= "number" then
-    warn("[W][Cache.getOrLoadAsset] Expected string or number for key, got " .. type(key))
+    Log.warn("[Cache.getOrLoadAsset] Expected string or number for key, got " .. type(key))
     return nil
   end
   --#DEBUG END
@@ -222,12 +222,12 @@ function Cache.getOrLoadAsset(bucketOrKey, keyOrLoader, maybeLoader)
     return entry.asset
   else
     if type(loaderFn) ~= "function" then
-      warn("[W][Cache.getOrLoadAsset] loaderFunction is not callable for key '" .. tostring(key) .. "'.") --#DEBUG
+      Log.warn("[Cache.getOrLoadAsset] loaderFunction is not callable for key '" .. tostring(key) .. "'.") --#DEBUG
       return nil
     end
     local asset = loaderFn()
     if not asset then
-      warn("[W][Cache.getOrLoadAsset] loaderFunction failed for key '" .. tostring(key) .. "'.") --#DEBUG
+      Log.warn("[Cache.getOrLoadAsset] loaderFunction failed for key '" .. tostring(key) .. "'.") --#DEBUG
       return nil
     end
 
@@ -256,7 +256,7 @@ function Cache.evictAsset(bucketOrKey, maybeKey)
 
   --#DEBUG START
   if type(key) ~= "string" and type(key) ~= "number" then
-    warn("[W][Cache.evictAsset] Expected string or number for key, got " .. type(key))
+    Log.warn("[Cache.evictAsset] Expected string or number for key, got " .. type(key))
     return false
   end
   --#DEBUG END
@@ -264,7 +264,7 @@ function Cache.evictAsset(bucketOrKey, maybeKey)
   local entry = bucket.cache[key]
 
   if not entry then
-    warn("[W][Cache.evictAsset] Attempted to evict non-existent asset '" .. tostring(key) .. "'.") --#DEBUG
+    Log.warn("[Cache.evictAsset] Attempted to evict non-existent asset '" .. tostring(key) .. "'.") --#DEBUG
     return false
   end
 

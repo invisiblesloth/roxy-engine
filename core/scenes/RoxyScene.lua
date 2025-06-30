@@ -49,7 +49,7 @@ class("RoxyScene").extends()
 --! Initialize
 function RoxyScene:init(background)
   self.name = self.className or "RoxyScene"
-  print("[D][RoxyScene:init] Initializing Scene: " .. self.name) --#DEBUG
+  Log.debug("[RoxyScene:init] Initializing Scene: " .. self.name) --#DEBUG
 
   self.isPaused = false
   self._didEnter = false
@@ -73,7 +73,7 @@ end
 function RoxyScene:enter()
   if self._didEnter then return end
   self._didEnter = true
-  print("[D][RoxyScene:enter] Entering Scene: " .. self.name) --#DEBUG
+  Log.debug("[RoxyScene:enter] Entering Scene: " .. self.name) --#DEBUG
   self:addHandler()
 end
 
@@ -85,7 +85,7 @@ end
 -- ! Pause
 function RoxyScene:pause()
   if self.isPaused then return end
-  print("[D][RoxyScene:pause] Pausing Scene: " .. self.name) --#DEBUG
+  Log.debug("[RoxyScene:pause] Pausing Scene: " .. self.name) --#DEBUG
   self.isPaused = true
   removeHandler(self)
 end
@@ -93,7 +93,7 @@ end
 -- ! Resume
 function RoxyScene:resume()
   if not self.isPaused then return end
-  print("[D][RoxyScene:resume] Resuming Scene: " .. self.name) --#DEBUG
+  Log.debug("[RoxyScene:resume] Resuming Scene: " .. self.name) --#DEBUG
   self.isPaused = false
   self:addHandler()
 end
@@ -102,7 +102,7 @@ end
 function RoxyScene:exit()
   if self._didExit then return end
   self._didExit = true
-  print("[D][RoxyScene:exit] Exiting Scene: " .. self.name) --#DEBUG
+  Log.debug("[RoxyScene:exit] Exiting Scene: " .. self.name) --#DEBUG
 end
 
 -- ! Cleanup
@@ -110,7 +110,7 @@ function RoxyScene:cleanup()
   if self._didCleanup then return end
   self._didCleanup = true
 
-  print("[D][RoxyScene:cleanup] Cleaning Up Scene: " .. self.name) --#DEBUG
+  Log.debug("[RoxyScene:cleanup] Cleaning Up Scene: " .. self.name) --#DEBUG
 
   removeHandler(self)
   self:resetDrawOffset()
@@ -132,7 +132,7 @@ function RoxyScene:setBackground(background)
   -- Solid color
   if background == nil or type(background) == "number" then
     local color = background or CLEAR_COLOR
-    print("[D][RoxyScene:setBackground] Setting background color to " .. color)
+    Log.debug("[RoxyScene:setBackground] Setting background color to " .. color)
     setBackgroundColor(color)
     self.backgroundColor = color
     self.backgroundImage = nil
@@ -143,7 +143,7 @@ function RoxyScene:setBackground(background)
 
   -- Background image
   if type(background) == "userdata" then
-    print("[D][RoxyScene:setBackground] Setting background image")
+    Log.debug("[RoxyScene:setBackground] Setting background image")
     local img = background
     self.backgroundColor = nil
     self.backgroundImage = img
@@ -154,7 +154,7 @@ function RoxyScene:setBackground(background)
     return
   end
 
-  print("[D][RoxyScene:setBackground] Falling back to background color: " .. CLEAR_COLOR)
+  Log.debug("[RoxyScene:setBackground] Falling back to background color: " .. CLEAR_COLOR)
   -- Fallback
   setBackgroundColor(CLEAR_COLOR)
   self.backgroundColor = CLEAR_COLOR

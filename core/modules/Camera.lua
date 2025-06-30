@@ -105,7 +105,7 @@ end
 function Camera.setPosition(x, y)
   --#DEBUG START
   if type(x) ~= "number" or type(y) ~= "number" then
-    error("[*][Camera.setPosition] Invalid position: expected numbers (x, y)", 2)
+    Log.error("[Camera.setPosition] Invalid position: expected numbers (x, y)", 2)
   end
   --#DEBUG END
   Camera.x, Camera.y = x, y
@@ -121,7 +121,7 @@ end
 function Camera.setPanVelocity(vx, vy)
   --#DEBUG START
   if vx ~= nil and type(vx) ~= "number" then
-    error("[*][Camera.setPanVelocity] Invalid vx: expected a number or nil", 2)
+    Log.error("[Camera.setPanVelocity] Invalid vx: expected a number or nil", 2)
     return
   end
   --#DEBUG END
@@ -132,7 +132,7 @@ function Camera.setPanVelocity(vx, vy)
 
   --#DEBUG START
   if type(vy) ~= "number" then
-    error("[*][Camera.setPanVelocity] Invalid vy: expected a number or nil", 2)
+    Log.error("[Camera.setPanVelocity] Invalid vy: expected a number or nil", 2)
     return
   end
   --#DEBUG END
@@ -152,7 +152,7 @@ end
 function Camera.setTarget(sprite, smoothing)
   --#DEBUG START
   if sprite and not sprite.getPosition then
-    error("[*][Camera.setTarget] Invalid sprite: expected a sprite with getPosition method", 2)
+    Log.error("[Camera.setTarget] Invalid sprite: expected a sprite with getPosition method", 2)
   end
   --#DEBUG END
   Camera.target = sprite
@@ -176,7 +176,7 @@ end
 function Camera.setSmoothing(rate)
   --#DEBUG START
   if type(rate) ~= "number" then
-    error("[*][Camera.setSmoothing] Invalid smoothing rate: expected a number", 2)
+    Log.error("[Camera.setSmoothing] Invalid smoothing rate: expected a number", 2)
   end
   --#DEBUG END
   Camera.smoothing = max(rate, 0)
@@ -188,7 +188,7 @@ end
 function Camera.shake(amplitude, duration, frequency)
   --#DEBUG START
   if type(amplitude) ~= "number" or type(duration) ~= "number" or type(frequency) ~= "number" then
-    error("[*][Camera.shake] Invalid shake parameters: expected numbers (amplitude, duration, frequency)", 2)
+    Log.error("[Camera.shake] Invalid shake parameters: expected numbers (amplitude, duration, frequency)", 2)
     return
   end
   --#DEBUG END
@@ -205,7 +205,7 @@ end
 function Camera.setDeadZone(width, height)
   --#DEBUG START
   if type(width) ~= "number" or type(height) ~= "number" then
-    error("[*][Camera.setDeadZone] Invalid dead zone: expected numbers (width, height)", 2)
+    Log.error("[Camera.setDeadZone] Invalid dead zone: expected numbers (width, height)", 2)
     return
   end
   --#DEBUG END
@@ -218,7 +218,7 @@ end
 function Camera.setFriction(friction)
   --#DEBUG START
   if type(friction) ~= "number" then
-    error("[*][Camera.setFriction] Invalid friction: expected a number", 2)
+    Log.error("[Camera.setFriction] Invalid friction: expected a number", 2)
     return
   end
   --#DEBUG END
@@ -230,7 +230,7 @@ end
 function Camera.setBounds(bounds)
   --#DEBUG START
   if not bounds or type(bounds.x1) ~= "number" or type(bounds.y1) ~= "number" or type(bounds.x2) ~= "number" or type(bounds.y2) ~= "number" then
-    error("[*][Camera.setBounds] Invalid bounds: expected {x1, y1, x2, y2} with numbers", 2)
+    Log.error("[Camera.setBounds] Invalid bounds: expected {x1, y1, x2, y2} with numbers", 2)
     Camera._bounds = nil
     Camera._hasBounds = false
     Camera._minX, Camera._minY = 0, 0
@@ -293,7 +293,7 @@ function Camera.updateFollow(dt)
   local px, py = Camera.target:getPosition()
   --#DEBUG START
   if type(px) ~= "number" or type(py) ~= "number" then
-    warn("[W][Camera.updateFollow] Invalid sprite position: expected numbers (x, y)")
+    Log.warn("[Camera.updateFollow] Invalid sprite position: expected numbers (x, y)")
     Camera.target = nil
     Camera._updateFunc = Camera.updateStatic
     Camera._isActive = true

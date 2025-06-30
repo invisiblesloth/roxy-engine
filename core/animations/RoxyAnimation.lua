@@ -35,14 +35,14 @@ function RoxyAnimation:init(view)
 
   --#DEBUG START
   if type(view) ~= "string" then
-    error("[*][RoxyAnimation:init] Invalid view type for RoxyAnimation:", type(view), 2)
+    Log.error("[RoxyAnimation:init] Invalid view type for RoxyAnimation:", type(view), 2)
   end
   --#DEBUG END
 
   self.imagetable = newImagetable(view)
   --#DEBUG START
   if not self.imagetable then
-    error("[*][RoxyAnimation:init] Failed to create imagetable from view:", view)
+    Log.error("[RoxyAnimation:init] Failed to create imagetable from view:", view)
   end
   --#DEBUG END
 
@@ -155,7 +155,7 @@ function RoxyAnimation:setAnimation(name, nextContinuity, unlessThisAnimation)
   local animation = self.animations[name]
   --#DEBUG START
   if not animation then
-    warn("[W][RoxyAnimation:setAnimation] Animation", tostring(name), "not found; retaining", self.currentName or "<none>")
+    Log.warn("[RoxyAnimation:setAnimation] Animation", tostring(name), "not found; retaining", self.currentName or "<none>")
     return self
   end
   --#DEBUG END
@@ -176,14 +176,14 @@ function RoxyAnimation:getSpeed()
   if self.currentAnimation then
     return self.currentAnimation.speed
   end
-  warn("[W][RoxyAnimation:getSpeed] No current animation or speed not set") --#DEBUG
+  Log.warn("[RoxyAnimation:getSpeed] No current animation or speed not set") --#DEBUG
   return nil
 end
 
 -- ! Set Speed
 function RoxyAnimation:setSpeed(speed, currentOnly)
   if type(speed) ~= "number" then
-    warn("[W][ RoxyAnimation:setSpeed] Expected number for speed, got", type(speed)) --#DEBUG
+    Log.warn("[RoxyAnimation:setSpeed] Expected number for speed, got", type(speed)) --#DEBUG
     return self
   end
   speed = clamp(speed, 0, MAX_ANIMATION_SPEED)
@@ -204,14 +204,14 @@ function RoxyAnimation:getFrameDuration()
   if self.currentAnimation then
     return self.currentAnimation.frameDuration
   end
-  warn("[W][RoxyAnimation:getFrameDuration] No current animation or frameDuration not set") --#DEBUG
+  Log.warn("[RoxyAnimation:getFrameDuration] No current animation or frameDuration not set") --#DEBUG
   return nil
 end
 
 -- ! Set Frame Duration
 function RoxyAnimation:setFrameDuration(frameDuration, currentOnly)
   if type(frameDuration) ~= "number" then
-    warn("[W][RoxyAnimation:setFrameDuration] Expected number for frameDuration, got", type(frameDuration)) --#DEBUG
+    Log.warn("[RoxyAnimation:setFrameDuration] Expected number for frameDuration, got", type(frameDuration)) --#DEBUG
     return self
   end
 
@@ -231,7 +231,7 @@ end
 -- ! Start With Delay
 function RoxyAnimation:startWithDelay(delay, animationName)
   if type(delay) ~= "number" or delay <= 0 or not self.animations[animationName] then
-    warn("[W][RoxyAnimation:startWithDelay] Invalid delay or animation for startWithDelay:", delay, tostring(animationName)) --#DEBUG
+    Log.warn("[RoxyAnimation:startWithDelay] Invalid delay or animation for startWithDelay:", delay, tostring(animationName)) --#DEBUG
     return self
   end
 

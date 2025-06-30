@@ -71,7 +71,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
 
   -- ! On transition start
   self._dispatchStart = function()
-    print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' started.") --#DEBUG
+    Log.debug("[RoxyTransition:execute] Transition '" .. self.name .. "' started.") --#DEBUG
 
     local oldScene  = self._currentScene
     local stackOp   = self.stackOp
@@ -85,7 +85,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
 
   -- ! On transition midpoint reached
   self._dispatchMidpoint = function()
-    print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' midpoint reached.") --#DEBUG
+    Log.debug("[RoxyTransition:execute] Transition '" .. self.name .. "' midpoint reached.") --#DEBUG
 
     if self.state & STATE_MIDPOINT_REACHED ~= 0 then return end
     self.state |= STATE_MIDPOINT_REACHED
@@ -137,7 +137,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
   -- ! On hold time elapsed
   self._dispatchHoldElapsed = function()
     self.state |= STATE_HOLD_ELAPSED
-    print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' hold elapsed.") --#DEBUG
+    Log.debug("[RoxyTransition:execute] Transition '" .. self.name .. "' hold elapsed.") --#DEBUG
   end
 
   -- ! On transition complete
@@ -146,7 +146,7 @@ function RoxyTransition:init(duration, holdTime, opts, stackOp)
     self:cleanup()
     Transition.currentTransition = nil
 
-    print("[D][RoxyTransition:execute] Transition '" .. self.name .. "' completed.") --#DEBUG
+    Log.debug("[RoxyTransition:execute] Transition '" .. self.name .. "' completed.") --#DEBUG
   end
 end
 
@@ -179,7 +179,7 @@ function RoxyTransition:cleanup()
   self.opts               = nil
   self.captureScreenshot  = nil
 
-  print("[D][RoxyTransition:cleanup] Transition '" .. self.name .. "' cleanup completed.") --#DEBUG
+  Log.debug("[RoxyTransition:cleanup] Transition '" .. self.name .. "' cleanup completed.") --#DEBUG
 end
 
 -- ----------------------------------------
@@ -189,11 +189,11 @@ end
 -- ! Set Up Sequence
 -- Stub to be overridden in derived classes to define transition timing.
 function RoxyTransition:setUpSequence(_, _, _, _)
-  error("[*][RoxyTransition:setUpSequence] Must be implemented in derived class '" .. self.name .. "'.", 2) --#DEBUG
+  Log.error("[RoxyTransition:setUpSequence] Must be implemented in derived class '" .. self.name .. "'.", 2) --#DEBUG
 end
 
 -- ! Draw
 -- Stub to be overridden for transition rendering.
 function RoxyTransition:draw()
-  error("[*][RoxyTransition:draw] Must be implemented in derived class '" .. self.name .. "'.", 2) --#DEBUG
+  Log.error("[RoxyTransition:draw] Must be implemented in derived class '" .. self.name .. "'.", 2) --#DEBUG
 end

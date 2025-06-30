@@ -70,13 +70,13 @@ end
 -- ! Normalize Image Path
 local function normalizeImgPath(tiledImgPath)
   if type(tiledImgPath) ~= "string" then
-    warn("[W][normalizeImgPath] Expected string, got " .. type(tiledImgPath)) --#DEBUG
+    Log.warn("[normalizeImgPath] Expected string, got " .. type(tiledImgPath)) --#DEBUG
     return nil
   end
   local filename = tiledImgPath:match("([^/]+)$") or ""
   local base     = filename:gsub("%-table%-%d+%-%d+%.png$", "")
   if base == filename then
-    warn("[W][normalizeImgPath] Unexpected image path pattern: " .. tostring(tiledImgPath)) --#DEBUG
+    Log.warn("[normalizeImgPath] Unexpected image path pattern: " .. tostring(tiledImgPath)) --#DEBUG
     return IMAGE_PATH_PREFIX .. filename
   end
   return IMAGE_PATH_PREFIX .. base
@@ -95,7 +95,7 @@ local function getImageTable(path)
   if loaded then
     cacheAsset(path, function() return loaded end)
   else --#DEBUG
-    warn("[W][getImageTable] Failed to load image table at path: " .. path) --#DEBUG
+    Log.warn("[getImageTable] Failed to load image table at path: " .. path) --#DEBUG
   end
 
   return loaded
@@ -110,12 +110,12 @@ local function validateOptions(opts)
   for layerName, opts in pairs(layerOptions) do
     if opts.emptyIDs ~= nil then
       if type(opts.emptyIDs) ~= "table" then
-        warn("[W][validateOptions] layerOptions['" .. layerName .. "'].emptyIDs must be a table") --#DEBUG
+        Log.warn("[validateOptions] layerOptions['" .. layerName .. "'].emptyIDs must be a table") --#DEBUG
         opts.emptyIDs = EMPTY_TABLE
       else
         for i, id in ipairs(opts.emptyIDs) do
           if type(id) ~= "number" then
-            warn("[W][validateOptions] emptyIDs contains non-number at index " .. i .. " for layer '" .. layerName .. "'") --#DEBUG
+            Log.warn("[validateOptions] emptyIDs contains non-number at index " .. i .. " for layer '" .. layerName .. "'") --#DEBUG
             opts.emptyIDs[i] = 0
           end
         end
@@ -158,7 +158,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
   --#DEBUG START
   if scene and not sceneHasAdd then
-    warn("[W][RoxyTilemap:init] RoxyTilemap: scene provided but has no addSprite method")
+    Log.warn("[RoxyTilemap:init] RoxyTilemap: scene provided but has no addSprite method")
     -- Will fall back to sprite:add()
   end
   --#DEBUG END
@@ -166,7 +166,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   -- Load the map JSON
   local mapData, err = loadJSON(jsonPath)
   if not mapData then
-    error("[*][RoxyTilemap:init] " .. (err or "unknown error")) --#DEBUG
+    Log.error("[RoxyTilemap:init] " .. (err or "unknown error")) --#DEBUG
     self.layers, self.sprites, self.tilesets, self.objectLayers = {}, {}, nil, nil
     self.worldWidth, self.worldHeight = 0, 0
     return
@@ -214,7 +214,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   for _, tileset in ipairs(mapData.tilesets or {}) do
     local normPath = normalizeImgPath(tileset.image)
     if not normPath then
-      warn("[W][RoxyTilemap:init] Skipping tileset '" .. tostring(tileset.name) .. "' due to invalid image path") --#DEBUG
+      Log.warn("[RoxyTilemap:init] Skipping tileset '" .. tostring(tileset.name) .. "' due to invalid image path") --#DEBUG
       goto continueTileset
     end
 
@@ -249,7 +249,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
       end
 
       if not usedTileset then
-        warn("[W][RoxyTilemap:init] Layer '"..layer.name.."' has no matching tileset") --#DEBUG
+        Log.warn("[RoxyTilemap:init] Layer '"..layer.name.."' has no matching tileset") --#DEBUG
         goto continue -- Skip this layer if no valid tileset
       end
 
@@ -264,10 +264,10 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
       --#DEBUG START
       if isEmpty then
-        warn("[W][RoxyTilemap:init] Skipping empty layer '" .. layer.name .. "'")
+        Log.warn("[RoxyTilemap:init] Skipping empty layer '" .. layer.name .. "'")
       end
       if usedTileset and not usedTileset.imageTable then
-        warn("[W][RoxyTilemap:init] Skipping layer '" .. layer.name .. "' due to missing imagetable")
+        Log.warn("[RoxyTilemap:init] Skipping layer '" .. layer.name .. "' due to missing imagetable")
       end
       --#DEBUG END
 

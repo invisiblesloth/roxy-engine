@@ -19,7 +19,7 @@ function RoxyGraphics.getRefreshRate()
     RoxyGraphics.refreshRate = success and rate or DEFAULT_REFRESH_RATE
     --#DEBUG START
     if not success then
-      error("[*][RoxyGraphics.getRefreshRate] Failed to query refresh rate; defaulting to 30 Hz")
+      Log.error("[RoxyGraphics.getRefreshRate] Failed to query refresh rate; defaulting to 30 Hz")
     end
     --#DEBUG END
   end
@@ -36,7 +36,7 @@ function RoxyGraphics.getDisplaySize()
       RoxyGraphics.displayWidth, RoxyGraphics.displayHeight = width, height
       RoxyGraphics.displayWidthCenter, RoxyGraphics.displayHeightCenter = width / 2, height / 2
     else
-      error("[*][RoxyGraphics.getDisplaySize] Failed to get display size; defaulting to 400x240") --#DEBUG
+      Log.error("[RoxyGraphics.getDisplaySize] Failed to get display size; defaulting to 400x240") --#DEBUG
 
       -- Fallback to Playdate defaults
       RoxyGraphics.displayWidth, RoxyGraphics.displayHeight = PLAYDATE_WIDTH, PLAYDATE_HEIGHT

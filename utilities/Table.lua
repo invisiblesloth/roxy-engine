@@ -33,8 +33,8 @@ end
 -- ! Deep Merge
 -- Recursively merges values from tbl2 into tbl1.
 function Table.deepMerge(tbl1, tbl2)
-  assert(tbl1, "[*][Table.deepMerge] tbl1 is required for deepMerge.") --#DEBUG
-  assert(tbl2, "[*][Table.deepMerge] tbl2 is required for deepMerge.") --#DEBUG
+  Log.assert(tbl1, "[Table.deepMerge] tbl1 is required for deepMerge.") --#DEBUG
+  Log.assert(tbl2, "[Table.deepMerge] tbl2 is required for deepMerge.") --#DEBUG
 
   for key, value in pairs(tbl2) do
     if type(value) == "table" and type(tbl1[key]) == "table" then
@@ -50,13 +50,13 @@ end
 -- ! Merge Immutable
 -- Returns a deep copy of defaults merged with overrides. Original tables remain unchanged.
 function Table.mergeImmutable(defaults, overrides)
-  assert(defaults, "[*][Table.mergeImmutable] defaults is required for mergeImmutable.") --#DEBUG
+  Log.assert(defaults, "[Table.mergeImmutable] defaults is required for mergeImmutable.") --#DEBUG
 
   local merged = Table.cloneWithCycles(defaults)
   if overrides then
     Table.deepMerge(merged, overrides)
   else
-    warn("[W][Table.mergeImmutable] No overrides provided; returning a copy of defaults unchanged") --#DEBUG
+    Log.warn("[Table.mergeImmutable] No overrides provided; returning a copy of defaults unchanged") --#DEBUG
   end
 
   return merged
@@ -67,8 +67,8 @@ end
 -- Returns true if keys differ between two tables (missing or extra keys).
 --
 function Table.keyChange(dataDefault, data)
-  assert(dataDefault, "[*][Table.keyChange] dataDefault is required for keyChange.") --#DEBUG
-  assert(data, "[*][Table.keyChange] data is required for keyChange.") --#DEBUG
+  Log.assert(dataDefault, "[Table.keyChange] dataDefault is required for keyChange.") --#DEBUG
+  Log.assert(data, "[Table.keyChange] data is required for keyChange.") --#DEBUG
 
   local keysDefault = {}
   local keysData = {}
@@ -82,14 +82,14 @@ function Table.keyChange(dataDefault, data)
 
   for key in pairs(keysDefault) do
     if not keysData[key] then
-      warn("[W][Table.keyChange] Key '" .. tostring(key) .. "' missing in data") --#DEBUG
+      Log.warn("[Table.keyChange] Key '" .. tostring(key) .. "' missing in data") --#DEBUG
       return true
     end
   end
 
   for key in pairs(keysData) do
     if not keysDefault[key] then
-      warn("[W][Table.keyChange] Extra key '" .. tostring(key) .. "' found in data") --#DEBUG
+      Log.warn("[Table.keyChange] Extra key '" .. tostring(key) .. "' found in data") --#DEBUG
       return true
     end
   end
@@ -100,7 +100,7 @@ end
 -- ! Get Total Size
 -- Returns total count of entries in a table (array + hash parts).
 function Table.getTotalSize(tbl)
-  assert(tbl, "[*][Table.getTotalSize] tbl is required for getTotalSize.") --#DEBUG
+  Log.assert(tbl, "[Table.getTotalSize] tbl is required for getTotalSize.") --#DEBUG
   local arrayCount, hashCount = getTableSize(tbl)
   return arrayCount + hashCount
 end

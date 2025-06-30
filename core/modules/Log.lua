@@ -47,11 +47,11 @@ function Log.warn (msgOrFn, stackLevel)
 end
 
 function Log.info (msgOrFn, stackLevel)
-  emit(Log.INFO, "(i)", msgOrFn, stackLevel)
+  emit(Log.INFO, "Info:", msgOrFn, stackLevel)
 end
 
 function Log.debug(msgOrFn, stackLevel)
-  emit(Log.DEBUG, "[D]", msgOrFn, stackLevel)
+  emit(Log.DEBUG, "Debug:", msgOrFn, stackLevel)
 end
 
 function Log.assert(condition, msgOrFn, stackLevel, ...)

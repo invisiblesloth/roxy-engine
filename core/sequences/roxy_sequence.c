@@ -60,7 +60,7 @@ typedef void (*LoopHandler)(EasingArray*, float*, float);
 do { \
     EasingSegment* seg = ensureCapacityAndInsert(ea); \
     if (!seg) { \
-        sys->logToConsole("Error: Memory allocation failed resizing EasingArray."); \
+        sys->logToConsole("Roxy ERROR: [ADD_SEGMENT] Memory allocation failed resizing EasingArray."); \
         lua->pushObject(ea, "RoxySequenceC", 0); \
         return 1; \
     } \
@@ -155,7 +155,7 @@ static int easingArray_newobject(lua_State* L)
 {
     EasingArray* ea = sys->realloc(NULL, sizeof(EasingArray));
     if (!ea) {
-        sys->logToConsole("Error: Memory allocation failed for EasingArray.");
+        sys->logToConsole("Roxy ERROR: [easingArray_newobject] Memory allocation failed for EasingArray.");
         return 0;
     }
 
@@ -164,7 +164,7 @@ static int easingArray_newobject(lua_State* L)
     ea->segments  = sys->realloc(NULL, sizeof(EasingSegment) * ea->capacity);
 
     if (!ea->segments) {
-        sys->logToConsole("Error: Memory allocation failed for EasingArray segments.");
+        sys->logToConsole("Roxy ERROR: [easingArray_newobject] Memory allocation failed for EasingArray segments.");
         sys->realloc(ea, 0);
         return 0;
     }

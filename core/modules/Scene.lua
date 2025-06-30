@@ -52,7 +52,7 @@ local function rebuildLists()
     bgList[i] = nil
   end
 
-  print("[D][Scene.rebuildLists] update=".. updateCount .. " bg=" .. bgCount) --#DEBUG
+  Log.debug("[Scene.rebuildLists] update=".. updateCount .. " bg=" .. bgCount) --#DEBUG
 end
 
 -- ! Utility: Activate Scene
@@ -81,11 +81,11 @@ function Scene.registerScenes(...)
     local sceneName, sceneTable = params[1], params[2]
 
     if type(sceneName) ~= "string" then
-      error("[*][Scene.registerScenes] First argument must be a string scene name.", 2) --#DEBUG
+      Log.error("[Scene.registerScenes] First argument must be a string scene name.", 2) --#DEBUG
       return
     end
     if type(sceneTable) ~= "table" then
-      error("[*][Scene.registerScenes] Second argument must be a table.", 2) --#DEBUG
+      Log.error("[Scene.registerScenes] Second argument must be a table.", 2) --#DEBUG
       return
     end
 
@@ -98,17 +98,17 @@ function Scene.registerScenes(...)
     local sceneTable = params[1]
 
     if type(sceneTable) ~= "table" then
-      error("[*][Scene.registerScenes] Single argument must be a table of scenes.", 2) --#DEBUG
+      Log.error("[Scene.registerScenes] Single argument must be a table of scenes.", 2) --#DEBUG
       return
     end
 
     for name, table in pairs(sceneTable) do
       -- TODO: Should the if statement be removed from release build or just the error log?
       if type(name) ~= "string" then
-        error("[*][Scene.registerScenes] Skipping scene — key is not a string.", 2) --#DEBUG
+        Log.error("[Scene.registerScenes] Skipping scene — key is not a string.", 2) --#DEBUG
         return
       elseif type(table) ~= "table" then
-        error("[*][Scene.registerScenes] Skipping scene '" .. tostring(name) .. "' — value is not a table.", 2) --#DEBUG
+        Log.error("[Scene.registerScenes] Skipping scene '" .. tostring(name) .. "' — value is not a table.", 2) --#DEBUG
         return
       else
         scenes[name] = table
@@ -117,7 +117,7 @@ function Scene.registerScenes(...)
     return
   end
 
-  error("[*][Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
+  Log.error("[Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
 end
 
 -- ----------------------------------------
@@ -127,7 +127,7 @@ end
 -- ! Replace Scene Raw
 function Scene.replaceRaw(newScene)
   if type(newScene) ~= "table" then
-    error("[*][Scene.replaceRaw] A valid scene table must be provided.", 2) --#DEBUG
+    Log.error("[Scene.replaceRaw] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
@@ -140,13 +140,13 @@ function Scene.replaceRaw(newScene)
   Scene.currentScene = newScene
   rebuildLists()
 
-  print("[D][Scene.replaceRaw] Stack cleared. Set '" .. (newScene.name or "Unnamed") .. "' as sole scene.") --#DEBUG
+  Log.debug("[Scene.replaceRaw] Stack cleared. Set '" .. (newScene.name or "Unnamed") .. "' as sole scene.") --#DEBUG
 end
 
 -- ! Replace Scene
 function Scene.replaceScene(newScene)
   if type(newScene) ~= "table" then
-    error("[*][Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
+    Log.error("[Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
@@ -164,13 +164,13 @@ end
 -- ! Push Scene Raw
 function Scene.pushRaw(newScene)
   if type(newScene) ~= "table" then
-    error("[*][Scene.pushRaw] A valid scene table must be provided.", 2) --#DEBUG
+    Log.error("[Scene.pushRaw] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
   -- Soft stack overflow cap
   if #stack >= MAX_SCENE_DEPTH then
-    error("[*][Scene.pushRaw] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
+    Log.error("[Scene.pushRaw] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
     return
   end
 
@@ -178,13 +178,13 @@ function Scene.pushRaw(newScene)
   Scene.currentScene = newScene
   rebuildLists()
 
-  print("[D][Scene.pushRaw] Pushing Scene " .. (newScene.name or "Unnamed")) --#DEBUG
+  Log.debug("[Scene.pushRaw] Pushing Scene " .. (newScene.name or "Unnamed")) --#DEBUG
 end
 
 -- ! Push Scene
 function Scene.pushScene(newScene, captureScreenshot)
   if type(newScene) ~= "table" then
-    error("[*][Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
+    Log.error("[Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
@@ -206,7 +206,7 @@ end
 function Scene.popRaw()
   local depth = #stack
   if depth == 0 then
-    warn("[W][Scene.popRaw] Stack already empty.")
+    Log.warn("[Scene.popRaw] Stack already empty.")
     Scene.currentScene = nil
     rebuildLists()
     return
@@ -217,7 +217,7 @@ function Scene.popRaw()
   Scene.currentScene = stack[#stack] -- Now top
   rebuildLists()
 
-  print("[D][Scene.popRaw] Popping Scene " .. (popped.name or "Unnamed")) --#DEBUG
+  Log.debug("[Scene.popRaw] Popping Scene " .. (popped.name or "Unnamed")) --#DEBUG
 
   return popped
 end

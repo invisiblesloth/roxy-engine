@@ -11,12 +11,12 @@ local pools = {}
 -- ! Register Pool
 function Assets.registerPool(key, initialCount, loaderFunction, options)
   if type(loaderFunction) ~= "function" then
-    warn("[W][Assets.registerPool] loaderFunction is not callable for key '" .. tostring(key) .. "'. Expected a function.") --#DEBUG
+    Log.warn("[Assets.registerPool] loaderFunction is not callable for key '" .. tostring(key) .. "'. Expected a function.") --#DEBUG
     return false
   end
 
   if pools[key] then
-    warn("[W][Assets.registerPool] Pool for key '" .. tostring(key) .. "' is already registered.") --#DEBUG
+    Log.warn("[Assets.registerPool] Pool for key '" .. tostring(key) .. "' is already registered.") --#DEBUG
     return false
   end
 
@@ -31,7 +31,7 @@ function Assets.registerPool(key, initialCount, loaderFunction, options)
   }
 
   if pool.initialCount > pool.maxSize then
-    warn("[W][Assets.registerPool] initialCount (" .. pool.initialCount .. ") exceeds maxSize (" .. pool.maxSize .. ") for pool '" .. tostring(key) .. "'. Clamping to maxSize.") --#DEBUG
+    Log.warn("[Assets.registerPool] initialCount (" .. pool.initialCount .. ") exceeds maxSize (" .. pool.maxSize .. ") for pool '" .. tostring(key) .. "'. Clamping to maxSize.") --#DEBUG
     pool.initialCount = pool.maxSize
   end
 
@@ -44,13 +44,13 @@ function Assets.registerPool(key, initialCount, loaderFunction, options)
       pool.availableCount += 1
       pool.totalSize += 1
     else --#DEBUG
-      warn("[W][Assets.registerPool] Loader function returned nil when registering pool '" .. tostring(key) .. "'.") --#DEBUG
+      Log.warn("[Assets.registerPool] Loader function returned nil when registering pool '" .. tostring(key) .. "'.") --#DEBUG
     end
   end
 
   pools[key] = pool
 
-  print("[i][Assets.registerPool] Asset pool '" .. tostring(key) .. "' registered with " .. tostring(pool.initialCount) .. " assets.") --#DEBUG
+  Log.info("[Assets.registerPool] Asset pool '" .. tostring(key) .. "' registered with " .. tostring(pool.initialCount) .. " assets.") --#DEBUG
 
   return true
 end
@@ -59,7 +59,7 @@ end
 function Assets.getAsset(key)
   local pool = pools[key]
   if not pool then
-    warn("[W][Assets.getAsset] Attempted to get asset from unregistered pool: " .. tostring(key)) --#DEBUG
+    Log.warn("[Assets.getAsset] Attempted to get asset from unregistered pool: " .. tostring(key)) --#DEBUG
     return nil
   end
 
@@ -82,7 +82,7 @@ function Assets.getAsset(key)
           pool.availableCount += 1
           pool.totalSize += 1
         else --#DEBUG
-          warn("[W][Assets.getAsset] Loader returned nil while growing pool '" .. tostring(key) .. "'.") --#DEBUG
+          Log.warn("[Assets.getAsset] Loader returned nil while growing pool '" .. tostring(key) .. "'.") --#DEBUG
         end
       end
 
@@ -94,11 +94,11 @@ function Assets.getAsset(key)
         pool.availableCount -= 1
         return asset
       else
-        warn("[W][Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
+        Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
       end
     else
-      warn("[W][Assets.getAsset] Pool '" .. tostring(key) .. "' is empty and at max capacity (" .. tostring(pool.maxSize) .. ").") --#DEBUG
+      Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty and at max capacity (" .. tostring(pool.maxSize) .. ").") --#DEBUG
       return nil
     end
   end
@@ -107,12 +107,12 @@ end
 function Assets.recycleAsset(key, asset)
   local pool = pools[key]
   if not pool then
-    warn("[W][Assets.recycleAsset] Attempted to recycle asset to unregistered pool: " .. tostring(key)) --#DEBUG
+    Log.warn("[Assets.recycleAsset] Attempted to recycle asset to unregistered pool: " .. tostring(key)) --#DEBUG
     return false
   end
 
   if not asset then
-    warn("[W][Assets.recycleAsset] Attempted to recycle a nil asset to pool: " .. tostring(key)) --#DEBUG
+    Log.warn("[Assets.recycleAsset] Attempted to recycle a nil asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
 

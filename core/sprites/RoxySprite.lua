@@ -112,7 +112,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         -- Simple looping spritesheet
         local imagetable = newImagetable(view)
         if not imagetable then
-          error("[*][RoxySprite:setView] Failed to load imagetable for simpleAnim") --#DEBUG
+          Log.error("[RoxySprite:setView] Failed to load imagetable for simpleAnim") --#DEBUG
           return self
         end
         self.simpleAnim = {
@@ -135,7 +135,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         -- Full RoxyAnimation
         self.animation = RoxyAnimation(view)
         if not (self.animation and self.animation.imagetable) then
-          error("[*][RoxySprite:setView] Failed to load spritesheet for RoxySprite") --#DEBUG
+          Log.error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite") --#DEBUG
         end
         self._drawFn = function(sprite, x, y, flip)
           sprite.animation:draw(x, y, flip)
@@ -161,7 +161,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       view:draw(x, y, flip)
     end
   else
-    error("[*][RoxySprite:setView] Unsupported view type for RoxySprite:", type(view)) --#DEBUG
+    Log.error("[RoxySprite:setView] Unsupported view type for RoxySprite:", type(view)) --#DEBUG
     self._drawFn = nil
   end
 
@@ -220,7 +220,7 @@ function RoxySprite:setAnimation(name, nextContinuity, unlessThisAnimation)
   if self.animation then
     self.animation:setAnimation(name, nextContinuity, unlessThisAnimation)
   else --#DEBUG
-    warn("[W][RoxySprite:setAnimation] Sprite is not animated.") --#DEBUG
+    Log.warn("[RoxySprite:setAnimation] Sprite is not animated.") --#DEBUG
   end
   return self
 end
@@ -239,7 +239,7 @@ function RoxySprite:setIsPaused(flag)
   if type(flag) == "boolean" then
     self.isPaused = flag
   else --#DEBUG
-    warn("[W][RoxySprite:setIsPaused] Expected boolean for 'isPaused', got", type(flag)) --#DEBUG
+    Log.warn("[RoxySprite:setIsPaused] Expected boolean for 'isPaused', got", type(flag)) --#DEBUG
   end
   return self
 end
@@ -311,7 +311,7 @@ function RoxySprite:reverse()
   if self.animation then
     self.animation:reverse()
   else --#DEBUG
-    warn("[W][RoxySprite:reverse] Sprite has no animation (or simpleAnim) to reverse.") --#DEBUG
+    Log.warn("[RoxySprite:reverse] Sprite has no animation (or simpleAnim) to reverse.") --#DEBUG
   end
   return self
 end
@@ -325,7 +325,7 @@ function RoxySprite:getSpeed()
   if self.animation then
     return self.animation:getSpeed()
   end
-  warn("[W][RoxySprite:getSpeed] Sprite has no animation (or simpleAnim) for speed.") --#DEBUG
+  Log.warn("[RoxySprite:getSpeed] Sprite has no animation (or simpleAnim) for speed.") --#DEBUG
   return nil
 end
 
@@ -335,10 +335,10 @@ function RoxySprite:setSpeed(speed, currentOnly)
     if type(speed) == "number" then
       self.animation:setSpeed(speed, currentOnly)
     else --#DEBUG
-      warn("[W][RoxySprite:setSpeed] Expected number for 'speed', got", type(speed)) --#DEBUG
+      Log.warn("[RoxySprite:setSpeed] Expected number for 'speed', got", type(speed)) --#DEBUG
     end
   else --#DEBUG
-    warn("[W][RoxySprite:setSpeed] Sprite has no animation (or simpleAnim) to set speed.") --#DEBUG
+    Log.warn("[RoxySprite:setSpeed] Sprite has no animation (or simpleAnim) to set speed.") --#DEBUG
   end
   return self
 end
@@ -348,7 +348,7 @@ function RoxySprite:getFrameDuration()
   if self.animation then
     return self.animation:getFrameDuration()
   end
-  warn("[W][RoxySprite:getFrameDuration] Sprite has no animation (or simpleAnim) for frame duration.") --#DEBUG
+  Log.warn("[RoxySprite:getFrameDuration] Sprite has no animation (or simpleAnim) for frame duration.") --#DEBUG
   return nil
 end
 
@@ -358,10 +358,10 @@ function RoxySprite:setFrameDuration(frameDuration, currentOnly)
     if type(frameDuration) == "number" then
       self.animation:setFrameDuration(frameDuration, currentOnly)
     else --#DEBUG
-      warn("[W][RoxySprite:setFrameDuration] Expected number for 'frameDuration', got", type(frameDuration)) --#DEBUG
+      Log.warn("[RoxySprite:setFrameDuration] Expected number for 'frameDuration', got", type(frameDuration)) --#DEBUG
     end
   else --#DEBUG
-    warn("[W][RoxySprite:setFrameDuration] Sprite has no animation (or simpleAnim) to set frame duration.") --#DEBUG
+    Log.warn("[RoxySprite:setFrameDuration] Sprite has no animation (or simpleAnim) to set frame duration.") --#DEBUG
   end
   return self
 end
@@ -377,7 +377,7 @@ function RoxySprite:drawSpecificFrame(frame, andPause)
     self.animation:jumpToSpecificFrame(frame)
     if self.isPaused then self:markDirty() end
   else --#DEBUG
-    warn("[W][RoxySprite:drawSpecificFrame] Sprite has no animation (or simpleAnim) to draw specific frame.") --#DEBUG
+    Log.warn("[RoxySprite:drawSpecificFrame] Sprite has no animation (or simpleAnim) to draw specific frame.") --#DEBUG
   end
   return self
 end
@@ -389,7 +389,7 @@ function RoxySprite:stepFrame(direction)
     self.animation:stepFrame(direction)
     self:markDirty()
   else --#DEBUG
-    warn("[W][RoxySprite:stepFrame] Sprite has no animation (or simpleAnim) to step frame.") --#DEBUG
+    Log.warn("[RoxySprite:stepFrame] Sprite has no animation (or simpleAnim) to step frame.") --#DEBUG
   end
   return self
 end

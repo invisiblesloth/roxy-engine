@@ -115,13 +115,13 @@ local fpsY    = DEFAULT_FPS_Y --#DEBUG
 -- Initializes the engine and transitions to the first scene
 function r.new(startingScene)
   if engineInitialized then
-    Log.error("You can only run 'roxy.new()' once.") --#DEBUG
+    Log.error("[roxy.new] You can only run 'roxy.new()' once.") --#DEBUG
     return
   end
 
   --#DEBUG START
   if not startingScene then
-    Log.error("[*][roxy.new] startingScene is required for roxy.new.", 2)
+    Log.error("[roxy.new] startingScene is required for roxy.new.", 2)
   end
   --#DEBUG END
 
@@ -140,7 +140,7 @@ function r.new(startingScene)
 
   --#DEBUG START
   if type(scene) ~= "table" then
-    Log.error("[*][roxy.new] startingScene initialization must return a scene table.", 2)
+    Log.error("[roxy.new] startingScene initialization must return a scene table.", 2)
   end
   --#DEBUG END
 
