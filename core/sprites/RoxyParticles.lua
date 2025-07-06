@@ -4,35 +4,76 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 local r         <const> = roxy
+local Debug     <const> = r.Debug
 
-local random  <const> = math.random
 local max     <const> = math.max
-local min     <const> = math.min
-local cos     <const> = math.cos
-local sin     <const> = math.sin
-local rad     <const> = math.rad
 local floor   <const> = math.floor
-local ceil    <const> = math.ceil
 local clamp   <const> = r.Math.clamp
 
-local tableInsert <const> = table.insert
+local tableUnpack         <const> = table.unpack
+local mergeTableImmutable <const> = r.Table.mergeImmutable
+
+local char <const> = string.char
 
 local setColor          <const> = Graphics.setColor
-local getColor          <const> = Graphics.getColor
-local setPattern        <const> = Graphics.setPattern
 local pushContext       <const> = Graphics.pushContext  --#DEBUG
 local popContext        <const> = Graphics.popContext   --#DEBUG
 local newImage          <const> = Graphics.image.new    --#DEBUG
-local drawCircleAtPoint <const> = Graphics.drawCircleAtPoint
-local fillCircleAtPoint <const> = Graphics.fillCircleAtPoint
-local drawRect          <const> = Graphics.drawRect
 local fillRect          <const> = Graphics.fillRect
+
+-- C-side binding names updated for registered class/object API:
+local new_C           <const> = RoxyParticlesC.new
+local computeAABB_C   <const> = RoxyParticlesC.computeAABB
+local setPattern_C    <const> = RoxyParticlesC.setPattern
+local setImageTable_C <const> = RoxyParticlesC.setImageTable
+local setFrameRate_C  <const> = RoxyParticlesC.setFrameRate
+local spawn_C         <const> = RoxyParticlesC.spawn
+local spawnMultiple_C <const> = RoxyParticlesC.spawnMultiple
+local update_C        <const> = RoxyParticlesC.update
+local draw_C          <const> = RoxyParticlesC.draw
+local clear_C         <const> = RoxyParticlesC.clear
+local destroy_C       <const> = RoxyParticlesC.destroy
+
+local EMPTY_TABLE <const> = {}
 
 local COLOR_BLACK <const> = Graphics.kColorBlack
 local COLOR_WHITE <const> = Graphics.kColorWhite
 
-local DISPLAY_WIDTH  <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT <const> = r.Graphics.displayHeight
+local MAX_PARTICLE_COUNT    <const> = 1000
+local BATCH_THRESHOLD       <const> = 3
+local MAX_FRAME_RATE        <const> = 50
+local DELTA_TIME_THRESHOLD  <const> = 0.05 -- 20 FPS
+
+local FRAME_MODE_STATIC     <const> = 0
+local FRAME_MODE_SEQUENTIAL <const> = 1
+local FRAME_MODE_REVERSE    <const> = 2
+local FRAME_MODE_RANDOM     <const> = 3
+local MODE_MAP <const> = {
+  static     = FRAME_MODE_STATIC,
+  sequential = FRAME_MODE_SEQUENTIAL,
+  reverse    = FRAME_MODE_REVERSE,
+  random     = FRAME_MODE_RANDOM
+}
+
+local SHAPE_MAP <const> = {
+  circle              = 0,
+  ["outline-circle"]  = 1,
+  square              = 2,
+  ["outline-square"]  = 3,
+}
+
+local RATE_DEFAULT <const> = 10
+local DEFAULT_OPTS <const> = {
+  maxCount   = 20,
+  accel      = { x = 0, y = 0 },
+  speed      = { 10, 20 },
+  lifetime   = { 0.5, 1.0 },
+  size       = { 2, 8 },
+  angleRange = { -180, 180 },
+  color      = COLOR_BLACK,
+  shape      = "circle",
+  frameRate  = 12,
+}
 
 -- ----------------------------------------
 -- Helpers
@@ -60,138 +101,17 @@ local function getCrosshairImage()
 end
 --#DEBUG END
 
--- ! Normalize Range
--- Returns a normalized angle range: [-180, 180] with span < 360
-local function normalizeRange(a, b)
-  a = ((a + 180) % 360) - 180
-  b = ((b + 180) % 360) - 180
-  local span = b - a
-  if span <= -360 or span >= 360 then
-    return -180, 180, true -- Full circle
-  end
-  if span < 0 then b = b + 360 end
-  return a, b, false
-end
-
--- ! Random Range
--- Returns a uniform float in the closed range [lo, hi]
-local function randRange(lo, hi)
-  if lo == hi then return lo end
-  return lo + random() * (hi - lo)
-end
-
 -- ! Compute AABB (Bounding Box)
--- Compute the axis-aligned bounding box (AABB) for a given configuration
-local function computeAABB(opts, angleMin, angleMax, fullCircle, frameWidth, frameHeight)
-  local tMin, tMax = opts.lifetime[1], opts.lifetime[2]
-  local vMin, vMax = opts.speed[1], opts.speed[2]
-  local ax         = opts.accel.x or 0
-  local ay         = opts.accel.y or 0
-  local sizeMin    = opts.size[1] or 0
-  local sizeMax    = opts.size[2] or 0
-
-  local left, right, top, bottom = 0, 0, 0, 0
-  local function add(dx, dy)
-    if dx < left   then left   = dx end
-    if dx > right  then right  = dx end
-    if dy < top    then top    = dy end
-    if dy > bottom then bottom = dy end
-  end
-
-  -- Always include emitter origin
-  add(0, 0)
-
-  -- List all angles to check (same as before)
-  local candidateAngles = { angleMin, angleMax }
-  local function inSweep(d)
-    if fullCircle then return true end
-    local degrees = d
-    if degrees < angleMin then degrees = degrees + 360 end
-    return degrees >= angleMin and degrees <= angleMax
-  end
-  if inSweep(0)   then tableInsert(candidateAngles, 0)   end
-  if inSweep(90)  then tableInsert(candidateAngles, 90)  end
-  if inSweep(-90) then tableInsert(candidateAngles, -90) end
-
-  -- Try all extremes of lifetime and speed
-  local lifetimeList = { tMin, tMax }
-  local speedList    = { vMin, vMax }
-
-  local function feedAll(v, th, t)
-    local vx = v * cos(th)
-    local vy = v * sin(th)
-
-    -- At end of life
-    add(
-      vx * t + 0.5 * ax * t * t,
-      vy * t + 0.5 * ay * t * t
-    )
-    -- At turning points in X/Y (if in range)
-    if ax ~= 0 then
-      local tx = -vx / ax
-      if tx > 0 and tx < t then
-        add(
-          vx * tx + 0.5 * ax * tx * tx,
-          vy * tx + 0.5 * ay * tx * tx
-        )
-      end
-    end
-    if ay ~= 0 then
-      local ty = -vy / ay
-      if ty > 0 and ty < t then
-        add(
-          vx * ty + 0.5 * ax * ty * ty,
-          vy * ty + 0.5 * ay * ty * ty
-        )
-      end
-    end
-  end
-
-  -- For each candidate angle, check both min/max speeds and lifetimes
-  for _, deg in ipairs(candidateAngles) do
-    local th = rad(deg)
-    for _, v in ipairs(speedList) do
-      for _, t in ipairs(lifetimeList) do
-        feedAll(v, th, t)
-      end
-    end
-  end
-
-  -- Padding: use max size
-  local pad
-  if opts.imageTable and frameWidth and frameHeight then
-    pad = ceil(max(frameWidth, frameHeight) / 2)
-  else
-    pad = ceil(sizeMax / 2)
-  end
-
-  left   = floor(left - pad)
-  right  = ceil(right + pad)
-  top    = floor(top - pad)
-  bottom = ceil(bottom + pad)
-
-  local boxW = max(1, right - left)
-  local boxH = max(1, bottom - top)
-
-  return left, right, top, bottom, boxW, boxH
+local function computeAABB(opts, frameW, frameH)
+  return computeAABB_C(
+    opts.lifetime[1] or 1, opts.lifetime[2] or 1,
+    opts.speed[1] or 20, opts.speed[2] or 20,
+    opts.size[1] or 2, opts.size[2] or 8,
+    opts.accel.x or 0, opts.accel.y or 0,
+    opts.angleRange[1] or -180, opts.angleRange[2] or 180,
+    frameW or 0, frameH or 0
+  )
 end
-
--- ! Shape Drawers
--- Pre-localize shape drawers (micro-opt)
-local shapeDrawers = {
-  circle = function(x, y, size)
-    fillCircleAtPoint(x, y, size / 2)
-  end,
-  ["outline-circle"] = function(x, y, size)
-    drawCircleAtPoint(x, y, size / 2)
-  end,
-  square = function(x, y, size)
-    fillRect(x - size / 2, y - size / 2, size, size)
-  end,
-  ["outline-square"] = function(x, y, size)
-    drawRect(x - size / 2, y - size / 2, size, size)
-  end
-}
 
 -- ----------------------------------------
 -- ! Class Definition & Init
@@ -201,71 +121,85 @@ class("RoxyParticles").extends(RoxySprite)
 
 function RoxyParticles:init(x, y, opts)
   RoxySprite.super.init(self)
+  local opts = mergeTableImmutable(DEFAULT_OPTS, (opts or EMPTY_TABLE))
 
-  -- Sanitize/patch missing opts fields
-  opts            = opts or {}
-  opts.accel      = opts.accel      or { x = 0, y = 0 }
-  opts.speed      = opts.speed      or { 20, 20 }
-  opts.lifetime   = opts.lifetime   or { 1.0, 1.0 }
-  opts.size       = opts.size       or { 2, 8 }
-  opts.angleRange = opts.angleRange or { -180, 180 }
-  opts.maxCount   = opts.maxCount   or 20
-  self.opts       = opts
+  -- Clamp and validate ranges for safety
+  opts.maxCount   = clamp(floor(opts.maxCount), 1, MAX_PARTICLE_COUNT)
+  opts.frameRate  = clamp(opts.frameRate, 1, MAX_FRAME_RATE)
+  opts.lifetime   = {
+    max(0.01, opts.lifetime[1]),
+    max(0.01, opts.lifetime[2]),
+  }
 
-  self:setZIndex(opts.zIndex or 1)
+  -- Handle color, pattern, shape defaults
+  opts.color = opts.color
+  opts.pattern = opts.pattern -- may be nil
+  opts.shape = opts.shape or ((opts.imageTable and "image") or DEFAULT_OPTS.shape)
 
-  -- Normalized angle range
-  local angMin, angMax, fullCircle
-  if not opts.angleRange
-      or type(opts.angleRange[1]) ~= "number"
-      or type(opts.angleRange[2]) ~= "number" then
-    angMin, angMax, fullCircle = -180, 180, true
-  else
-    angMin, angMax, fullCircle = normalizeRange(opts.angleRange[1], opts.angleRange[2])
-    if angMin == angMax and not fullCircle then
-      angMin = angMin - 0.01
-      angMax = angMax + 0.01
-    end
-  end
-  self.angleMin = angMin
-  self.angleMax = angMax
-  self.fullCircle = fullCircle
+  self.opts = opts
 
-  -- ImageTable
+  -- Cache frequently accessed values for hot loops
+  self.accelX = opts.accel.x
+  self.accelY = opts.accel.y
+  self.rate = opts.rate or 0
+  self.shape = opts.shape
+  self.shapeID = SHAPE_MAP[self.shape] or 0
+  self.color = opts.color
+
+  -- Image table handling
   if opts.imageTable then
     self.frameCount = opts.imageTable:getLength()
-    local frameImage = opts.imageTable:getImage(1)
-    self.frameWidth, self.frameHeight = frameImage:getSize()
+    local img = opts.imageTable:getImage(1)
+    self.frameWidth, self.frameHeight = img:getSize()
+  else
+    self.frameCount = 1
+    self.frameWidth = 0
+    self.frameHeight = 0
   end
 
-  -- Calculate AABB
-  local left, right, top, bottom, boxW, boxH = computeAABB(
-    opts, self.angleMin, self.angleMax, self.fullCircle, self.frameWidth, self.frameHeight
-  )
+  self.frameMode = opts.frameMode and MODE_MAP[opts.frameMode] or FRAME_MODE_SEQUENTIAL
+  self.staticFrame = opts.imageTable and clamp(opts.staticFrame or 1, 1, self.frameCount) or 1
+  self.opts.loop = (self.opts.loop == false) and 0 or 1
 
-  -- Sprite Positioning
-  self:setSize(boxW, boxH)
-  self:setCenter(-left / boxW, -top / boxH)
-  self:moveTo(x, y)
+  -- Allocate a C-side pool object
+  self.cpool = new_C(
+    opts.maxCount,
+    opts.imageTable or nil,
+    self.frameCount or 1,
+    self.frameMode,
+    self.staticFrame,
+    self.opts.loop,
+    self.opts.frameRate
+  )
+  --#DEBUG START
+  if not self.cpool then
+    Log.error("[RoxyParticles:init] Failed to allocate particle pool")
+  end
+  --#DEBUG END
+
+  -- If the user supplied an initial pattern table, push it into C
+  if opts.pattern then
+    self:setPattern(opts.pattern)
+  end
+
+  -- calculate AABB via C
+  local left, right, top, bottom, boxW, boxH = computeAABB(opts, self.frameWidth or 0, self.frameHeight or 0)
   self.emitterOffsetX = -left
   self.emitterOffsetY = -top
 
-  -- Particle Pool
-  self.pool = {}
-  for i = 1, opts.maxCount do
-    self.pool[i] = { alive = false }
-  end
+  -- Sprite Positioning
+  self:setZIndex(opts.zIndex or 1)
+  self:setSize(boxW, boxH)
+  self:setCenter(-left / boxW, -top / boxH)
+  self:moveTo(x, y)
+
+  -- Accumulator
   self.accumulator = 0
 
-  -- Static Frame Clamp
-  if opts.frameMode == "static" and self.frameCount then
-    local staticFrame = opts.staticFrame or 1
-    self.staticFrameClamped = clamp(staticFrame, 1, self.frameCount)
-  end
-
   --#DEBUG START
-  -- Debug crosshair singleton
-  self.debugCrosshairImage = getCrosshairImage()
+  if Debug and Debug.visualDebug then
+    self.debugCrosshairImage = getCrosshairImage()
+  end
   --#DEBUG END
 end
 
@@ -276,11 +210,9 @@ end
 -- ! Recalculate AABB
 -- Recalculate and apply AABB, reposition sprite
 function RoxyParticles:_recalcAABB()
-  local left, right, top, bottom, boxW, boxH = computeAABB(
-    self.opts, self.angleMin, self.angleMax, self.fullCircle, self.frameWidth, self.frameHeight
-  )
+  local left, right, top, bottom, boxW, boxH = computeAABB(self.opts, self.frameWidth or 0, self.frameHeight or 0)
   self:setSize(boxW, boxH)
-  self:setCenter(-left / boxW, -top / boxH)
+  self:setCenter(-left/boxW, -top/boxH)
   self.emitterOffsetX = -left
   self.emitterOffsetY = -top
 end
@@ -288,163 +220,95 @@ end
 -- ! Spawn
 -- Spawn a single particle
 function RoxyParticles:spawn()
-  for i = 1, #self.pool do
-    local p = self.pool[i]
-    if not p.alive then
-      p.alive = true; p.age = 0
-      p.lifetime = randRange(self.opts.lifetime[1], self.opts.lifetime[2])
-      local theta = rad(randRange(self.angleMin, self.angleMax))
-      local speed = randRange(self.opts.speed[1], self.opts.speed[2])
-      p.vx, p.vy = speed * cos(theta), speed * sin(theta)
-      p.x, p.y = self.emitterOffsetX, self.emitterOffsetY
-      p.size = randRange(self.opts.size[1], self.opts.size[2])
+  return spawn_C(
+    self.cpool,
+    self.opts.lifetime[1], self.opts.lifetime[2],
+    self.opts.speed[1], self.opts.speed[2],
+    self.opts.size[1], self.opts.size[2],
+    self.opts.angleRange[1], self.opts.angleRange[2],
+    self.emitterOffsetX, self.emitterOffsetY
+  )
+end
 
-      -- Frame setup (imageTable mode)
-      if self.opts.imageTable and self.frameCount and self.frameCount > 0 then
-        if self.frameWidth and self.frameHeight then
-          p.x = self.emitterOffsetX - self.frameWidth / 2
-          p.y = self.emitterOffsetY - self.frameHeight / 2
-        end
-        local mode = self.opts.frameMode or "static"
-        if mode == "sequential" or mode == "reverse" then
-          p.frame = (mode == "sequential") and 1 or self.frameCount
-          p.frameRate = self.opts.frameRate or 12
-          p.frameTimer = 0
-        elseif mode == "random" then
-          p.frameRate = self.opts.frameRate or 0
-          p.frame = random(1, self.frameCount)
-          p.frameTimer = 0
-        elseif mode == "static" then
-          p.frame = self.staticFrameClamped or 1
-        end
-      end
+-- ! Spawn Multiple Particles (Batch)
+-- Returns the actual number of particles spawned
+function RoxyParticles:spawnMultiple(count)
+  if count <= 0 then return 0 end
 
-      -- break
-      return true
-    end
-  end
-  return false
+  return spawnMultiple_C(
+    self.cpool,
+    count,
+    self.opts.lifetime[1], self.opts.lifetime[2],
+    self.opts.speed[1], self.opts.speed[2],
+    self.opts.size[1], self.opts.size[2],
+    self.opts.angleRange[1], self.opts.angleRange[2],
+    self.emitterOffsetX, self.emitterOffsetY
+  )
 end
 
 -- ! Update
+-- Hybrid single/batch spawning
 function RoxyParticles:update()
   local dt = r.deltaTime
-  local dirty = false
 
-  -- Cache hot opts fields
-  local accelX, accelY = self.opts.accel.x, self.opts.accel.y
-  local imgTable       = self.opts.imageTable
-  local frameCnt       = self.frameCount
-  local axdt, aydt     = accelX * dt, accelY * dt
+  if self.rate > 0 then
+    self.accumulator = self.accumulator + dt * self.rate
 
-  -- Spawn particles based on rate
-  local rate = self.opts.rate or 0
-  if rate > 0 then
-    self.accumulator += dt * rate
-    while self.accumulator >= 1 do
-      self:spawn()
-      self.accumulator -= 1
-      dirty = true
-    end
-  end
+    local spawnCount = floor(self.accumulator)
+    if spawnCount > 0 then
+      local actualSpawned = 0
 
-  -- Update particles
-  for i = 1, #self.pool do
-    local p = self.pool[i]
-    if p.alive then
-      p.age += dt
-      if p.age >= p.lifetime then
-        p.alive = false
-        dirty = true
+      -- Use batch spawning for multiple particles
+      if spawnCount >= BATCH_THRESHOLD then
+        actualSpawned = self:spawnMultiple(spawnCount)
       else
-        -- Euler step
-        p.vx += axdt
-        p.vy += aydt
-        p.x  += p.vx * dt
-        p.y  += p.vy * dt
-
-        dirty = true
-
-        -- Animation frames
-        if imgTable and frameCnt and frameCnt > 0 then
-          local mode = self.opts.frameMode or "static"
-          if (mode == "sequential" or mode == "reverse") and p.frameRate then
-            if p.frameRate == 0 then goto continue end -- Avoid division by zero
-            p.frameTimer = (p.frameTimer or 0) + dt
-            local frameAdvance = floor(p.frameTimer * p.frameRate)
-            if frameAdvance > 0 then
-              local loop = self.opts.loop
-              if mode == "sequential" then
-                p.frame = p.frame + frameAdvance
-                if loop then
-                  p.frame = ((p.frame - 1) % frameCnt) + 1
-                else
-                  p.frame = min(frameCnt, p.frame)
-                end
-              else
-                p.frame = p.frame - frameAdvance
-                if loop then
-                  p.frame = ((p.frame - 1 + frameCnt) % frameCnt) + 1
-                else
-                  p.frame = max(1, p.frame)
-                end
-              end
-              p.frameTimer = p.frameTimer - frameAdvance / p.frameRate
-            end
-          elseif mode == "random" and p.frameRate and p.frameRate > 0 then
-            p.frameTimer = (p.frameTimer or 0) + dt
-            if p.frameTimer >= 1 / p.frameRate then
-              p.frame = random(1, frameCnt)
-              p.frameTimer = p.frameTimer - 1 / p.frameRate
-            end
+        -- Handle small counts individually
+        for i = 1, spawnCount do
+          if self:spawn() then
+            actualSpawned = actualSpawned + 1
+          else
+            break -- Pool full
           end
         end
-        ::continue::
+      end
+
+      -- Deduct the spawned particles from accumulator
+      self.accumulator = self.accumulator - actualSpawned
+
+      -- If pool is full and we couldn't spawn anything, reset accumulator
+      -- to prevent it from growing indefinitely
+      if actualSpawned == 0 then
+        self.accumulator = 0
       end
     end
   end
 
-  if dirty then self:markDirty() end
+  -- Update all particles and get active status
+  local active
+  if dt <= DELTA_TIME_THRESHOLD then -- Fast path
+    active = update_C(self.cpool, dt, self.accelX, self.accelY)
+  else -- Slow path
+    -- Emergency split for frame drops
+    local halfDt = dt * 0.5
+    active = update_C(self.cpool, halfDt, self.accelX, self.accelY)
+    active = update_C(self.cpool, halfDt, self.accelX, self.accelY) or active
+  end
+
+  self._hasActiveParticles = active
+  if active then
+    self:markDirty()
+  end
 end
 
 -- ! Draw
 function RoxyParticles:draw()
-  local oldColor = getColor()
-
-  -- Set color/pattern for particle batch
-  if self.opts.pattern then
-    setPattern(self.opts.pattern)
-  else
-    setColor(self.opts.color or COLOR_BLACK)
-  end
-
-  local imgTable, frameCnt = self.opts.imageTable, self.frameCount
-  for i = 1, #self.pool do
-    local p = self.pool[i]
-    if p.alive then
-      if imgTable and frameCnt and frameCnt > 0 then
-        imgTable:drawImage(p.frame or 1, p.x, p.y)
-      else
-        local shape = self.opts.shape or "circle"
-        local drawer = shapeDrawers[shape]
-        if drawer then
-          drawer(p.x, p.y, p.size)
-        elseif type(shape) == "function" then
-          shape(p.x, p.y, p.size, p)
-        end
-      end
-    end
-  end
+  draw_C(self.cpool, self.color, self.shapeID)
 
   --#DEBUG START
-  -- Draw debug crosshair
   if Debug.visualDebug and self.debugCrosshairImage then
     self.debugCrosshairImage:draw(self.emitterOffsetX - 4, self.emitterOffsetY - 4)
   end
   --#DEBUG END
-
-  -- Restore previous draw state
-  setColor(oldColor)
 end
 
 -- ----------------------------------------
@@ -453,10 +317,9 @@ end
 
 -- ! Clear
 function RoxyParticles:clear()
-  for i = 1, #self.pool do
-    self.pool[i].alive = false
-  end
+  clear_C(self.cpool)
   self.accumulator = 0
+  self._hasActiveParticles = false
   self:markDirty()
 end
 
@@ -464,15 +327,25 @@ end
 -- Instantly spawn `count` particles regardless of rate
 function RoxyParticles:emit(count)
   count = floor(count or 1)
-  for i = 1, count do
-    if self:spawn() == false then break end
+  if count <= 0 then return end
+
+  local actualSpawned = self:spawnMultiple(count)
+
+  -- Cache the result so hasActiveParticles() works immediately
+  self._hasActiveParticles = actualSpawned > 0
+
+  if actualSpawned > 0 then
+    self:markDirty()
   end
-  self:markDirty()
 end
 
 -- ! Set Particle Rate
 function RoxyParticles:setRate(rate)
-  self.opts.rate = rate or 10
+  -- Only accept non-negative numeric rates
+  local valid = (type(rate) == "number" and rate >= 0) and rate or RATE_DEFAULT
+  self.rate = valid
+  self.opts.rate = valid
+  self:markDirty()
 end
 
 -- ! Set Lifetime Range
@@ -492,15 +365,16 @@ end
 -- ! Set Angle Range
 function RoxyParticles:setAngleRange(a, b)
   self.opts.angleRange = { a, b }
-  local angMin, angMax, fullCircle = normalizeRange(a, b)
-  self.angleMin, self.angleMax, self.fullCircle = angMin, angMax, fullCircle
   self:_recalcAABB()
   self:markDirty()
 end
 
 -- ! Set Acceleration
-function RoxyParticles:setAccel(a, b)
-  self.opts.accel = { x = a, y = b }
+function RoxyParticles:setAccel(xx, yy)
+  self.opts.accel = { x = xx, y = yy }
+  -- Cache the values for hot loop
+  self.accelX = xx
+  self.accelY = yy
   self:_recalcAABB()
   self:markDirty()
 end
@@ -514,79 +388,242 @@ end
 
 -- ! Set Max Count
 function RoxyParticles:setMaxCount(newMax)
-  newMax = floor(newMax)
-  local oldPool = self.pool
-  self.pool = {}
-  for i = 1, newMax do
-    self.pool[i] = oldPool[i] or { alive = false }
+  newMax = floor(newMax or 1)
+
+  -- Attempt to create the new pool first
+  local newPool = new_C(
+    newMax,
+    self.opts.imageTable or nil,
+    self.frameCount or 1,
+    self.frameMode or FRAME_MODE_SEQUENTIAL,
+    self.staticFrame or 1,
+    self.opts.loop,
+    self.opts.frameRate
+  )
+  --#DEBUG START
+  if not newPool then
+    -- Allocation failed; keep the old pool intact
+    Log.error("[RoxyParticles:setMaxCount] Failed to allocate new particle pool")
   end
+  --#DEBUG END
+
+  -- Now that newPool exists, safely destroy the old one
+  if self.cpool then
+    destroy_C(self.cpool)
+  end
+
+  self.cpool = newPool
   self.opts.maxCount = newMax
+
+  -- Restore any existing pattern in the fresh pool
+  if self.opts.pattern then
+    self:setPattern(self.opts.pattern)
+  end
+
   self:markDirty()
 end
 
 -- ! Set Z-Index
 function RoxyParticles:setZIndex(z)
   RoxyParticles.super.setZIndex(self, z or 1)
+  self:markDirty()
 end
 
 -- ! Set Frame Rate
 function RoxyParticles:setFrameRate(frameRate)
-  self.opts.frameRate = frameRate or 12
+  self.opts.frameRate = frameRate or DEFAULT_OPTS.frameRate
+  -- Push the new FPS into C so spawn/update use it
+  setFrameRate_C(self.cpool, self.opts.frameRate)
+  -- Force a redraw so any timing‐sensitive visuals Pick up the new rate immediately
+  self:markDirty()
 end
 
 -- ! Set Shape
 function RoxyParticles:setShape(shape)
   self.opts.shape = shape
+  -- Cache the values for hot loop
+  self.shape = shape
+  self.shapeID = SHAPE_MAP[shape] or 0
   self:markDirty()
 end
 
 -- ! Set Frame Mode
 function RoxyParticles:setFrameMode(mode, staticFrame)
-  self.opts.frameMode = mode
-  if mode == "static" and self.frameCount then
-    self.staticFrameClamped = clamp(staticFrame or 1, 1, self.frameCount)
+  --#DEBUG START
+  if not MODE_MAP[mode] then
+    Log.error("[RoxyParticles:setFrameMode] Invalid frameMode: " .. tostring(mode))
   end
+  --#DEBUG END
+
+  self.opts.frameMode = mode
+  -- Clamp 1-based
+  if mode == "static" and self.frameCount then
+    self.staticFrame = clamp(staticFrame or 1, 1, self.frameCount)
+  end
+
+  -- Push into C if we have a table
+  if self.opts.imageTable then
+    local modeInt = MODE_MAP[self.opts.frameMode] or FRAME_MODE_SEQUENTIAL
+    local loopInt = (self.opts.loop == false) and 0 or 1
+    setImageTable_C(
+      self.cpool,
+      self.opts.imageTable,
+      modeInt,
+      self.staticFrame,
+      loopInt
+    )
+  end
+
+  self:markDirty()
 end
 
 -- ! Set Static Frame
 function RoxyParticles:setStaticFrame(frame)
   self.opts.staticFrame = frame or 1
   if self.frameCount then
-    self.staticFrameClamped = clamp(frame or 1, 1, self.frameCount)
+    self.staticFrame = clamp(self.opts.staticFrame, 1, self.frameCount)
   end
+
+  -- Push into C
+  if self.opts.imageTable then
+    local modeInt = MODE_MAP[self.opts.frameMode] or FRAME_MODE_SEQUENTIAL
+    local loopInt = (self.opts.loop == false) and 0 or 1
+    setImageTable_C(
+      self.cpool,
+      self.opts.imageTable,
+      modeInt,
+      self.staticFrame,
+      loopInt
+    )
+  end
+
+  self:markDirty()
 end
 
 -- ! Set Loop
 function RoxyParticles:setLoop(loop)
+  -- false --> 0, true or nil --> 1
   self.opts.loop = (loop == nil) or loop
+
+  -- Push into C
+  if self.opts.imageTable then
+    local modeInt = MODE_MAP[self.opts.frameMode] or FRAME_MODE_SEQUENTIAL
+    local loopInt = (self.opts.loop == false) and 0 or 1
+    setImageTable_C(
+      self.cpool,
+      self.opts.imageTable,
+      modeInt,
+      self.staticFrame,
+      loopInt
+    )
+  end
+
+  self:markDirty()
 end
 
 -- ! Set Image Table
 function RoxyParticles:setImageTable(imageTable, frameMode, loop)
   self.opts.imageTable = imageTable
-  self.opts.frameMode = frameMode or "static"
-  self.opts.loop = (loop == nil) or loop
+  self.opts.frameMode  = frameMode or "sequential"
+  self.opts.loop       = (loop == nil) or loop
+
   if imageTable then
-    self.frameCount = imageTable:getLength()
-    local frameImage = imageTable:getImage(1)
-    self.frameWidth, self.frameHeight = frameImage:getSize()
+    -- Get length + dimensions
+    self.frameCount  = imageTable:getLength()
+    local img        = imageTable:getImage(1)
+    self.frameWidth, self.frameHeight = img:getSize()
+
+    -- Clamp the static frame (1-based)
+    self.staticFrame = clamp(self.opts.staticFrame or 1, 1, self.frameCount)
+
+    -- Map Lua string --> int, and bool --> 0/1
+    local modeInt = MODE_MAP[self.opts.frameMode] or FRAME_MODE_SEQUENTIAL
+    local loopInt = (self.opts.loop == false) and 0 or 1
+
+    -- Pass everything into C
+    setImageTable_C(
+      self.cpool,
+      imageTable,
+      modeInt,
+      self.staticFrame,  -- Still 1-based; C will subtract 1
+      loopInt
+    )
   else
-    self.frameCount = 0
-    self.frameWidth = nil
+    -- No table: clear on C side
+    self.frameCount  = 0
+    self.frameWidth  = nil
     self.frameHeight = nil
+    self.opts.shape = self.opts.shape or DEFAULT_OPTS.shape
+    setImageTable_C(
+      self.cpool,
+      nil,
+      FRAME_MODE_SEQUENTIAL,
+      1,  -- StaticFrame --> frame 1
+      1   -- Loop=true
+    )
   end
+
   self:_recalcAABB()
   self:markDirty()
 end
 
 -- ! Set Pattern
-function RoxyParticles:setPattern(newPattern)
-  self.opts.pattern = newPattern
+function RoxyParticles:setPattern(pattern)
+  if type(pattern) == "table" then
+    --#DEBUG START
+    -- Validate that we have exactly 8 entries of 8-bit numbers
+    Log.assert(#pattern >= 8,
+      "[RoxyParticles:setPattern] Pattern table must have at least 8 entries")
+    for i = 1, 8 do
+      Log.assert(
+        type(pattern[i]) == "number" and pattern[i] >= 0 and pattern[i] <= 0xFF,
+        "[RoxyParticles:setPattern] Pattern entries must be 8-bit numbers"
+      )
+    end
+    --#DEBUG END
+
+    -- Convert table of bytes into a raw string for the C backend
+    local raw = char(tableUnpack(pattern))
+    setPattern_C(self.cpool, raw)
+    self.opts.pattern = pattern
+  elseif type(pattern) == "string" and pattern:match("^%s*{") then
+    -- Hex-list string like "{ 0xaa, 0x55, … }"
+    local tbl   = {}
+    local count = 0
+    -- Each iteration is O(1)
+    for hex in pattern:gmatch("0x[%da-fA-F]+") do
+      count = count + 1
+      tbl[count] = tonumber(hex)
+    end
+    Log.assert(count == 8, "[RoxyParticles:setPattern] Pattern string must have 8 hex entries") --#DEBUG
+    return self:setPattern(tbl)
+  elseif type(pattern) == "string" then
+    -- Raw 8-byte string
+    Log.assert(#pattern == 8, "[RoxyParticles:setPattern] Pattern string must be 8 bytes") --#DEBUG
+    setPattern_C(self.cpool, pattern)
+    self.opts.pattern = pattern
+  elseif pattern == nil then
+    -- Clear pattern, revert to color
+    setPattern_C(self.cpool, nil)
+    self.opts.pattern = nil
+  else --#DEBUG
+    Log.error("[RoxyParticles:setPattern] Pattern must be a table, string, or nil") --#DEBUG
+  end
+
   self:markDirty()
 end
 
 -- ! Set Color
 function RoxyParticles:setColor(newColor)
   self.opts.color = newColor
+  -- Cache the value for hot loop
+  self.color = newColor
   self:markDirty()
+end
+
+-- ! Check Active Particles
+-- Returns true if any particles are active
+function RoxyParticles:hasActiveParticles()
+  -- Simply return the last-update result
+  return self._hasActiveParticles or false
 end
