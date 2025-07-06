@@ -16,13 +16,15 @@ void roxy_math_setPlaydateAPI(PlaydateAPI* playdate)
 
 // ! Truncate Decimal
 // Truncates the decimal part of a floating-point number and returns an integer
-int roxy_math_truncateDecimal(float n) {
+int roxy_math_truncateDecimal(float n)
+{
     return (int)truncf(n);
 }
 
 // ! Round
 // Rounds a floating-point number to the nearest integer
-float roxy_math_round(float n) {
+float roxy_math_round(float n)
+{
     // Use roundf if available (C99+), otherwise manual rounding logic.
     #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
     return roundf(n);
@@ -33,7 +35,8 @@ float roxy_math_round(float n) {
 
 // ! Round Int
 // Rounds a floating-point number to the nearest integer
-int roxy_math_roundInt(float n) {
+int roxy_math_roundInt(float n)
+{
     // Use roundf if available (C99+), otherwise manual rounding logic.
     #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
     return (int)roundf(n);
@@ -44,25 +47,29 @@ int roxy_math_roundInt(float n) {
 
 // ! Round Down
 // Rounds a floating-point number down to the nearest integer
-float roxy_math_roundDown(float n) {
+float roxy_math_roundDown(float n)
+{
     return floorf(n);
 }
 
 // ! Round Up
 // Rounds a floating-point number up to the nearest integer
-float roxy_math_roundUp(float n) {
+float roxy_math_roundUp(float n)
+{
     return ceilf(n);
 }
 
 // ! Hypot
 // Computes the hypotenuse given two sides of a right triangle
-float roxy_math_hypot(float x, float y) {
+float roxy_math_hypot(float x, float y)
+{
     return sqrtf(x * x + y * y);
 }
 
 // ! Clamp
 // Clamps a value between a lower and upper bound
-float roxy_math_clamp(float value, float lower, float upper) {
+float roxy_math_clamp(float value, float lower, float upper)
+{
     if (lower > upper) {
         float temp = lower;
         lower = upper;
@@ -71,9 +78,21 @@ float roxy_math_clamp(float value, float lower, float upper) {
     return value < lower ? lower : (value > upper ? upper : value);
 }
 
+// ! Clamp Integer
+int roxy_math_clampi(int value, int lower, int upper)
+{
+    if (lower > upper) {
+        int temp = lower;
+        lower = upper;
+        upper = temp;
+    }
+    return value < lower ? lower : (value > upper ? upper : value);
+}
+
 // ! Lerp
 // Linear interpolation between min and max using t in [0,1]
-float roxy_math_lerp(float min, float max, float t) {
+float roxy_math_lerp(float min, float max, float t)
+{
     return min + (max - min) * t;
 }
 
@@ -88,7 +107,8 @@ float roxy_math_map(float value, float fromLow, float fromHigh, float toLow, flo
 // ----------------------------------------
 
 
-int roxy_math_truncateDecimal_l(lua_State* L) {
+int roxy_math_truncateDecimal_l(lua_State* L)
+{
     (void)L;
 
     float n = pd->lua->getArgFloat(1);
@@ -98,7 +118,8 @@ int roxy_math_truncateDecimal_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_round_l(lua_State* L) {
+int roxy_math_round_l(lua_State* L)
+{
     (void)L;
 
     float n = pd->lua->getArgFloat(1);
@@ -108,7 +129,8 @@ int roxy_math_round_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_roundInt_l(lua_State* L) {
+int roxy_math_roundInt_l(lua_State* L)
+{
     (void)L;
 
     float n = pd->lua->getArgFloat(1);
@@ -118,7 +140,8 @@ int roxy_math_roundInt_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_roundDown_l(lua_State* L) {
+int roxy_math_roundDown_l(lua_State* L)
+{
     (void)L;
 
     float n = pd->lua->getArgFloat(1);
@@ -128,7 +151,8 @@ int roxy_math_roundDown_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_roundUp_l(lua_State* L) {
+int roxy_math_roundUp_l(lua_State* L)
+{
     (void)L;
 
     float n = pd->lua->getArgFloat(1);
@@ -138,7 +162,8 @@ int roxy_math_roundUp_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_hypot_l(lua_State* L) {
+int roxy_math_hypot_l(lua_State* L)
+{
     (void)L;
 
     float x = pd->lua->getArgFloat(1);
@@ -149,7 +174,8 @@ int roxy_math_hypot_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_clamp_l(lua_State* L) {
+int roxy_math_clamp_l(lua_State* L)
+{
     (void)L;
 
     float value = pd->lua->getArgFloat(1);
@@ -161,7 +187,21 @@ int roxy_math_clamp_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_lerp_l(lua_State* L) {
+int roxy_math_clampi_l(lua_State* L)
+{
+    (void)L;
+
+    int value = pd->lua->getArgInt(1);
+    int lower = pd->lua->getArgInt(2);
+    int upper = pd->lua->getArgInt(3);
+    int result = roxy_math_clampi(value, lower, upper);
+
+    pd->lua->pushInt(result);
+    return 1;
+}
+
+int roxy_math_lerp_l(lua_State* L)
+{
     (void)L;
 
     float min = pd->lua->getArgFloat(1);
@@ -173,7 +213,8 @@ int roxy_math_lerp_l(lua_State* L) {
     return 1;
 }
 
-int roxy_math_map_l(lua_State* L) {
+int roxy_math_map_l(lua_State* L)
+{
     (void)L;
 
     float value = pd->lua->getArgFloat(1);

@@ -3,9 +3,10 @@
 #include "pd_api.h"
 #include "utilities/roxy_math.h"
 #include "utilities/roxy_ease.h"
-#include "core/animations/roxy_animation.h"
 #include "core/modules/roxy_input.h"
 #include "core/sequences/roxy_sequence.h"
+#include "core/animations/roxy_animation.h"
+#include "core/sprites/roxy_particles.h"
 
 static PlaydateAPI* pd = NULL;
 static uint32_t previousTime = 0;
@@ -36,6 +37,8 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
 
     const char* error = NULL;
 
+    srand(pd->system->getSecondsSinceEpoch(NULL));
+
     // Initialize timing state
     previousTime = pd->system->getCurrentTimeMilliseconds();
 
@@ -55,6 +58,7 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         "roxy.Math.roundUp",
         "roxy.Math.hypot",
         "roxy.Math.clamp",
+        "roxy.Math.clampi",
         "roxy.Math.lerp",
         "roxy.Math.map"
     };
@@ -66,6 +70,7 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         roxy_math_roundUp_l,
         roxy_math_hypot_l,
         roxy_math_clamp_l,
+        roxy_math_clampi_l,
         roxy_math_lerp_l,
         roxy_math_map_l
     };
@@ -190,9 +195,6 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         }
     }
 
-    // ! Register RoxySequenceC Class
-    registerRoxySequenceC(pd);
-
     // ! Register Animation Functions
     roxy_animation_setPlaydateAPI(pd);
     const char* animationFunctions[] = {
@@ -207,6 +209,12 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
             return -1;
         }
     }
+
+    // ! Register RoxySequenceC Class
+    registerRoxySequenceC(pd);
+
+    // ! Register RoxyParticlesC Class
+    registerRoxyParticlesC(pd);
 
     return 0;
 }
