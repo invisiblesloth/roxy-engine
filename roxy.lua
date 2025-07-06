@@ -35,6 +35,8 @@ import "libraries/roxy/core/modules/Sequencer"
 import "libraries/roxy/core/modules/Camera"
 import "libraries/roxy/core/modules/Scene"
 import "libraries/roxy/core/modules/Transition"
+import "libraries/roxy/core/modules/Sounds"
+import "libraries/roxy/core/modules/Music"
 
 -- Core Components
 import "libraries/roxy/core/sequences/RoxySequence"
