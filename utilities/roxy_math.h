@@ -30,6 +30,9 @@ float roxy_math_hypot(float x, float y);
 // Clamps a value between a lower and upper bound
 float roxy_math_clamp(float value, float lower, float upper);
 
+// Clamps a value between a lower and upper bound (integer)
+int roxy_math_clampi(int value, int lower, int upper);
+
 // Linearly interpolates between two values by a given factor
 float roxy_math_lerp(float min, float max, float t);
 
@@ -47,6 +50,7 @@ int roxy_math_roundDown_l(lua_State* L);
 int roxy_math_roundUp_l(lua_State* L);
 int roxy_math_hypot_l(lua_State* L);
 int roxy_math_clamp_l(lua_State* L);
+int roxy_math_clampi_l(lua_State* L);
 int roxy_math_lerp_l(lua_State* L);
 int roxy_math_map_l(lua_State* L);
 
