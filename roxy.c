@@ -4,6 +4,7 @@
 #include "utilities/roxy_math.h"
 #include "utilities/roxy_ease.h"
 #include "core/modules/roxy_input.h"
+#include "core/transitions/roxy_transition.h"
 #include "core/sequences/roxy_sequence.h"
 #include "core/animations/roxy_animation.h"
 #include "core/sprites/roxy_particles.h"
@@ -190,6 +191,21 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
     };
     for (int i = 0; i < sizeof(inputFunctions) / sizeof(inputFunctions[0]); ++i) {
         if (!pd->lua->addFunction(inputFuncs[i], inputFunctions[i], &error)) {
+            pd->system->logToConsole("%s:%i: addFunction failed, %s", __FILE__, __LINE__, error);
+            return -1;
+        }
+    }
+
+    // ! Register Transition Functions
+    roxy_transition_setPlaydateAPI(pd);
+    const char* transitionFunctions[] = {
+        "roxy.Transition.crossDissolveDrawFrame"
+    };
+    int (*transitionFuncs[])(lua_State*) = {
+        roxy_transition_crossDissolveDrawFrame_l
+    };
+    for (int i = 0; i < sizeof(transitionFunctions) / sizeof(transitionFunctions[0]); ++i) {
+        if (!pd->lua->addFunction(transitionFuncs[i], transitionFunctions[i], &error)) {
             pd->system->logToConsole("%s:%i: addFunction failed, %s", __FILE__, __LINE__, error);
             return -1;
         }
