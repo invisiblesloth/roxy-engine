@@ -27,10 +27,10 @@ float roxy_math_roundUp(float n);
 // Computes the hypotenuse given two sides of a right triangle
 float roxy_math_hypot(float x, float y);
 
-// Clamps a value between a lower and upper bound
+// Clamps a value between a lower and upper bound (float)
 float roxy_math_clamp(float value, float lower, float upper);
 
-// Clamps a value between a lower and upper bound (integer)
+// Clamps a value between a lower and upper bound (int)
 int roxy_math_clampi(int value, int lower, int upper);
 
 // Linearly interpolates between two values by a given factor
