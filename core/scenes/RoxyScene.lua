@@ -118,7 +118,7 @@ function RoxyScene:cleanup()
   self.backgroundColor = nil
   self.backgroundImage = nil
   self.backgroundDrawFn = nil
-  self.frozenBackground = nil
+  self.frozenBackground = nil -- Clean up screenshot from transitions
 end
 
 -- TODO: Add sprite management methods etc. HERE

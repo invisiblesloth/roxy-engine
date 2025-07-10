@@ -182,7 +182,7 @@ function Scene.pushRaw(newScene)
 end
 
 -- ! Push Scene
-function Scene.pushScene(newScene, captureScreenshot)
+function Scene.pushScene(newScene)
   if type(newScene) ~= "table" then
     Log.error("[Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
     return
@@ -191,10 +191,6 @@ function Scene.pushScene(newScene, captureScreenshot)
   local oldScene = Scene.currentScene
   if oldScene then
     oldScene:pause()
-  end
-
-  if captureScreenshot then
-    newScene.frozenBackground = getDisplayImage()
   end
 
   Scene.pushRaw(newScene)
