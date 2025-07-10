@@ -128,7 +128,7 @@ function Cache.setMaxCacheSize(bucketOrSize, maybeSize)
 
   bucket.maxCacheSize = newSize
 
-  Log.info("[Cache.setMaxCacheSize] Cache max size set to " .. tostring(newSize)) --#DEBUG
+  Log.info("Cache max size set to " .. tostring(newSize)) --#DEBUG
 
   if newSize == 0 and bucket.currentSize > 0 then
     bucket.cache = {}

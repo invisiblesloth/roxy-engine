@@ -1,0 +1,399 @@
+-- core/transitions/ImageTable.lua
+
+-- Playdate API
+local pd        <const> = playdate
+local Graphics  <const> = pd.graphics
+
+-- Roxy Framework
+local r           <const> = roxy
+local Config      <const> = r.Config
+local Assets      <const> = r.Assets
+local Registry    <const> = r.AssetPoolRegistry
+local Ease        <const> = r.EasingFunctions
+local Transition  <const> = r.Transition
+
+-- Config
+local getTransitionConfig <const> = Config.getTransitionConfig
+
+-- Assets
+local getAsset            <const> = Assets.getAsset
+local recycleAsset        <const> = Assets.recycleAsset
+local ensurePool          <const> = Registry.ensurePool
+local markFromPool        <const> = Registry.markFromPool
+local isFromPool          <const> = Registry.isFromPool
+
+-- Graphics
+local newImageTable     <const> = Graphics.imagetable.new
+
+-- Easing
+local getEaseEnter  <const> = Ease.enter
+local getEaseExit   <const> = Ease.exit
+
+-- C-side binding
+local drawFrame_C <const> = Transition.imageTableDrawFrame
+
+-- Stack operations
+local STACK_OP_REPLACE <const> = Transition.STACK_OP_REPLACE
+local STACK_OP_PUSH    <const> = Transition.STACK_OP_PUSH
+local STACK_OP_POP     <const> = Transition.STACK_OP_POP
+
+-- Graphics constants
+local FLIPPED_XY        <const> = Graphics.kImageFlippedXY
+local FLIPPED_X         <const> = Graphics.kImageFlippedX
+local FLIPPED_Y         <const> = Graphics.kImageFlippedY
+local UNFLIPPED         <const> = Graphics.kImageUnflipped
+
+-- Easing constants
+local LINEAR_EASING  <const> = Ease.linear
+
+-- Defaults
+local DURATION_DEFAULT    <const> = 1.5
+local HOLD_TIME_DEFAULT   <const> = 0
+
+-- Utility constants
+local SEQUENCE_POOL_KEY         <const> = "Transition_Sequence"
+local IMAGETABLE_ENTER_POOL_KEY <const> = "Transition_ImageTable_Enter"
+local IMAGETABLE_EXIT_POOL_KEY  <const> = "Transition_ImageTable_Exit"
+local EMPTY_TABLE               <const> = {}
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+-- ! Initialize Asset Pool
+-- Initialize asset pools (called once per module)
+local function initializeAssetPool(userImageTableEnter, userImageTableExit)
+  -- Enter image table
+  ensurePool(
+    IMAGETABLE_ENTER_POOL_KEY,
+    1,
+    function()
+      return userImageTableEnter or newImageTable("libraries/roxy/assets/images/SLOTHUniversalLeaderEnter")
+    end, {
+      maxSize = 4,
+      growthFactor = 1
+    })
+
+  -- Exit image table
+  ensurePool(
+    IMAGETABLE_EXIT_POOL_KEY,
+    1,
+    function()
+      return userImageTableExit or newImageTable("libraries/roxy/assets/images/SLOTHUniversalLeaderExit")
+    end, {
+      maxSize = 4,
+      growthFactor = 1
+    })
+
+  -- Sequence
+  ensurePool(
+    SEQUENCE_POOL_KEY,
+    1,
+    function() return RoxySequence() end, {
+      maxSize = 4,
+      growthFactor = 1
+    })
+end
+
+--------------------------------------------------------------------------------
+-- ! Class Definition & Initialization
+--------------------------------------------------------------------------------
+
+class("ImageTable").extends(RoxyTransition)
+
+function ImageTable:init(opts)
+  opts = opts or EMPTY_TABLE
+
+  -- Get base configuration for this transition type
+  local baseConfig = getTransitionConfig("ImageTable")
+
+  -- Build final configuration with runtime options
+  local builder = ConfigBuilder(baseConfig)
+    :with(opts)
+
+  local config = builder:build()
+
+  -- Handle a single user image table
+  if config.imageTable and not config.imageTableEnter and not config.imageTableExit then
+    config.imageTableEnter = config.imageTable
+    config.imageTableExit  = config.imageTable
+    if config.reverseExit == nil then
+      config.reverseExit = true -- Mirror exit for single table by default
+    end
+  end
+
+  -- Initialize parent class
+  ImageTable.super.init(self, {
+    name = config.name or "ImageTable",
+    type = "Cover",
+    stackOp = config.stackOp or STACK_OP_REPLACE,
+    captureScreenshot = config.captureScreenshot or false
+  })
+
+  -- ImageTable-specific properties
+  local duration = config.duration or DURATION_DEFAULT
+  self.duration = duration
+  self.holdTime = config.holdTime or HOLD_TIME_DEFAULT
+
+  -- Pre-calculate timing values for performance
+  local halfHold = self.holdTime / 2
+  self.enterTime = (duration / 2) - halfHold
+  self.exitTime = (duration / 2) - halfHold
+
+  -- Easing configuration
+  local ease = config.ease or LINEAR_EASING
+  self.ease = ease
+  self.easeEnter = config.easeEnter or getEaseEnter(ease) or ease
+  self.easeExit = config.easeExit or getEaseExit(ease) or ease
+
+  -- Initialize asset pool on first use
+  initializeAssetPool(config.imageTableEnter, config.imageTableExit)
+
+  -- Image tables
+  self:_acquireImageTableEnter(config.imageTableEnter)
+  self:_acquireImageTableExit(config.imageTableExit)
+
+  self.reverse = config.reverse and true or false -- Coerce to boolean
+
+  if self.reverse then
+    self.imageTableEnter, self.imageTableExit = self.imageTableExit, self.imageTableEnter
+    self.reverseEnter, self.reverseExit = true, true
+  else
+    self.reverseEnter = config.reverseEnter and true or false
+    self.reverseExit  = config.reverseExit  and true or false
+  end
+
+  -- Transformation options
+
+  -- Reverse
+  self.reverseEnter = config.reverseEnter or (self.reverse and true)
+  self.reverseExit  = config.reverseExit  or (self.reverse and true)
+
+  -- Flip
+  self.flipX        = config.flipX
+  self.flipY        = config.flipY
+  self.flipXEnter   = config.flipXEnter
+  self.flipYEnter   = config.flipYEnter
+  self.flipXExit    = config.flipXExit
+  self.flipYExit    = config.flipYExit
+
+  -- Rotate
+  self.rotate       = config.rotate
+  self.rotateEnter  = config.rotateEnter
+  self.rotateExit   = config.rotateExit
+
+  -- Precompute flip values
+  self.flipValueEnter = self:_getFlipValue(self.rotateEnter, self.flipXEnter, self.flipYEnter)
+  self.flipValueExit = self:_getFlipValue(self.rotateExit, self.flipXExit, self.flipYExit)
+
+  -- Frame counts
+  self.frameCountEnter = self.imageTableEnter and #self.imageTableEnter or 0
+  self.frameCountExit  = self.imageTableExit  and #self.imageTableExit  or 0
+
+  -- Sequence
+
+  -- Enter start and end
+  local enterStartValue = self.reverseEnter and 1 or 0
+  local enterEndValue   = 1 - enterStartValue
+
+  -- Exit start and end
+  local exitStartValue  = self.reverseExit and 1 or 0
+  local exitEndValue    = 1 - exitStartValue
+
+  self.sequenceStartValue     = enterStartValue
+  self.sequenceMidpointValue  = enterEndValue
+  self.sequenceResumeValue    = exitStartValue
+  self.sequenceCompleteValue  = exitEndValue
+
+  -- Initialize sequence
+  self:_acquireSequence()
+end
+
+--------------------------------------------------------------------------------
+-- Private Methods
+--------------------------------------------------------------------------------
+
+-- ! Acquire Image Table Enter
+-- Acquire the enter image table from the pool
+function ImageTable:_acquireImageTableEnter(userImageTableEnter)
+  if self.imageTableEnter then return end
+
+  local imageTableEnter
+  if userImageTableEnter then
+    imageTableEnter = userImageTableEnter -- One-off or caller-managed
+  else
+    -- Pull from pool (tagged), or nil if empty
+    imageTableEnter = markFromPool(getAsset(IMAGETABLE_ENTER_POOL_KEY))
+  end
+
+  if not imageTableEnter then
+    -- Fallback
+    imageTableEnter = userImageTableEnter or newImageTable("libraries/roxy/assets/images/SLOTHUniversalLeaderEnter")
+  end
+
+  self.imageTableEnter = imageTableEnter
+end
+
+-- ! Release Image Table Enter
+-- Release the enter image table back to pool
+function ImageTable:_releaseImageTableEnter()
+  local imageTableEnter = self.imageTableEnter
+  if not imageTableEnter then return end
+
+  -- Only recycle if it came from the pool
+  if isFromPool(imageTableEnter) then
+    recycleAsset(IMAGETABLE_ENTER_POOL_KEY, imageTableEnter)
+  end
+
+  self.imageTableEnter = nil
+end
+
+-- ! Acquire Image Table Exit
+-- Acquire the exit image table from the pool
+function ImageTable:_acquireImageTableExit(userImageTableExit)
+  if self.imageTableExit then return end
+
+  local imageTableExit
+  if userImageTableExit then
+    imageTableExit = userImageTableExit -- One-off or caller-managed
+  else
+    -- Pull from pool (tagged), or nil if empty
+    imageTableExit = markFromPool(getAsset(IMAGETABLE_EXIT_POOL_KEY))
+  end
+
+  if not imageTableExit then
+    -- Fallback
+    imageTableExit = userImageTableExit or newImageTable("libraries/roxy/assets/images/SLOTHUniversalLeaderExit")
+  end
+
+  self.imageTableExit = imageTableExit
+end
+
+-- ! Release Image Table Exit
+-- Release the exit image table back to pool
+function ImageTable:_releaseImageTableExit()
+  local imageTableExit = self.imageTableExit
+  if not imageTableExit then return end
+
+  -- Only recycle if it came from the pool
+  if isFromPool(imageTableExit) then
+    recycleAsset(IMAGETABLE_EXIT_POOL_KEY, imageTableExit)
+  end
+
+  self.imageTableExit = nil
+end
+
+-- ! Acquire Sequence
+-- Acquire a sequence from the pool
+function ImageTable:_acquireSequence()
+  if self.sequence then return end
+
+  -- Pull from pool (tagged), or nil if empty
+  local sequence = markFromPool(getAsset(SEQUENCE_POOL_KEY))
+  if not sequence then
+    sequence = RoxySequence() -- Fallback
+  end
+
+  self.sequence = sequence
+end
+
+-- ! Release Sequence
+-- Release sequence back to pool
+function ImageTable:_releaseSequence()
+  local sequence = self.sequence
+  if not sequence then return end
+
+  sequence:clear(true)
+
+  -- Only recycle if it came from the pool
+  if isFromPool(sequence) then
+    recycleAsset(SEQUENCE_POOL_KEY, sequence)
+  end
+
+  self.sequence = nil
+end
+
+-- ! Get Flip Value
+-- Calculates the flip value constant for rendering.
+function ImageTable:_getFlipValue(rotate, flipX, flipY)
+  if rotate or (flipX and flipY) then return FLIPPED_XY end
+  if flipX then return FLIPPED_X end
+  if flipY then return FLIPPED_Y end
+  return UNFLIPPED
+end
+
+-- ! Set Up Sequence
+-- Configure the animation sequence
+function ImageTable:_setupSequence()
+  local sequence = self.sequence
+  if not sequence then return end
+
+  -- Use pre-calculated timing values
+  local enterTime = self.enterTime
+  local exitTime = self.exitTime
+  local holdTime = self.holdTime
+  local easeEnter = self.easeEnter
+  local easeExit = self.easeExit
+
+  sequence
+    :from(self.sequenceStartValue)
+    :to(self.sequenceMidpointValue, enterTime, easeEnter)
+    :callback(function() self:_onMidpoint() end)
+    :sleep(holdTime)
+    :callback(function() self:_onHoldElapsed() end)
+    :set(self.sequenceResumeValue)
+    :to(self.sequenceCompleteValue, exitTime, easeExit)
+    :callback(function() self:_onComplete() end)
+end
+
+--------------------------------------------------------------------------------
+-- Public API
+--------------------------------------------------------------------------------
+
+-- ! Execute
+-- Main execution method
+function ImageTable:execute(newScene, currentScene)
+  ImageTable.super.execute(self, newScene, currentScene)
+
+  -- ImageTable-specific execution
+  self:_setupSequence()
+  self:_onStart()
+  self.sequence:start()
+end
+
+-- ! Draw
+-- Render the transition effect
+function ImageTable:draw()
+  local sequence = self.sequence
+  if not sequence then return end
+
+  local value = sequence:getValue()
+  if not value then return end
+
+  drawFrame_C(
+    self.imageTableEnter, self.frameCountEnter, self.flipValueEnter,
+    self.imageTableExit,  self.frameCountExit,  self.flipValueExit,
+    value,
+    self.state
+  )
+end
+
+-- ! Cleanup
+-- Clean up resources
+function ImageTable:cleanup()
+  -- Release ImageTable-specific resources
+  self:_releaseImageTableEnter()
+  self:_releaseImageTableExit()
+  self:_releaseSequence()
+
+  -- Call parent cleanup
+  ImageTable.super.cleanup(self)
+
+  Log.debug("Transition '" .. self.name .. "' cleanup completed") --#DEBUG
+end
+
+-- ! Warm Up Asset Pools
+-- Public function to warm up asset pools
+function ImageTable:warmUpAssetPool(userImageTableEnter, userImageTableExit)
+  initializeAssetPool(userImageTableEnter, userImageTableExit)
+end

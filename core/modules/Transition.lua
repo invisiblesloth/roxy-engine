@@ -6,26 +6,36 @@ local Transition <const> = roxy.Transition
 
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
-local r         <const> = roxy
-local Scene     <const> = r.Scene
 
-local STACK_OP_REPLACE <const> = 0
-local STACK_OP_PUSH    <const> = 1
-local STACK_OP_POP     <const> = 2
+local r       <const> = roxy
+local Config  <const> = r.Config
+local Scene   <const> = r.Scene
 
-local TRANSITION_DEFAULT <const> = "Cut"
+local mergeTableImmutable <const> = r.Table.mergeImmutable
 
-local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
+local getConfig           <const> = Config.get
+local getTransitionConfig <const> = Config.getTransitionConfig
 
-local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
-
--- Aliases
 local pushContext <const> = Graphics.pushContext
 local popContext  <const> = Graphics.popContext
 local newImage    <const> = Graphics.image.new
 local getDrawMode <const> = Graphics.getImageDrawMode
 local setDrawMode <const> = Graphics.setImageDrawMode
+
+local EMPTY_TABLE   <const> = {}
+
+local STACK_OP_REPLACE <const> = 0
+local STACK_OP_PUSH    <const> = 1
+local STACK_OP_POP     <const> = 2
+
+local TRANSITION_DEFAULT          <const> = "Cut"
+local TRANSITION_DURATION_DEFAULT <const> = 1.5
+local HOLD_TIME_DEFAULT           <const> = 0.25
+
+local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
+
+local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
+local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 
 -- Global
 Transition.currentTransition  = nil
@@ -62,27 +72,60 @@ function Transition.loadTransitions(transitionsTable)
   transitions = transitionsTable
 end
 
+-- ! Transition.reloadTransitionsWithNewConfig
+-- Updates transition durations and hold times using the active configuration.
+function Transition.reloadTransitionsWithNewConfig()
+  if not transitions then return end
+
+  -- Pull the whole "transitions" block from Config
+  local rootConfig      = getConfig("transitions") or EMPTY_TABLE
+  local globalDuration  = rootConfig.duration or TRANSITION_DURATION_DEFAULT
+  local globalHoldTime  = rootConfig.holdTime or HOLD_TIME_DEFAULT
+  local overridesTbl    = rootConfig.overrides or EMPTY_TABLE
+
+  -- Build & store a fresh per-transition default config
+  for name, class in pairs(transitions) do
+
+    -- Layer order:
+    --    (a)  Hard-coded fallback
+    --    (b)  Global duration / holdTime
+    --    (c)  Per-transition overrides (wins on clash)
+
+    local builder = ConfigBuilder({
+      duration  = globalDuration,
+      holdTime  = globalHoldTime,
+      name      = name,
+    })
+      :with(overridesTbl[name]) -- Transition-specific layer
+
+    -- Final immutable table:
+    local config = builder:build()
+
+    Config.setTransitionConfig(name, config)
+  end
+end
+
 -- ! Replace Scene
-function Transition.replaceScene(newSceneClass, transitionName, duration, holdTime, opts)
+function Transition.replaceScene(newSceneClass, transitionName, opts)
   Transition.stackOp = STACK_OP_REPLACE
-  Transition.transitionToScene(newSceneClass, transitionName, duration, holdTime, opts)
+  Transition.transitionToScene(newSceneClass, transitionName, opts)
 end
 
 -- ! Push Scene
-function Transition.pushScene(newSceneClass, transitionName, duration, holdTime, opts)
+function Transition.pushScene(newSceneClass, transitionName, opts)
   Transition.stackOp = STACK_OP_PUSH
-  Transition.transitionToScene(newSceneClass, transitionName, duration, holdTime, opts)
+  Transition.transitionToScene(newSceneClass, transitionName, opts)
 end
 
 -- ! Pop Scene
-function Transition.popScene(transitionName, duration, holdTime, opts)
+function Transition.popScene(transitionName, opts)
   Transition.stackOp = STACK_OP_POP
-  Transition.transitionToScene(nil, transitionName, duration, holdTime, opts)
+  Transition.transitionToScene(nil, transitionName, opts)
 end
 
 -- ! Transition to Scene
 -- Initiates a scene transition using the specified effect and timing.
-function Transition.transitionToScene(newSceneClass, transitionName, duration, holdTime, opts)
+function Transition.transitionToScene(newSceneClass, transitionName, opts)
   --#DEBUG START
   if Transition.isTransitioning then
     Log.warn("[Transition.transitionToScene] Transition already in progress.")
@@ -111,8 +154,11 @@ function Transition.transitionToScene(newSceneClass, transitionName, duration, h
     transitionClass = transitions[TRANSITION_DEFAULT]
   end
 
+  -- Merge options (arguments take precedence)
+  local transitionOpts = mergeTableImmutable(opts or {}, { stackOp = stackOp })
+
   -- Construct and execute the transition instance
-  local transitionInstance = transitionClass(duration, holdTime, opts, stackOp)
+  local transitionInstance = transitionClass(transitionOpts)
   Transition.currentTransition = transitionInstance
   transitionInstance:execute(newScene, currentScene)
 end

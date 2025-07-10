@@ -50,7 +50,7 @@ function Assets.registerPool(key, initialCount, loaderFunction, options)
 
   pools[key] = pool
 
-  Log.info("[Assets.registerPool] Asset pool '" .. tostring(key) .. "' registered with " .. tostring(pool.initialCount) .. " assets.") --#DEBUG
+  Log.info("Asset pool '" .. tostring(key) .. "' registered with " .. tostring(pool.initialCount) .. " assets.") --#DEBUG
 
   return true
 end
@@ -126,3 +126,6 @@ end
 function Assets.getIsPoolRegistered(key)
   return pools[key] ~= nil
 end
+
+-- Load the Asset Pool Registry helper
+import "libraries/roxy/core/modules/AssetPoolRegistry"
