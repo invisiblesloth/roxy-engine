@@ -199,10 +199,14 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
     // ! Register Transition Functions
     roxy_transition_setPlaydateAPI(pd);
     const char* transitionFunctions[] = {
-        "roxy.Transition.crossDissolveDrawFrame"
+        "roxy.Transition.crossDissolveDrawFrame",
+        "roxy.Transition.fadeToColorDrawFrame",
+        "roxy.Transition.imageTableDrawFrame"
     };
     int (*transitionFuncs[])(lua_State*) = {
-        roxy_transition_crossDissolveDrawFrame_l
+        roxy_transition_crossDissolveDrawFrame_l,
+        roxy_transition_fadeToColorDrawFrame_l,
+        roxy_transition_imageTableDrawFrame_l
     };
     for (int i = 0; i < sizeof(transitionFunctions) / sizeof(transitionFunctions[0]); ++i) {
         if (!pd->lua->addFunction(transitionFuncs[i], transitionFunctions[i], &error)) {

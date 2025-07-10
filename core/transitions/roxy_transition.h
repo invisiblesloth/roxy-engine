@@ -5,6 +5,8 @@
 
 void roxy_transition_setPlaydateAPI(PlaydateAPI* playdate);
 
+int roxy_transition_fadeToColorDrawFrame_l(lua_State* L);
 int roxy_transition_crossDissolveDrawFrame_l(lua_State* L);
+int roxy_transition_imageTableDrawFrame_l(lua_State* L);
 
 #endif /* ROXY_TRANSITION_H */
