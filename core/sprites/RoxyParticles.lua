@@ -31,6 +31,7 @@ local spawn_C         <const> = RoxyParticlesC.spawn
 local spawnMultiple_C <const> = RoxyParticlesC.spawnMultiple
 local update_C        <const> = RoxyParticlesC.update
 local draw_C          <const> = RoxyParticlesC.draw
+local resizePool_C    <const> = RoxyParticlesC.resizePool
 local clear_C         <const> = RoxyParticlesC.clear
 local destroy_C       <const> = RoxyParticlesC.destroy
 
@@ -196,6 +197,10 @@ function RoxyParticles:init(x, y, opts)
   -- Accumulator
   self.accumulator = 0
 
+  -- On finish
+  self.onFinished = opts.onFinished
+  self.autoRemove = opts.autoRemove or false
+
   --#DEBUG START
   if Debug and Debug.visualDebug then
     self.debugCrosshairImage = getCrosshairImage()
@@ -298,6 +303,22 @@ function RoxyParticles:update()
   if active then
     self:markDirty()
   end
+
+  local wasActive = self._hadActiveParticles or false
+  local isActive = self._hasActiveParticles
+
+  -- Call onFinished ONLY when transitioning from active to inactive
+  if wasActive and not isActive then
+    if self.onFinished then
+      self:onFinished(self)
+    end
+    if self.autoRemove then
+      self:remove()
+      self:destroy()
+    end
+  end
+
+  self._hadActiveParticles = isActive
 end
 
 -- ! Draw
@@ -315,6 +336,15 @@ end
 -- Public API
 -- -----------------------------------------
 
+-- ! Reset
+-- Completely tear down and re-create the C-side pool so you can emit again
+function RoxyParticles:reset()
+  self:clear()
+  self.accumulator = 0
+  self._hasActiveParticles = false
+  self:markDirty()
+end
+
 -- ! Clear
 function RoxyParticles:clear()
   clear_C(self.cpool)
@@ -323,6 +353,17 @@ function RoxyParticles:clear()
   self:markDirty()
 end
 
+-- ! Destroy
+function RoxyParticles:destroy()
+  if self.cpool then
+    clear_C(self.cpool)   -- Wipe any live particles
+    destroy_C(self.cpool) -- Free the pool entirely
+    self.cpool = nil
+  end
+end
+
+-- ! Burst Emit
+-- Instantly spawn `count` particles regardless of rate
 -- ! Burst Emit
 -- Instantly spawn `count` particles regardless of rate
 function RoxyParticles:emit(count)
@@ -388,39 +429,19 @@ end
 
 -- ! Set Max Count
 function RoxyParticles:setMaxCount(newMax)
-  newMax = floor(newMax or 1)
+  newMax = math.floor(newMax or 1)
+  if not self.cpool or newMax <= 0 or newMax == self.opts.maxCount then return end
 
-  -- Attempt to create the new pool first
-  local newPool = new_C(
-    newMax,
-    self.opts.imageTable or nil,
-    self.frameCount or 1,
-    self.frameMode or FRAME_MODE_SEQUENTIAL,
-    self.staticFrame or 1,
-    self.opts.loop,
-    self.opts.frameRate
-  )
-  --#DEBUG START
-  if not newPool then
-    -- Allocation failed; keep the old pool intact
-    Log.error("[RoxyParticles:setMaxCount] Failed to allocate new particle pool")
+  local success = resizePool_C(self.cpool, newMax)
+  if success then
+    self.opts.maxCount = newMax
+    if self.opts.pattern then
+      self:setPattern(self.opts.pattern)
+    end
+    self:markDirty()
+  else --#DEBUG
+    Log.error("[RoxyParticles:setMaxCount] Failed to resize particle pool") --#DEBUG
   end
-  --#DEBUG END
-
-  -- Now that newPool exists, safely destroy the old one
-  if self.cpool then
-    destroy_C(self.cpool)
-  end
-
-  self.cpool = newPool
-  self.opts.maxCount = newMax
-
-  -- Restore any existing pattern in the fresh pool
-  if self.opts.pattern then
-    self:setPattern(self.opts.pattern)
-  end
-
-  self:markDirty()
 end
 
 -- ! Set Z-Index
