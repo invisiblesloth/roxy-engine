@@ -33,6 +33,7 @@ local ceil  <const> = math.ceil
 local clear             <const> = Graphics.clear
 local pushContext       <const> = Graphics.pushContext
 local popContext        <const> = Graphics.popContext
+local setColor          <const> = Graphics.setColor
 local setDitherPattern  <const> = Graphics.setDitherPattern
 local getDisplayImage   <const> = Graphics.getDisplayImage
 local fillRect          <const> = Graphics.fillRect
@@ -48,6 +49,7 @@ local STACK_OP_POP     <const> = Transition.STACK_OP_POP
 
 -- Graphics constants
 local COLOR_BLACK       <const> = Graphics.kColorBlack
+local COLOR_WHITE       <const> = Graphics.kColorWhite
 local DITHER_BAYER_8X8  <const> = Image.kDitherTypeBayer8x8
 
 -- Easing constants
@@ -62,18 +64,18 @@ local FADE_STEPS_DEFAULT  <const> = 32
 local PATCH_SIZE_DEFAULT  <const> = 8
 
 -- Dither pattern configs
-local DITHER_BASE_SIZES <const> = {
-  [Image.kDitherTypeNone]           = PATCH_SIZE_DEFAULT, -- Default patch size
-  [Image.kDitherTypeDiagonalLine]   = 8,  -- Matches 8px diagonal repeat
-  [Image.kDitherTypeVerticalLine]   = 8,  -- Matches 8px vertical repeat
-  [Image.kDitherTypeHorizontalLine] = 8,  -- Matches 8px horizontal repeat
-  [Image.kDitherTypeScreen]         = 8,  -- 8x8 screen pattern
-  [Image.kDitherTypeBayer2x2]       = 4,  -- 2x2 Bayer, tile at 4
-  [Image.kDitherTypeBayer4x4]       = 8,  -- 4x4 Bayer, tile at 8
-  [Image.kDitherTypeBayer8x8]       = 16, -- 8x8 Bayer, tile at 16
-  [Image.kDitherTypeFloydSteinberg] = 8,  -- Error diffusion, use 8
-  [Image.kDitherTypeBurkes]         = 8,  -- Burkes error diffusion
-  [Image.kDitherTypeAtkinson]       = 8,  -- Atkinson error diffusion
+local DITHER_LIMITS <const> = {
+  [Image.kDitherTypeNone]           = { size = 8,  steps = 2  },
+  [Image.kDitherTypeDiagonalLine]   = { size = 8,  steps = 5  },
+  [Image.kDitherTypeVerticalLine]   = { size = 8,  steps = 5  },
+  [Image.kDitherTypeHorizontalLine] = { size = 8,  steps = 5  },
+  [Image.kDitherTypeScreen]         = { size = 8,  steps = 5  },
+  [Image.kDitherTypeBayer2x2]       = { size = 4,  steps = 5  },
+  [Image.kDitherTypeBayer4x4]       = { size = 8,  steps = 17 },
+  [Image.kDitherTypeBayer8x8]       = { size = 16, steps = 65 },
+  [Image.kDitherTypeFloydSteinberg] = { size = 8,  steps = 17 },
+  [Image.kDitherTypeBurkes]         = { size = 8,  steps = 17 },
+  [Image.kDitherTypeAtkinson]       = { size = 8,  steps = 17 },
 }
 local TILE_SIZE <const> = 32
 
@@ -137,9 +139,11 @@ function CrossDissolve:init(opts)
   self.duration = duration
 
   -- Visual properties
-  self.dither = config.dither or DITHER_DEFAULT
-  self.fadeSteps = config.fadeSteps or FADE_STEPS_DEFAULT
-  self.patchSize = config.patchSize or nil
+  local dither = config.dither or DITHER_DEFAULT
+  self.dither = dither
+  local ditherConf = DITHER_LIMITS[dither] or { size = PATCH_SIZE_DEFAULT, steps = FADE_STEPS_DEFAULT }
+  self.fadeSteps = min(config.fadeSteps or ditherConf.steps, ditherConf.steps)
+  self.patchSize = config.patchSize or ditherConf.size
 
   -- Pre-calculate optimization
   self.fadeStepsMinus1 = self.fadeSteps - 1
@@ -162,19 +166,19 @@ end
 -- ! Create Pattern Array
 -- Create dithered pattern array for dissolve effect
 function CrossDissolve:_createPatternArray()
-  local patterns = {}
-
   -- Cache frequently accessed properties for performance
-  local fadeSteps = self.fadeSteps
-  local oneOverSteps = 1 / fadeSteps
   local dither = self.dither
-  local patchSize = self.patchSize or DITHER_BASE_SIZES[dither] or PATCH_SIZE_DEFAULT
+  local fadeSteps = self.fadeSteps
+  local patchSize = self.patchSize
+  local oneOverSteps = 1 / (fadeSteps - 1)
   local tiles = ceil(TILE_SIZE / patchSize)
 
+  local patterns = {}
   for i = 0, fadeSteps do
-    local alpha = 1 - (i * oneOverSteps)
+    local alpha = 1.0 - ((i - 1) * oneOverSteps)
     local base = newImage(patchSize, patchSize)
     pushContext(base)
+      setColor(COLOR_WHITE)
       clear(COLOR_BLACK)
       -- Calculate opacity: starts at 1.0 (opaque) and decreases to 0.0 (transparent)
       setDitherPattern(alpha, dither)
@@ -239,13 +243,6 @@ function CrossDissolve:_setupSequence()
 
   sequence
     :from(0)
-    :to(0, 0, FLAT_EASING)
-    :callback(function() self._screenshot = getDisplayImage() end)
-    :to(0, 0, FLAT_EASING)
-    :callback(function() self:_onMidpoint() end)
-    :to(0, 0, FLAT_EASING)
-    :callback(function() self:_onHoldElapsed() end)
-    :from(0)
     :to(1, duration, ease)
     :callback(function() self:_onComplete() end)
 end
@@ -260,7 +257,10 @@ function CrossDissolve:execute(newScene, currentScene)
   CrossDissolve.super.execute(self, newScene, currentScene)
 
   self:_setupSequence()
+  self._screenshot = getDisplayImage()
   self:_onStart()
+  self:_onMidpoint()
+  self:_onHoldElapsed()
   self.sequence:start()
 end
 
