@@ -1,7 +1,9 @@
 -- core/animations/RoxyAnimation.lua
 
 local pd        <const> = playdate
+local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
+
 local r         <const> = roxy
 
 local max             <const> = math.max
@@ -28,7 +30,7 @@ local MAX_ANIMATION_SPEED     <const> = 100   -- UI clamp for setSpeed
 -- Class Definition & Init
 -- ----------------------------------------
 
-class("RoxyAnimation").extends()
+class("RoxyAnimation").extends(Object)
 
 function RoxyAnimation:init(view)
   self.isRoxyAnimation = true

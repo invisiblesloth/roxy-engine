@@ -1,8 +1,10 @@
 -- core/tilemaps/RoxyTilemap.lua
 
 local pd        <const> = playdate
+local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
+
 local r         <const> = roxy
 local Cache     <const> = r.Cache
 local Camera    <const> = r.Camera
@@ -143,7 +145,7 @@ end
 -- ! Class Definition & Init
 -- ----------------------------------------
 
-class("RoxyTilemap").extends()
+class("RoxyTilemap").extends(Object)
 
 --[[
   jsonPath  : string - Path to Tiled JSON map

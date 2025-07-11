@@ -2,6 +2,7 @@
 
 -- Playdate API
 local pd        <const> = playdate
+local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 

@@ -1,8 +1,10 @@
 -- core/scenes/RoxyScene.lua
 
 local pd        <const> = playdate
+local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
+
 local r         <const> = roxy
 
 local clearScreen         <const> = Graphics.clear
@@ -44,7 +46,7 @@ end
 -- Class Definition & Init
 -- ----------------------------------------
 
-class("RoxyScene").extends()
+class("RoxyScene").extends(Object)
 
 --! Initialize
 function RoxyScene:init(background)
