@@ -126,12 +126,10 @@ end
 -- ! Transition to Scene
 -- Initiates a scene transition using the specified effect and timing.
 function Transition.transitionToScene(newSceneClass, transitionName, opts)
-  --#DEBUG START
   if Transition.isTransitioning then
-    Log.warn("[Transition.transitionToScene] Transition already in progress.")
+    Log.warn("[Transition.transitionToScene] Transition already in progress.") --#DEBUG
     return
   end
-  --#DEBUG END
 
   local stackOp = Transition.stackOp
   local newScene = nil
