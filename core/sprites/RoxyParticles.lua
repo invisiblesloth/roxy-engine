@@ -291,7 +291,7 @@ function RoxyParticles:update()
   -- Update all particles and get active status
   local active
   if dt <= DELTA_TIME_THRESHOLD then -- Fast path
-    active = update_C(self.cpool, dt, self.accelX, self.accelY)
+    active = update_C(self.cpool, dt, self.accelX, self.accelY) or false
   else -- Slow path
     -- Emergency split for frame drops
     local halfDt = dt * 0.5
@@ -364,13 +364,11 @@ end
 
 -- ! Burst Emit
 -- Instantly spawn `count` particles regardless of rate
--- ! Burst Emit
--- Instantly spawn `count` particles regardless of rate
 function RoxyParticles:emit(count)
   count = floor(count or 1)
   if count <= 0 then return end
 
-  local actualSpawned = self:spawnMultiple(count)
+  local actualSpawned = self:spawnMultiple(count) or 0
 
   -- Cache the result so hasActiveParticles() works immediately
   self._hasActiveParticles = actualSpawned > 0
