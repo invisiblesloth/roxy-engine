@@ -16,6 +16,8 @@ local timeFromEpoch <const> = pd.timeFromEpoch
 
 local stringFormat <const> = string.format
 
+local max <const> = math.max
+
 -- Roxy utilities
 local clamp     <const> = roxy.Math.clamp
 local cloneDeep <const> = roxy.Table.cloneWithCycles
@@ -94,6 +96,21 @@ local function scheduleSave()
   end
 end
 
+--#DEBUG START
+-- ! Reset (for unit tests)
+function GameData._reset()
+  -- wipe all internal state
+  gameData         = {}
+  defaults         = nil
+  haveSetup        = false
+  slotCountAtSetup = 1
+  numberOfSlots    = 1
+  currentSlot      = 1
+  savePending      = false
+  Log.warn("GameData has been reset!")
+end
+--#DEBUG END
+
 ------------------------------------------------------------------------------
 -- Slot existence checks
 ------------------------------------------------------------------------------
@@ -103,9 +120,22 @@ local function slotExists(slotIndex)
   return slotIndex and slotIndex > 0 and slotIndex <= numberOfSlots and gameData[slotIndex] ~= nil
 end
 
--- ! Helper: Slot Exists
+-- ! Helper: Data Exists
 local function datumExists(slotIndex, itemKey)
   return slotExists(slotIndex) and gameData[slotIndex].data[itemKey] ~= nil
+end
+
+-- ! Key Allowed
+local function slotAllowed(slot)
+  return defaults and defaults[slot] ~= nil
+end
+
+-- ! Try Set
+local function trySet(set, slot, value)
+  if not slotAllowed(slot) then return false end
+  if type(value) ~= type(defaults[slot]) then return false end
+  set.data[slot] = cloneDeep(value)
+  return true
 end
 
 ------------------------------------------------------------------------------
@@ -149,7 +179,8 @@ function GameData.setup(template, slots, opts)
 
   defaults = template
   slotCountAtSetup = slots or 1
-  maxSlots = SAVE_SLOTS_DEFAULT -- getConfig("maxSaveSlots", SAVE_SLOTS_DEFAULT)
+  -- TODO: Add in config `getConfig("maxSaveSlots", SAVE_SLOTS_DEFAULT)`
+  maxSlots = max(slotCountAtSetup, SAVE_SLOTS_DEFAULT)
 
   for i = 1, slotCountAtSetup do
     local stored = readData("Game" .. i)
@@ -180,10 +211,19 @@ end
 -- Retrieval
 ------------------------------------------------------------------------------
 
+-- ! Get Fast (not using clone with cycles)
+function GameData.getFast(itemKey, slot)
+  slot = slot or currentSlot
+  return datumExists(slot, itemKey) and gameData[slot].data[itemKey] or nil
+end
+
 -- ! Get
 function GameData.get(itemKey, slot)
   slot = slot or currentSlot
-  return datumExists(slot, itemKey) and gameData[slot].data[itemKey] or nil
+  if datumExists(slot, itemKey) then
+    return cloneDeep(gameData[slot].data[itemKey])
+  end
+  return nil
 end
 
 -- ! Get Slot
@@ -228,9 +268,20 @@ end
 ------------------------------------------------------------------------------
 
 -- ! Set
-function GameData.set(itemKey, value, slot, opts)
+function GameData.set(itemKeyOrTable, value, slot, opts)
   slot = slot or currentSlot
-  return mutateSlot(slot, function(s) s.data[itemKey] = value end, opts)
+  return mutateSlot(slot, function(s)
+    if type(itemKeyOrTable) == "string" then
+      return trySet(s, itemKeyOrTable, value)
+    elseif type(itemKeyOrTable) == "table" then
+      local any = false
+      for k, v in pairs(itemKeyOrTable) do
+        if trySet(s, k, v) then any = true end
+      end
+      return any
+    end
+    return false
+  end, opts)
 end
 
 -- ! Set Slot
