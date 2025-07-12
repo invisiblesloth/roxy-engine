@@ -1,5 +1,7 @@
 -- core/modules/Config.lua
 
+import "libraries/roxy/core/modules/ConfigBuilder"
+
 roxy = roxy or {}
 roxy.Config = roxy.Config or {}
 local Config <const> = roxy.Config

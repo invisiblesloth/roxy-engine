@@ -28,8 +28,9 @@ import "libraries/roxy/utilities/Ease"
 import "libraries/roxy/utilities/Graphics"
 
 -- Core Modules
-import "libraries/roxy/core/modules/ConfigBuilder"
 import "libraries/roxy/core/modules/Config"
+import "libraries/roxy/core/modules/Settings"
+import "libraries/roxy/core/modules/GameData"
 import "libraries/roxy/core/modules/Cache"
 import "libraries/roxy/core/modules/Assets"
 import "libraries/roxy/core/modules/Input"
