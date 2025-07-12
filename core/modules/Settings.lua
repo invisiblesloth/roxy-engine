@@ -20,9 +20,44 @@ local haveSetup         = false
 -- Helpers
 --------------------------------------------------------------------------------
 
+-- ! Setting Exists
 local function settingExists(itemKey)
   return settingsDefault[itemKey] ~= nil
 end
+
+-- ! Is Same Type
+local function isSameType(a, b)
+  return type(a) == type(b)
+end
+
+-- ! Try Set
+local function trySet(key, value)
+  if not settingExists(key) then return false end
+
+  if not isSameType(value, settingsDefault[key]) then
+    Log.warn("Settings.set: wrong type for '" .. key ..
+             "' (expected " .. type(settingsDefault[key]) ..
+             ", got " .. type(value) .. ")") --#DEBUG
+    return false
+  end
+
+  settings[key] = cloneDeep(value)
+  return true
+end
+
+--------------------------------------------------------------------------------
+-- Private Functions
+--------------------------------------------------------------------------------
+
+--#DEBUG START
+-- ! Reset (for unit tests)
+function Settings._reset()
+  settings = {}
+  settingsDefault = {}
+  haveSetup = false
+  Log.warn("Settings have been reset!")
+end
+--#DEBUG END
 
 --------------------------------------------------------------------------------
 -- Public API
@@ -102,28 +137,22 @@ end
 -- saveToDisk: if true, persist after set
 function Settings.set(itemKeyOrTable, value, saveToDisk)
   local changed = false
+
   if type(itemKeyOrTable) == "string" then
-    if settingExists(itemKeyOrTable) then
-      settings[itemKeyOrTable] = cloneDeep(value)
-      changed = true
-    end
+    changed = trySet(itemKeyOrTable, value)
   elseif type(itemKeyOrTable) == "table" then
-    for key, val in pairs(itemKeyOrTable) do
-      if settingExists(key) then
-        settings[key] = cloneDeep(val)
-        changed = true
-      end
+    for k, v in pairs(itemKeyOrTable) do
+      if trySet(k, v) then changed = true end
     end
   end
-  if changed and saveToDisk then
-    Settings.save()
-  end
+
+  if changed and saveToDisk then Settings.save() end
   return changed
 end
 
 -- ! Set and Save Setting(s)
-function Settings.setAndSave(...)
-  return Settings.set(..., true)
+function Settings.setAndSave(itemKeyOrTable, value)
+  return Settings.set(itemKeyOrTable, value, true)
 end
 
 -- ! Remove setting(s)
