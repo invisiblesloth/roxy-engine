@@ -1,9 +1,12 @@
 -- core/modules/ConfigBuilder.lua
 
+local pd      <const> = playdate
+local Object  <const> = pd.object
+
 local mergeImmutable  <const> = roxy.Table.mergeImmutable
 local tableInsert     <const> = table.insert
 
-class("ConfigBuilder").extends()
+class("ConfigBuilder").extends(Object)
 
 -- ! Initialize
 -- Constructor: start with one base layer (or empty table)

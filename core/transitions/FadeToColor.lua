@@ -60,22 +60,22 @@ local HOLD_TIME_DEFAULT   <const> = 0.25
 local EASE_DEFAULT        <const> = OUT_IN_QUAD
 local COLOR_DEFAULT       <const> = COLOR_BLACK
 local DITHER_DEFAULT      <const> = DITHER_BAYER_8X8
-local FADE_STEPS_DEFAULT  <const> = 32
-local PATCH_SIZE_DEFAULT  <const> = 8
+local FADE_STEPS_DEFAULT  <const> = 65
+local PATCH_SIZE_DEFAULT  <const> = 16
 
 -- Dither pattern configs
-local DITHER_BASE_SIZES <const> = {
-  [Image.kDitherTypeNone]           = PATCH_SIZE_DEFAULT, -- Default patch size
-  [Image.kDitherTypeDiagonalLine]   = 8,  -- Matches 8px diagonal repeat
-  [Image.kDitherTypeVerticalLine]   = 8,  -- Matches 8px vertical repeat
-  [Image.kDitherTypeHorizontalLine] = 8,  -- Matches 8px horizontal repeat
-  [Image.kDitherTypeScreen]         = 8,  -- 8x8 screen pattern
-  [Image.kDitherTypeBayer2x2]       = 4,  -- 2x2 Bayer, tile at 4
-  [Image.kDitherTypeBayer4x4]       = 8,  -- 4x4 Bayer, tile at 8
-  [Image.kDitherTypeBayer8x8]       = 16, -- 8x8 Bayer, tile at 16
-  [Image.kDitherTypeFloydSteinberg] = 8,  -- Error diffusion, use 8
-  [Image.kDitherTypeBurkes]         = 8,  -- Burkes error diffusion
-  [Image.kDitherTypeAtkinson]       = 8,  -- Atkinson error diffusion
+local DITHER_LIMITS <const> = {
+  [Image.kDitherTypeNone]           = { size = 8,  steps = 2  },
+  [Image.kDitherTypeDiagonalLine]   = { size = 8,  steps = 5  },
+  [Image.kDitherTypeVerticalLine]   = { size = 8,  steps = 5  },
+  [Image.kDitherTypeHorizontalLine] = { size = 8,  steps = 5  },
+  [Image.kDitherTypeScreen]         = { size = 8,  steps = 5  },
+  [Image.kDitherTypeBayer2x2]       = { size = 4,  steps = 5  },
+  [Image.kDitherTypeBayer4x4]       = { size = 8,  steps = 17 },
+  [Image.kDitherTypeBayer8x8]       = { size = 16, steps = 65 },
+  [Image.kDitherTypeFloydSteinberg] = { size = 8,  steps = 17 },
+  [Image.kDitherTypeBurkes]         = { size = 8,  steps = 17 },
+  [Image.kDitherTypeAtkinson]       = { size = 8,  steps = 17 },
 }
 
 -- Utility constants
@@ -134,9 +134,11 @@ function FadeToColor:init(opts)
 
   -- Visual properties
   self.color = config.color or COLOR_DEFAULT
-  self.dither = config.dither or DITHER_DEFAULT
-  self.fadeSteps = config.fadeSteps or FADE_STEPS_DEFAULT
-  self.patchSize = config.patchSize or nil
+  local dither = config.dither or DITHER_DEFAULT
+  self.dither = dither
+  local ditherConf = DITHER_LIMITS[dither] or { size = PATCH_SIZE_DEFAULT, steps = FADE_STEPS_DEFAULT }
+  self.fadeSteps = min(config.fadeSteps or ditherConf.steps, ditherConf.steps)
+  self.patchSize = config.patchSize or ditherConf.size
 
   -- Pre-calculate optimization
   self.fadeStepsMinus1 = self.fadeSteps - 1
@@ -164,17 +166,16 @@ end
 -- ! Create Pattern Array
 -- Create dithered pattern array for fade effect
 function FadeToColor:_createPatternArray()
-  local patterns = {}
-
   -- Cache frequently accessed properties for performance
-  local fadeSteps = self.fadeSteps
-  local oneOverSteps = 1 / fadeSteps
   local dither = self.dither
-  local patchSize = self.patchSize or DITHER_BASE_SIZES[dither] or PATCH_SIZE_DEFAULT
+  local fadeSteps = self.fadeSteps
+  local patchSize = self.patchSize
   local color = self.color
+  local oneOverSteps = 1 / (fadeSteps - 1)
 
+  local patterns = {}
   for i = 1, fadeSteps do
-    local alpha = 1.0 - (i * oneOverSteps)
+    local alpha = 1.0 - ((i - 1) * oneOverSteps)
     local img = newImage(patchSize, patchSize)
     pushContext(img)
       setColor(color)

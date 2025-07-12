@@ -1,6 +1,7 @@
 -- core/physics/RoxyPhysicsBody.lua
 
-local pd     <const> = playdate
+local pd      <const> = playdate
+local Object  <const> = pd.object
 
 local abs <const> = math.abs
 

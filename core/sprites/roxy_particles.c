@@ -743,6 +743,40 @@ int roxy_particles_computeAABB_l(lua_State* L)
     return 6;
 }
 
+// ! Resize Pool
+// Grows or shrinks the particle pool in place via realloc
+int roxy_particles_resizePool_l(lua_State* L)
+{
+    RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
+    int newMax = pd->lua->getArgInt(2);
+    if (!ps || !ps->pool || newMax <= 0 || newMax == ps->maxCount) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    // Compute sizes and attempt to realloc
+    size_t oldBytes = sizeof(RoxyParticle) * (size_t)ps->maxCount;
+    size_t newBytes = sizeof(RoxyParticle) * (size_t)newMax;
+    RoxyParticle* newBuf = pd->system->realloc(ps->pool, newBytes);
+    if (!newBuf) {
+        // On failure, leave the old pool intact
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    // If we grew the pool, zero out the new slots
+    if (newMax > ps->maxCount) {
+        memset(newBuf + ps->maxCount, 0, sizeof(RoxyParticle) * (newMax - ps->maxCount));
+    }
+
+    // pdate our struct and report success
+    ps->pool     = newBuf;
+    ps->maxCount = newMax;
+
+    pd->lua->pushBool(1);
+    return 1;
+}
+
 // ! Clear
 // Clears all particles by marking them as inactive
 int roxy_particles_clear_l(lua_State* L)
@@ -787,6 +821,7 @@ static const lua_reg roxyParticlesLib[] = {
     {   "spawnMultiple",    roxy_particles_spawnMultiple_l  },
     {   "update",           roxy_particles_update_l         },
     {   "draw",             roxy_particles_draw_l           },
+    {   "resizePool",       roxy_particles_resizePool_l     },
     {   "clear",            roxy_particles_clear_l          },
     {   "destroy",          roxy_particles_destroy_l        },
     {   "computeAABB",      roxy_particles_computeAABB_l    },

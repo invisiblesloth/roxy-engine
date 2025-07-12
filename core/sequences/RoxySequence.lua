@@ -7,7 +7,8 @@
   *
 ]]
 
-local pd <const> = playdate
+local pd      <const> = playdate
+local Object  <const> = pd.object
 
 local addSequence     <const> = roxy.Sequencer.add
 local removeSequence  <const> = roxy.Sequencer.remove
@@ -16,7 +17,7 @@ local removeSequence  <const> = roxy.Sequencer.remove
 -- ! Class Definition & Init
 -- ----------------------------------------
 
-class("RoxySequence").extends()
+class("RoxySequence").extends(Object)
 
 function RoxySequence:init()
   self.isRunning    = false

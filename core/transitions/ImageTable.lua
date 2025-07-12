@@ -170,6 +170,16 @@ function ImageTable:init(opts)
   self.reverseExit  = config.reverseExit  or (self.reverse and true)
 
   -- Flip
+  -- Apply generic flipX/flipY to both phases if per-phase flags aren't set
+  if config.flipX and config.flipXEnter == nil and config.flipXExit == nil then
+    config.flipXEnter = true
+    config.flipXExit  = true
+  end
+  if config.flipY and config.flipYEnter == nil and config.flipYExit == nil then
+    config.flipYEnter = true
+    config.flipYExit  = true
+  end
+
   self.flipX        = config.flipX
   self.flipY        = config.flipY
   self.flipXEnter   = config.flipXEnter
