@@ -16,20 +16,16 @@ local pushInputHandlers <const> = pd.inputHandlers.push
 local popInputHandlers  <const> = pd.inputHandlers.pop
 local CrankIndicator    <const> = pd.ui.crankIndicator
 
+local getConfig <const> = roxy.Config.get
+
 -- C functions
 local SetButtonHoldBufferAmount <const> = Input.setButtonHoldBufferAmount
 local processAllButtons         <const> = Input.processAllButtons
 
-local flushButtonQueue          <const> = Input.flushButtonQueue
+local flushButtonQueue <const> = Input.flushButtonQueue
 
 local BUTTON_HOLD_BUFFER_DEFAULT  <const> = 3 -- Frames for button hold detection
 local CRANK_DIRECTION_DEFAULT     <const> = 1
-
--- Handler Merging State
-local handlerRegistry = {}          -- [{owner=..., tbl=..., priority=...}, ...]
-local activeMergedHandler = nil     -- Currently active merged handler table
-local autoFlushEnabled = true       -- Push after register/unregister?
-local pendingRegistryDirty = false  -- Tracks unflushed changes when autoFlush is off
 
 -- List of supported input event keys (keep in sync with stubHandler)
 local inputKeys = {
@@ -62,10 +58,15 @@ local inputKeys = {
 local stubHandler = {}
 for _, k in ipairs(inputKeys) do stubHandler[k] = function() end end
 
--- Other Internal State
-local buttonHoldBufferAmount  = BUTTON_HOLD_BUFFER_DEFAULT
-local crankIndicatorActive    = false
-local crankIndicatorForced    = false
+-- Internal State
+local buttonHoldBufferAmount
+local crankIndicatorActive
+local crankIndicatorForced
+
+local handlerRegistry
+local activeMergedHandler
+local autoFlushEnabled
+local pendingRegistryDirty
 
 Input.crankDirection = CRANK_DIRECTION_DEFAULT
 Input.isEnabled               = true  -- Input starts enabled
@@ -114,6 +115,29 @@ end
 -- ----------------------------------------
 -- Handler Registration API
 -- ----------------------------------------
+
+-- ! Initialize
+function Input.init()
+  local inputConfig = getConfig("input") or {}
+
+  buttonHoldBufferAmount  = inputConfig.buttonHoldBufferAmount or BUTTON_HOLD_BUFFER_DEFAULT
+  crankIndicatorActive    = false
+  crankIndicatorForced    = false
+
+  Input.crankDirection    = inputConfig.crankDirection or CRANK_DIRECTION_DEFAULT
+
+  Input.isEnabled               = true
+  Input._blocked                = false
+  Input.clearQueueOnSetHandler  = true
+
+  -- Handler Merging State
+  handlerRegistry       = {}    -- [{owner=..., tbl=..., priority=...}, ...]
+  activeMergedHandler   = nil   -- Currently active merged handler table
+  autoFlushEnabled      = true  -- Push after register/unregister?
+  pendingRegistryDirty  = false -- Tracks unflushed changes when autoFlush is off
+
+  SetButtonHoldBufferAmount(buttonHoldBufferAmount)
+end
 
 -- ! Add Handler
 -- Add (or replace) a handler for an owner at a given priority.
