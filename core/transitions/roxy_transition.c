@@ -144,7 +144,8 @@ int roxy_transition_imageTableDrawFrame_l(lua_State* L)
 
     // Validate progress range
     if (progress < 0.0f || progress > 1.0f) {
-        pd->system->logToConsole("Roxy ERROR: ImageTableDrawFrame - progress must be in range [0.0, 1.0], got %f", progress);
+        pd->system->logToConsole("Roxy ERROR: ImageTableDrawFrame - progress must be in range [0.0, 1.0], got %f", (double)progress);
+
         return 0;
     }
 
