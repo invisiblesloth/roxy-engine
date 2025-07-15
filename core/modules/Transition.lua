@@ -59,6 +59,7 @@ function Transition.loadTransitions(transitionsTable)
     Log.error("[Transition.loadTransitions] transitionsTable must be a table.", 2) --#DEBUG
     return
   end
+
   for key, value in pairs(transitionsTable) do
     if type(key) ~= "string" then
       Log.error("[Transition.loadTransitions] Transition key must be a string.", 2) --#DEBUG
@@ -67,9 +68,14 @@ function Transition.loadTransitions(transitionsTable)
       Log.error("[Transition.loadTransitions] Transition value must be a valid class.", 2) --#DEBUG
       return
     end
+    transitions[key] = value
+    if value.warmUpAssetPool then value:warmUpAssetPool() end
   end
+end
 
-  transitions = transitionsTable
+-- ! Get Transitions
+function Transition.getTransitions()
+  return transitions
 end
 
 -- ! Transition.reloadTransitionsWithNewConfig
@@ -146,10 +152,11 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   local currentScene = Scene.currentScene
 
   -- Use transition or fallback to default
-  local transitionClass = transitions[(transitionName or TRANSITION_DEFAULT)]
+  local transition = getConfig("transitions").defaultTransition or TRANSITION_DEFAULT
+  local transitionClass = transitions[(transitionName or transition)]
   if not transitionClass then
-    Log.warn("[Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. TRANSITION_DEFAULT) --#DEBUG
-    transitionClass = transitions[TRANSITION_DEFAULT]
+    Log.warn("[Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. transition) --#DEBUG
+    transitionClass = transitions[transition]
   end
 
   -- Merge options (arguments take precedence)
