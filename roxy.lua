@@ -51,6 +51,13 @@ import "libraries/roxy/core/animations/RoxyAnimation"
 import "libraries/roxy/core/tilemaps/RoxyTilemap"
 import "libraries/roxy/core/scenes/RoxyScene"
 
+-- Transitions
+import "libraries/roxy/core/transitions/RoxyTransition"
+import "libraries/roxy/core/transitions/Cut"
+import "libraries/roxy/core/transitions/FadeToColor"
+import "libraries/roxy/core/transitions/CrossDissolve"
+import "libraries/roxy/core/transitions/ImageTable"
+
 -- Create global Roxy table if it does not already exist
 roxy = roxy or {}
 
@@ -62,18 +69,24 @@ local Sprite    <const> = Graphics.sprite
 
 local r           <const> = roxy
 local Debug       <const> = r.Debug
+local GameData    <const> = r.GameData
+local Cache       <const> = r.Cache
 local Config      <const> = r.Config
 local Input       <const> = r.Input
 local Sequencer   <const> = r.Sequencer
 local Scene       <const> = r.Scene
 local Transition  <const> = r.Transition
+local Music       <const> = r.Music
+local Sounds      <const> = r.Sounds
 
 local randomseed <const> = math.randomseed
 
 local getSecondsSinceEpoch  <const> = pd.getSecondsSinceEpoch
 local spriteUpdate          <const> = Sprite.update
 
-local loadAllConfigs <const> = Config.loadAllConfigs
+local mergeImmutable <const> =roxy.Table.mergeImmutable
+
+local initConfig <const> = Config.init
 
 local getDeltaTime <const> = r.getDeltaTime
 
@@ -94,79 +107,128 @@ local updateDebug <const> = Debug.update --#DEBUG
 local drawFPS     <const> = pd.drawFPS --#DEBUG
 
 -- Constants
-local COLOR_BLACK     <const> = Graphics.kColorBlack
-local COLOR_WHITE     <const> = Graphics.kColorWhite
-local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
+local SHOW_FPS_DEFAULT  <const> = true    --#DEBUG
+local FPS_X_DEFAULT     <const> = 385     --#DEBUG
+local FPS_Y_DEFAULT     <const> = 228     --#DEBUG
+local LOG_LEVEL_DEFAULT <const> = "info"  --#DEBUG
 
-local DEFAULT_FPS_X <const> = 385 --#DEBUG
-local DEFAULT_FPS_Y <const> = 228 --#DEBUG
-
--- Import Transitions
-import "libraries/roxy/core/transitions/RoxyTransition"
-import "libraries/roxy/core/transitions/Cut"
-import "libraries/roxy/core/transitions/FadeToColor"
-import "libraries/roxy/core/transitions/CrossDissolve"
-import "libraries/roxy/core/transitions/ImageTable"
+local DEFAULT_TRANSITIONS = {
+  Cut           = Cut,
+  FadeToColor   = FadeToColor,
+  CrossDissolve = CrossDissolve,
+  ImageTable    = ImageTable,
+}
 
 -- Local State
 local engineInitialized = false
+local engineStarted = false
 
-local showFPS = true          --#DEBUG
-local fpsX    = DEFAULT_FPS_X --#DEBUG
-local fpsY    = DEFAULT_FPS_Y --#DEBUG
+local showFPS --#DEBUG
+local fpsX    --#DEBUG
+local fpsY    --#DEBUG
 
--- ----------------------------------------
--- Engine
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Engine Initialization
+--------------------------------------------------------------------------------
 
--- ! New
--- Initializes the engine and transitions to the first scene
-function r.new(startingScene, userConfig)
-  if engineInitialized then
-    Log.error("You can only run 'roxy.new()' once.") --#DEBUG
-    return
+--#DEBUG START
+-- ! Set up Logging and Debug
+function r.setupLoggingAndDebug(config)
+  if config.debugging.enableDebugChecks then
+    Debug.enableDebugChecking()
+    Debug.startDebugChecks()
+  end
+  if config.debugging.enableVisualDebugChecks then
+    Debug.enableVisualDebug()
   end
 
-  -- (1) Merge configs with user overrides
-  local config = loadAllConfigs(userConfig)
+  Log.setLogLevel(config.logLevel or LOG_LEVEL_DEFAULT)
 
-  --#DEBUG START
-  if not startingScene then
-    Log.error("startingScene is required for roxy.new.", 2)
+  showFPS = config.debugging.showFPS
+  if showFPS == nil then
+    showFPS = SHOW_FPS_DEFAULT
   end
-  --#DEBUG END
+  fpsX = config.debugging.fpsPosition and config.debugging.fpsPosition[1] or FPS_X_DEFAULT
+  fpsY = config.debugging.fpsPosition and config.debugging.fpsPosition[2] or FPS_Y_DEFAULT
+end
+--#DEBUG END
 
-  -- (2) Seed random number generator
-  randomseed(getSecondsSinceEpoch())
+-- ! Register Modules
+function r.registerModules(config)
+  -- Register transitions
+  local userTransitions = config and config.customTransitions or nil
+  local allTransitions = mergeImmutable(DEFAULT_TRANSITIONS, userTransitions)
+  loadTransitions(allTransitions)
 
-  -- (3) Load transitions
-  loadTransitions({
-    Cut = Cut,
-    FadeToColor = FadeToColor,
-    CrossDissolve = CrossDissolve,
-    ImageTable = ImageTable
-  })
-  Transition.reloadTransitionsWithNewConfig()
-  FadeToColor:warmUpAssetPool()
-  CrossDissolve:warmUpAssetPool()
-  ImageTable:warmUpAssetPool()
+  -- Initialize managers
+  GameData.init()
+  Cache.init()
+  Input.init()
+  Sounds.init()
+  Music.init()
+end
 
-  -- (4) Start starting scene
-  engineInitialized = true
-  local scene = startingScene()
-
+-- ! Replace Scene
+function r.goToScene(sceneFn)
+  local scene = sceneFn()
   --#DEBUG START
   if type(scene) ~= "table" then
-    Log.error("StartingScene initialization must return a scene table.", 2)
+    Log.error("[goToScene] 'sceneFn' must return a valid scene table", 2)
   end
   --#DEBUG END
-
   replaceScene(scene)
 end
 
--- ----------------------------------------
+-- ! Initialize Roxy
+-- Initializes the engine and transitions to the first scene
+function r.init(userConfig)
+  if engineInitialized then
+    Log.error("Engine already initialized. 'roxy.init()' can only be called once") --#DEBUG
+    return
+  end
+
+  Log.info("Roxy Engine initializing ...") --#DEBUG
+
+  -- (1) Environment
+  randomseed(getSecondsSinceEpoch())
+
+  -- (2) Config
+  local config = initConfig(userConfig)
+
+  --#DEBUG START
+  -- Logging and debug
+  r.setupLoggingAndDebug(config)
+  --#DEBUG END
+
+  -- (3) Register modules
+  r.registerModules(config)
+
+  engineInitialized = true
+
+  Log.info("Roxy Engine ready") --#DEBUG
+end
+
+-- ! Start Game
+function r.start(startingSceneFn)
+  if engineStarted then
+    Log.error("Engine already started. 'roxy.start()' can only be called once")
+    return
+  end
+
+  local scene = startingSceneFn()
+  --#DEBUG START
+  if type(scene) ~= "table" then
+    Log.error("'startingSceneFn' must return a valid scene table", 2)
+  end
+  --#DEBUG END
+  replaceScene(scene)
+
+  engineStarted = true
+end
+
+--------------------------------------------------------------------------------
 -- Pause and Resume
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Game Will Pause
 function r.gameWillPause()
@@ -184,9 +246,9 @@ function r.gameWillResume()
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Main Game Loop
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Update
 function pd.update()
