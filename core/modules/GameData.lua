@@ -22,6 +22,8 @@ local max <const> = math.max
 local clamp     <const> = roxy.Math.clamp
 local cloneDeep <const> = roxy.Table.cloneWithCycles
 
+local getConfig <const> = roxy.Config.get
+
 -- File I/O
 local fileExists <const> = File.exists
 local renameFile <const> = File.rename
@@ -34,30 +36,29 @@ local performAfterDelay <const> = pd.timer.performAfterDelay
 
 local getConfig <const> = roxy.Config.get
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Configurable slot count (no hard limit)
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 local SAVE_SLOTS_DEFAULT <const> = 3
-local maxSlots = SAVE_SLOTS_DEFAULT -- getConfig("maxSaveSlots", SAVE_SLOTS_DEFAULT)
 
-------------------------------------------------------------------------------
--- Internal state
-------------------------------------------------------------------------------
+local maxSlots
 
-local gameData         = {}   -- [slot] = { data=tbl, timestamp=int, dirty=bool }
-local defaults         = nil  -- template table
-local haveSetup        = false
-local slotCountAtSetup = 1
-local numberOfSlots    = 1
-local currentSlot      = 1
+--------------------------------------------------------------------------------
+-- Internal state Declarations
+--------------------------------------------------------------------------------
 
--- Batch-save flag
-local savePending = false
+local gameData
+local defaults
+local haveSetup
+local slotCountAtSetup
+local numberOfSlots
+local currentSlot
+local savePending
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Utilities
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Utility: Apply Defaults
 local function applyDefaults(tbl, def)
@@ -81,9 +82,9 @@ local function markDirty(slotIndex)
   end
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Zero-delay save batching
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Helper: Schedule Save
 local function scheduleSave()
@@ -111,9 +112,9 @@ function GameData._reset()
 end
 --#DEBUG END
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Slot existence checks
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Helper: Slot Exists
 local function slotExists(slotIndex)
@@ -138,9 +139,9 @@ local function trySet(set, slot, value)
   return true
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Reload all slots from disk (1..maxSlots), simple scan
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Reload All From Disk
 function GameData.reloadAllFromDisk()
@@ -166,9 +167,25 @@ function GameData.reloadAllFromDisk()
   if currentSlot > numberOfSlots then currentSlot = 1 end
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Setup
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+-- ! Initialize
+function GameData.init()
+  -- Fetch config for save slot limits
+  local gameDataConfig = getConfig("gameData") or {}
+  maxSlots = gameDataConfig.saveSlots or SAVE_SLOTS_DEFAULT
+
+  -- Reset internal state (safe to call multiple times)
+  gameData         = {}     -- [slot] = { data=tbl, timestamp=int, dirty=bool }
+  defaults         = nil    -- Template table
+  haveSetup        = false
+  slotCountAtSetup = 1
+  numberOfSlots    = 1
+  currentSlot      = 1
+  savePending      = false  -- Batch-save flag
+end
 
 -- ! Setup
 function GameData.setup(template, slots, opts)
@@ -207,9 +224,9 @@ function GameData.setup(template, slots, opts)
   return true
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Retrieval
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Get Fast (not using clone with cycles)
 function GameData.getFast(itemKey, slot)
@@ -248,9 +265,9 @@ function GameData.isDirty(slot)
   return slotExists(slot) and gameData[slot].dirty or false
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Mutation helper
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Helper: Mutate Slot
 local function mutateSlot(slotIndex, fn, opts)
@@ -263,9 +280,9 @@ local function mutateSlot(slotIndex, fn, opts)
   return true
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Mutations
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set
 function GameData.set(itemKeyOrTable, value, slot, opts)
@@ -312,9 +329,9 @@ function GameData.resetAll(opts)
   return ok
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Deletion (always collapse)
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Delete Slot
 function GameData.deleteSlot(slot, opts)
@@ -354,9 +371,9 @@ function GameData.deleteAll(opts)
   return true
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Saving
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Save
 function GameData.save(slot)
@@ -379,9 +396,9 @@ function GameData.saveAll(force)
   return ok
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Accessors
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Get Timestamp
 function GameData.getTimestamp(slot, human)
@@ -414,9 +431,9 @@ function GameData.setCurrentSlot(slot)
   return false
 end
 
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Auto-save on quit/pause
-------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Get Will Terminate
 function playdate.gameWillTerminate()
