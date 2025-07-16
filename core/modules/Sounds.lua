@@ -6,20 +6,29 @@ local Sounds <const> = roxy.Sounds
 
 local pd <const> = playdate
 
-local Cache <const> = roxy.Cache
+local Config  <const> = roxy.Config
+local Cache   <const> = roxy.Cache
 
 local clamp <const> = roxy.Math.clamp
 local max   <const> = math.max
 
 local newSamplePlayer <const> = pd.sound.sampleplayer.new
 
+local getConfig <const> = Config.get
+
+local newBucket       <const> = Cache.newBucket
 local cacheAsset      <const> = Cache.cacheAsset
 local getCachedAsset  <const> = Cache.getCachedAsset
 local evictAsset      <const> = Cache.evictAsset
+local setMaxCacheSize <const> = Cache.setMaxCacheSize
 
 local VOLUME_DEFAULT    <const> = 1.0
 local DURATION_DEFAULT  <const> = 0.25  -- Seconds (short, SFX‑friendly)
 local DURATION_MAX      <const> = 10    -- Fade sanity cap
+
+local SOUNDS_CACHE_SIZE_DEFAULT <const> = 20
+
+Sounds.cache = {}
 
 -- @type table<string,{path:string,tag:string?}>
 local soundsRegistry = {}
@@ -38,13 +47,19 @@ local function getEntry(name)
   return soundsRegistry[name]
 end
 
+-- ! Set Cache Size
+function Sounds.setCacheSize(size)
+  setMaxCacheSize(Sounds.cache, size)
+end
+
 -- ! Get Player
 local function getPlayer(name)
   local cacheKey = "sound:" .. name
+  local cache = Sounds.cache
 
   -- Fast path: both a player *and* its cache entry exist
   local player = players[name]
-  if player and getCachedAsset(cacheKey) then
+  if player and getCachedAsset(cache, cacheKey) then
     return player
   end
 
@@ -59,14 +74,14 @@ local function getPlayer(name)
     return nil
   end
 
-  player = getCachedAsset(cacheKey)
+  player = getCachedAsset(cache, cacheKey)
   if not player then
     player = newSamplePlayer(entry.path)
     if not player then
       Log.warn("[getPlayer] Sounds: failed to load '" .. name .. "' at '" .. entry.path .. "'")
       return nil
     end
-    cacheAsset(cacheKey, function() return player end)
+    cacheAsset(cache, cacheKey, function() return player end)
     -- Weak‑key tracking: key = player | value = cacheKey
     soundKeys[player] = cacheKey
   end
@@ -111,6 +126,12 @@ end
 -- Registration & (Pre)Loading
 -- ----------------------------------------
 
+-- ! Initialize
+function Sounds.init()
+  local assetsConfig = getConfig("assets") or {}
+  Sounds.cache = newBucket(assetsConfig.soundsCacheSize or SOUNDS_CACHE_SIZE_DEFAULT)
+end
+
 -- ! Register Sounds
 -- Register many sounds: { name = "path", name2 = {path="…", tag="…"} }
 function Sounds.registerSounds(sounds)
@@ -143,10 +164,11 @@ end
 -- Remove a single sound from memory (does not touch registry entry)
 function Sounds.unload(name)
   local cacheKey = "sound:" .. name
+  local cache = Sounds.cache
   local player = players[name]
 
   if player and soundKeys[player] then
-    evictAsset(cacheKey) -- Drop from cache
+    evictAsset(cache, cacheKey) -- Drop from cache
     soundKeys[player] = nil -- Remove weak‑table entry
   end
 
@@ -158,7 +180,7 @@ end
 function Sounds.unloadAll()
   Sounds.stopAll() -- Ensure nothing keeps playing
   for player, cacheKey in pairs(soundKeys) do
-    evictAsset(cacheKey) -- Remove from LRU cache
+    evictAsset(cache, cacheKey) -- Remove from LRU cache
   end
   soundKeys = setmetatable({}, { __mode = "k" })
   players = {}

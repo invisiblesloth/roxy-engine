@@ -4,6 +4,8 @@ roxy = roxy or {}
 roxy.Cache = roxy.Cache or {}
 local Cache <const> = roxy.Cache
 
+local getConfig <const> = roxy.Config.get
+
 local MAX_CACHE_SIZE_DEFAULT <const> = 50
 
 -- ----------------------------------------
@@ -88,16 +90,17 @@ end
 -- ! New Bucket
 -- Creates a new cache bucket with specified max size.
 function Cache.newBucket(maxSize)
+  local assetsConfig = getConfig("assets") or {}
   return {
     cache        = {},  -- Key to entry mapping
     head         = nil, -- Most recently used
     tail         = nil, -- Least recently used
     currentSize  = 0,
-    maxCacheSize = maxSize or MAX_CACHE_SIZE_DEFAULT,
+    maxCacheSize = maxSize or assetsConfig.maxCacheSize or MAX_CACHE_SIZE_DEFAULT,
   }
 end
 
-local DEFAULT_BUCKET = Cache.newBucket()
+local defaultBucket
 
 -- ! Resolve Bucket
 -- Resolves the bucket, defaulting if omitted.
@@ -105,19 +108,25 @@ local function resolveBucket(firstArg, ...)
   if type(firstArg) == "table" and firstArg.cache then
     return firstArg, ...
   end
-  return DEFAULT_BUCKET, firstArg, ...
+  return defaultBucket, firstArg, ...
 end
 
 -- ----------------------------------
 -- ! Public API
 -- ----------------------------------
 
+-- ! Initialize Cache module
+function Cache.init()
+  defaultBucket = Cache.newBucket()
+end
+
 -- ! Set Max Cache Size
 -- Sets the maximum cache size and evicts entries if necessary.
 function Cache.setMaxCacheSize(bucketOrSize, maybeSize)
   local bucket, newSize = resolveBucket(bucketOrSize, maybeSize)
 
-  newSize = newSize or bucket.maxCacheSize or MAX_CACHE_SIZE_DEFAULT
+  local assetsConfig = getConfig("assets") or {}
+  newSize = newSize or bucket.maxCacheSize or assetsConfig.maxCacheSize or MAX_CACHE_SIZE_DEFAULT
 
   --#DEBUG START
   if newSize < 0 then
@@ -291,7 +300,7 @@ end
 -- ! Clear Cache
 -- Clears all entries from the cache.
 function Cache.clearCache(bucket)
-  bucket = bucket or DEFAULT_BUCKET
+  bucket = bucket or defaultBucket
   bucket.cache = {}
   bucket.head = nil
   bucket.tail = nil

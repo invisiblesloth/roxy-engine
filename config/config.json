@@ -1,6 +1,26 @@
 {
+  "logLevel": "info",
+  "debugging": {
+    "showFPS": true,
+    "fpsPosition": [ 385, 228 ],
+    "enableDebugChecks": false,
+    "enableVisualDebugChecks": false
+  },
+  "input": {
+    "buttonHoldBufferAmount": 3,
+    "crankDirection": 1
+  },
+  "assets": {
+    "maxCacheSize": 50,
+    "musicCacheSize": 3,
+    "soundsCacheSize": 20
+  },
   "transitions": {
+    "defaultTransition": "Cut",
     "duration": 1.5,
     "holdTime": 0.25
+  },
+  "gameData": {
+    "saveSlots": 3
   }
 }

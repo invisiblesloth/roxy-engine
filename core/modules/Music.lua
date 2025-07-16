@@ -6,11 +6,14 @@ local Music <const> = roxy.Music
 
 local pd <const> = playdate
 
-local Cache <const> = roxy.Cache
+local Config  <const> = roxy.Config
+local Cache   <const> = roxy.Cache
 
 local clamp <const> = roxy.Math.clamp
 
 local newFilePlayer <const> = pd.sound.fileplayer.new
+
+local getConfig <const> = Config.get
 
 local newBucket       <const> = Cache.newBucket
 local cacheAsset      <const> = Cache.cacheAsset
@@ -26,7 +29,7 @@ local RATE_DEFAULT              <const> = 1
 local OFFSET_DEFAULT            <const> = 0
 local MUSIC_CACHE_SIZE_DEFAULT  <const> = 3
 
-local musicCache = newBucket(MAX_MUSIC_CACHE_SIZE)
+Music.cache = {}
 
 -- @type table<string,{path:string,title:string?}>
 local trackRegistry = {}
@@ -51,7 +54,8 @@ local function getPlayer(name)
   end
 
   local cacheKey  = "music:" .. name
-  local filePlayer = getCachedAsset(musicCache, cacheKey)
+  local cache = Music.cache
+  local filePlayer = getCachedAsset(cache, cacheKey)
 
   if not filePlayer then
     filePlayer = newFilePlayer(entry.path)
@@ -59,7 +63,7 @@ local function getPlayer(name)
       Log.warn("[Music.getPlayer] failed to load track '" .. name .. "' at '" .. entry.path .. "'") --#DEBUG
       return nil
     end
-    cacheAsset(musicCache, cacheKey, function() return filePlayer end)
+    cacheAsset(cache, cacheKey, function() return filePlayer end)
     musicKeys[cacheKey] = true
   end
 
@@ -91,9 +95,15 @@ end
 -- Registration & (Pre)Loading
 -- ----------------------------------------
 
+-- ! Initialize
+function Music.init()
+  local assetsConfig = getConfig("assets") or {}
+  Music.cache = newBucket(assetsConfig.musicCacheSize or MUSIC_CACHE_SIZE_DEFAULT)
+end
+
 -- ! Set Music Cache Size
 function Music.setCacheSize(size)
-  setMaxCacheSize(musicCache, size)
+  setMaxCacheSize(Music.cache, size)
 end
 
 -- ! Register Tracks
@@ -120,7 +130,7 @@ function Music.unload(name)
   local cacheKey = "music:" .. name
   Music.stop()
   if musicKeys[cacheKey] then
-    evictAsset(musicCache, cacheKey)
+    evictAsset(Music.cache, cacheKey)
     musicKeys[cacheKey] = nil
   end
   if currentName == name then
@@ -132,7 +142,7 @@ end
 function Music.unloadAll()
   Music.stop()
   for key in pairs(musicKeys) do
-    evictAsset(musicCache, key)
+    evictAsset(Music.cache, key)
     musicKeys[key] = nil
   end
   currentPlayer, currentName = nil, nil
