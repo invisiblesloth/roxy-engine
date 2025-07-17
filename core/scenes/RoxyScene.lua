@@ -27,9 +27,9 @@ local CLEAR_COLOR <const> = COLOR_WHITE
 
 local _colorCallbacks = {} -- Cache: color --> fn
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Helper
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Helper: Get Color Callback
 -- builds (and returns) a drawing callback for a solid color
@@ -45,9 +45,9 @@ local function _getColorCallback(color)
   return fn
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 class("RoxyScene").extends(Object)
 
@@ -62,6 +62,7 @@ function RoxyScene:init(background)
   self._didCleanup = false
 
   self.inputHandler = {}
+  self.sprites = {}
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -70,9 +71,9 @@ function RoxyScene:init(background)
   self:setBackground(background)
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Scene Lifecycle
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Enter
 function RoxyScene:enter()
@@ -92,6 +93,15 @@ function RoxyScene:pause()
   if self.isPaused then return end
   Log.debug("[RoxyScene:pause] Pausing Scene: " .. self.name) --#DEBUG
   self.isPaused = true
+
+  -- Disable sprites from updating or colliding
+  for i = #self.sprites, 1, -1 do
+    local sprite = self.sprites[i]
+    sprite:pause()
+    sprite:setUpdatesEnabled(false)
+    sprite:setCollisionsEnabled(false)
+  end
+
   removeHandler(self)
 end
 
@@ -100,6 +110,15 @@ function RoxyScene:resume()
   if not self.isPaused then return end
   Log.debug("[RoxyScene:resume] Resuming Scene: " .. self.name) --#DEBUG
   self.isPaused = false
+
+  -- Enable sprites for updating and colliding
+  for i = #self.sprites, 1, -1 do
+    local sprite = self.sprites[i]
+    sprite:setUpdatesEnabled(true)
+    sprite:setCollisionsEnabled(true)
+    sprite:play()
+  end
+
   self:addHandler()
 end
 
@@ -118,6 +137,16 @@ function RoxyScene:cleanup()
   Log.debug("[RoxyScene:cleanup] Cleaning Up Scene: " .. self.name) --#DEBUG
 
   removeHandler(self)
+
+  for i = #self.sprites, 1, -1 do
+    local sprite = self.sprites[i]
+    if sprite.isRoxySprite then sprite:pause() end
+    sprite:setUpdatesEnabled(false)
+    sprite:setCollisionsEnabled(false)
+  end
+
+  self:removeAllSprites()
+
   self:resetDrawOffset()
 
   resetCamera()
@@ -130,9 +159,9 @@ end
 
 -- TODO: Add sprite management methods etc. HERE
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Background Drawing
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Background
 function RoxyScene:setBackground(background)
@@ -170,9 +199,59 @@ function RoxyScene:setBackground(background)
   redrawBackground()
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Sprites
+--------------------------------------------------------------------------------
+
+-- ! Add Sprite
+function RoxyScene:addSprite(sprite)
+  if not sprite then return end
+
+  -- Give the sprite a back‑pointer so it can self‑remove later
+  sprite.scene = self
+
+  for i = 1, #self.sprites do
+    if self.sprites[i] == sprite then
+      return
+    end
+  end
+
+  table.insert(self.sprites, sprite)
+  sprite:add()
+end
+
+-- ! Remove Sprite
+function RoxyScene:removeSprite(sprite)
+  if not sprite then return end
+
+  for i = #self.sprites, 1, -1 do
+    if self.sprites[i] == sprite then
+      sprite.scene = nil -- Clear back‑pointer
+      sprite:remove()
+      table.remove(self.sprites, i)
+      return
+    end
+  end
+end
+
+-- ! Remove All Sprites
+function RoxyScene:removeAllSprites()
+  for i = #self.sprites, 1, -1 do
+    self.sprites[i]:remove()
+  end
+  self.sprites = {}
+end
+
+-- ! Spawn Sprite
+function RoxyScene:spawnSprite(spriteOpts)
+  spriteOpts = spriteOpts or {}
+  spriteOpts.scene = self
+  return RoxySprite(spriteOpts)
+end
+
+--------------------------------------------------------------------------------
 -- Utilities
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Input Handler
 function RoxyScene:addHandler()

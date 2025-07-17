@@ -42,6 +42,11 @@ function RoxySprite:init(opts)
   self.simpleAnim   = nil
   self._drawFn      = nil
 
+  -- Attach to a scene immediately (optional)
+  if opts.scene then
+    opts.scene:addSprite(self)
+  end
+
   if opts.view then
     self:setView(
       opts.view,
@@ -463,6 +468,15 @@ function RoxySprite:remove()
   if self.isRoxySprite and (self.animation or self.simpleAnim) then
     self:stop()
   end
+
+  -- Automatically detach from owning scene, if any
+  if self.scene then
+    local scene = self.scene
+    self.scene = nil
+    -- Guard against double‑removal
+    if scene.removeSprite then scene:removeSprite(self) end
+  end
+
   self._added = false
   RoxySprite.super.remove(self)
   return self
