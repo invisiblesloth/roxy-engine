@@ -107,6 +107,12 @@ function RoxyScene:pause()
     sprite:setCollisionsEnabled(false)
   end
 
+  -- Disable sequence from updating
+  for i = #self.sequences, 1, -1 do
+    local sequence = self.sequences[i]
+    sequence:pause()
+  end
+
   removeHandler(self)
 end
 
@@ -122,6 +128,12 @@ function RoxyScene:resume()
     sprite:setUpdatesEnabled(true)
     sprite:setCollisionsEnabled(true)
     sprite:play()
+  end
+
+  -- Enable sequences for updating
+  for i = #self.sequences, 1, -1 do
+    local sequence = self.sequences[i]
+    sequence:play()
   end
 
   self:addHandler()
@@ -311,7 +323,7 @@ function RoxyScene:addSequence(sequence)
   -- Give the sequence a back‑pointer so it can self‑remove later
   sequence.scene = self
 
-  sequence:start()
+  sequence:play()
 end
 
 -- ! Remove Sequence
