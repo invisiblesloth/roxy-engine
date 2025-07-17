@@ -118,7 +118,7 @@ function CrossDissolve:init(opts)
   local baseConfig = getTransitionConfig("CrossDissolve")
 
   -- Build final configuration with runtime options
-  local builder = ConfigBuilder(baseConfig)
+  local builder = TableBuilder(baseConfig)
     :with(opts)
 
   local config = builder:build()
@@ -261,7 +261,7 @@ function CrossDissolve:execute(newScene, currentScene)
   self:_onStart()
   self:_onMidpoint()
   self:_onHoldElapsed()
-  self.sequence:start()
+  self.sequence:play()
 end
 
 -- ! Draw

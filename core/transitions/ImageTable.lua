@@ -108,7 +108,7 @@ function ImageTable:init(opts)
   local baseConfig = getTransitionConfig("ImageTable")
 
   -- Build final configuration with runtime options
-  local builder = ConfigBuilder(baseConfig)
+  local builder = TableBuilder(baseConfig)
     :with(opts)
 
   local config = builder:build()
@@ -368,7 +368,7 @@ function ImageTable:execute(newScene, currentScene)
   -- ImageTable-specific execution
   self:_setupSequence()
   self:_onStart()
-  self.sequence:start()
+  self.sequence:play()
 end
 
 -- ! Draw

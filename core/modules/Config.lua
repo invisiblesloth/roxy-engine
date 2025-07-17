@@ -1,7 +1,5 @@
 -- core/modules/Config.lua
 
-import "libraries/roxy/core/modules/ConfigBuilder"
-
 roxy = roxy or {}
 roxy.Config = roxy.Config or {}
 local Config <const> = roxy.Config
@@ -163,7 +161,7 @@ function Config.init(overrides)
   local defaultConfig = loadConfigFile(defaultPath)
   local userConfig = loadConfigFile(userPath)
 
-  local builder = ConfigBuilder(FALLBACKS)
+  local builder = TableBuilder(FALLBACKS)
     :with(defaultConfig)
     :with(userConfig)
     :with(overrides)

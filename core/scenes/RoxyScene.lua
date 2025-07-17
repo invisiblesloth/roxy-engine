@@ -5,7 +5,11 @@ local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r         <const> = roxy
+local r       <const> = roxy
+local Camera  <const> = r.Camera
+
+local tableInsert <const> = table.insert
+local tableRemove <const> = table.remove
 
 local clearScreen         <const> = Graphics.clear
 local setColor            <const> = Graphics.setColor
@@ -18,15 +22,17 @@ local redrawBackground    <const> = Sprite.redrawBackground
 local addHandler    <const> = r.Input.addHandler
 local removeHandler <const> = r.Input.removeHandler
 
+local resetCamera <const> = Camera.reset
+
 local COLOR_WHITE <const> = Graphics.kColorWhite
 local COLOR_BLACK <const> = Graphics.kColorBlack
 local CLEAR_COLOR <const> = COLOR_WHITE
 
 local _colorCallbacks = {} -- Cache: color --> fn
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Helper
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Helper: Get Color Callback
 -- builds (and returns) a drawing callback for a solid color
@@ -42,9 +48,9 @@ local function _getColorCallback(color)
   return fn
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 class("RoxyScene").extends(Object)
 
@@ -59,6 +65,9 @@ function RoxyScene:init(background)
   self._didCleanup = false
 
   self.inputHandler = {}
+  self.sprites = {}
+  self.tilemaps = {}
+  self.sequences = {}
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -67,9 +76,9 @@ function RoxyScene:init(background)
   self:setBackground(background)
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Scene Lifecycle
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Enter
 function RoxyScene:enter()
@@ -89,6 +98,21 @@ function RoxyScene:pause()
   if self.isPaused then return end
   Log.debug("[RoxyScene:pause] Pausing Scene: " .. self.name) --#DEBUG
   self.isPaused = true
+
+  -- Disable sprites from updating or colliding
+  for i = #self.sprites, 1, -1 do
+    local sprite = self.sprites[i]
+    sprite:pause()
+    sprite:setUpdatesEnabled(false)
+    sprite:setCollisionsEnabled(false)
+  end
+
+  -- Disable sequence from updating
+  for i = #self.sequences, 1, -1 do
+    local sequence = self.sequences[i]
+    sequence:pause()
+  end
+
   removeHandler(self)
 end
 
@@ -97,6 +121,21 @@ function RoxyScene:resume()
   if not self.isPaused then return end
   Log.debug("[RoxyScene:resume] Resuming Scene: " .. self.name) --#DEBUG
   self.isPaused = false
+
+  -- Enable sprites for updating and colliding
+  for i = #self.sprites, 1, -1 do
+    local sprite = self.sprites[i]
+    sprite:setUpdatesEnabled(true)
+    sprite:setCollisionsEnabled(true)
+    sprite:play()
+  end
+
+  -- Enable sequences for updating
+  for i = #self.sequences, 1, -1 do
+    local sequence = self.sequences[i]
+    sequence:play()
+  end
+
   self:addHandler()
 end
 
@@ -115,7 +154,13 @@ function RoxyScene:cleanup()
   Log.debug("[RoxyScene:cleanup] Cleaning Up Scene: " .. self.name) --#DEBUG
 
   removeHandler(self)
+
+  self:removeAllSprites()
+  self:removeAllTilemaps()
+  self:removeAllSequences()
   self:resetDrawOffset()
+
+  resetCamera()
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -125,9 +170,9 @@ end
 
 -- TODO: Add sprite management methods etc. HERE
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Background Drawing
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Background
 function RoxyScene:setBackground(background)
@@ -165,9 +210,151 @@ function RoxyScene:setBackground(background)
   redrawBackground()
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Sprites
+--------------------------------------------------------------------------------
+
+-- ! Add Sprite
+function RoxyScene:addSprite(sprite)
+  if not sprite then return end
+
+  -- Give the sprite a back‑pointer so it can self‑remove later
+  sprite.scene = self
+
+  for i = 1, #self.sprites do
+    if self.sprites[i] == sprite then
+      return
+    end
+  end
+
+  tableInsert(self.sprites, sprite)
+  sprite:add()
+end
+
+-- ! Remove Sprite
+function RoxyScene:removeSprite(sprite)
+  if not sprite then return end
+
+  for i = #self.sprites, 1, -1 do
+    if self.sprites[i] == sprite then
+      sprite.scene = nil -- Clear back‑pointer
+      sprite:remove()
+      tableRemove(self.sprites, i)
+      return
+    end
+  end
+end
+
+-- ! Remove All Sprites
+function RoxyScene:removeAllSprites()
+  for i = #self.sprites, 1, -1 do
+    self.sprites[i]:remove()
+  end
+  self.sprites = {}
+end
+
+-- ! Spawn Sprite
+function RoxyScene:spawnSprite(spriteOpts)
+  return RoxySprite(spriteOpts, self)
+end
+
+--------------------------------------------------------------------------------
+-- Tilemaps
+--------------------------------------------------------------------------------
+
+-- ! Add Tilemap
+function RoxyScene:addTilemap(tilemap)
+  if not tilemap then return end
+
+  for i = 1, #self.tilemaps do
+    if self.tilemaps[i] == tilemap then
+      return
+    end
+  end
+
+  tableInsert(self.tilemaps, tilemap)
+
+  -- Give the tilemap a back‑pointer so it can self‑remove later
+  tilemap.scene = self
+end
+
+-- ! Remove Tilemap
+function RoxyScene:removeTilemap(tilemap)
+  if not tilemap then return end
+  for i = #self.tilemaps, 1, -1 do
+    if self.tilemaps[i] == tilemap then
+      tilemap.scene = nil -- Clear back‑pointer
+      tilemap:destroy()
+      tableRemove(self.tilemaps, i)
+      return
+    end
+  end
+end
+
+-- ! Remove All Tilemaps
+function RoxyScene:removeAllTilemaps()
+  for i = #self.tilemaps, 1, -1 do
+    self.tilemaps[i]:destroy()
+  end
+  self.tilemaps = {}
+end
+
+-- ! Spawn Tilemap
+function RoxyScene:spawnTilemap(path, tilemapOpts)
+  return RoxyTilemap(path, tilemapOpts, self)
+end
+
+--------------------------------------------------------------------------------
+-- Sequences
+--------------------------------------------------------------------------------
+
+-- ! Add Sequence
+function RoxyScene:addSequence(sequence)
+  if not sequence then return end
+
+  for i = 1, #self.sequences do
+    if self.sequences[i] == sequence then
+      return
+    end
+  end
+
+  tableInsert(self.sequences, sequence)
+
+  -- Give the sequence a back‑pointer so it can self‑remove later
+  sequence.scene = self
+
+  sequence:play()
+end
+
+-- ! Remove Sequence
+function RoxyScene:removeSequence(sequence)
+  if not sequence then return end
+  for i = #self.sequences, 1, -1 do
+    if self.sequences[i] == sequence then
+      sequence.scene = nil -- Clear back‑pointer
+      sequence:clear(true)
+      tableRemove(self.sequences, i)
+      return
+    end
+  end
+end
+
+-- ! Remove All Sequences
+function RoxyScene:removeAllSequences()
+  for i = #self.sequences, 1, -1 do
+    self.sequences[i]:clear(true)
+  end
+  self.sequences = {}
+end
+
+-- ! Spawn Sequence
+function RoxyScene:spawnSequence()
+  return RoxySequence(self)
+end
+
+--------------------------------------------------------------------------------
 -- Utilities
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Input Handler
 function RoxyScene:addHandler()

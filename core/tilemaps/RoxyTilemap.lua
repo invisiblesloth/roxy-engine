@@ -404,6 +404,11 @@ function RoxyTilemap:init(jsonPath, opts, scene)
       self.objectLayers[layer.name] = layer.objects or {}
     end
   end
+
+  -- Attach to a scene immediately (optional)
+  if scene and scene.addTilemap then
+    scene:addTilemap(self)
+  end
 end
 
 -- ---------------------------------- --
@@ -532,4 +537,11 @@ function RoxyTilemap:destroy()
   self.sprites = {}
   self.tilesets = nil
   self.objectLayers = nil
+
+  if self.scene then
+    local scene = self.scene
+    self.scene = nil
+    -- Guard against double‑removal
+    if scene.removeTilemap then scene:removeTilemap(self) end
+  end
 end

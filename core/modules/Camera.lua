@@ -31,7 +31,6 @@ local CENTER_X <const> = roxy.Graphics.displayWidthCenter
 local CENTER_Y <const> = roxy.Graphics.displayHeightCenter
 
 -- Global State
-
 Camera.x                = 0     -- current x position
 Camera.y                = 0     -- current y position
 Camera._velocityX       = 0     -- velocity in x direction
@@ -259,19 +258,29 @@ end
 -- ! Reset
 -- Resets the camera to its default state
 function Camera.reset()
-  Camera.x, Camera.y = 0, 0
-  Camera._velocityX, Camera._velocityY = 0, 0
-  Camera._targetX, Camera._targetY = 0, 0
-  Camera._lastX, Camera._lastY = 0, 0
-  Camera.target = nil
-  Camera._bounds = nil
-  Camera._hasBounds = false
-  Camera.smoothing = 0
-  Camera._minX, Camera._minY = 0, 0
-  Camera._maxX, Camera._maxY = 0, 0
-  Camera._shakeAmplitude, Camera.shakeDuration, Camera._shakeFrequency, Camera._shakeTimer = 0, 0, 0, 0
-  Camera._deadZoneWidth, Camera._deadZoneHeight = 0, 0
-  Camera._updateFunc = Camera.updateStatic
+  Camera.x                = 0
+  Camera.y                = 0
+  Camera._velocityX       = 0
+  Camera._velocityY       = 0
+  Camera._lastX           = 0
+  Camera._lastY           = 0
+  Camera._targetX         = 0
+  Camera._targetY         = 0
+  Camera.target           = nil
+  Camera._bounds          = nil
+  Camera._hasBounds       = false
+  Camera._minX            = 0
+  Camera._minY            = 0
+  Camera._maxX            = 0
+  Camera._maxY            = 0
+  Camera.smoothing        = 0
+  Camera._shakeAmplitude  = 0
+  Camera.shakeDuration    = 0
+  Camera._shakeFrequency  = 0
+  Camera._shakeTimer      = 0
+  Camera._deadZoneWidth   = 0
+  Camera._deadZoneHeight  = 0
+  Camera.friction         = FRICTION_DEFAULT
 
   -- Immediate screen‑space reset
   setDrawOffset(0, 0)

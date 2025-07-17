@@ -111,7 +111,7 @@ function FadeToColor:init(opts)
   local baseConfig = getTransitionConfig("FadeToColor")
 
   -- Build final configuration with runtime options
-  local builder = ConfigBuilder(baseConfig)
+  local builder = TableBuilder(baseConfig)
     :with(opts)
 
   local config = builder:build()
@@ -254,7 +254,7 @@ function FadeToColor:execute(newScene, currentScene)
 
   self:_setupSequence()
   self:_onStart()
-  self.sequence:start()
+  self.sequence:play()
 end
 
 -- ! Draw
