@@ -29,6 +29,7 @@ local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 
 class("RoxySprite").extends(Sprite)
 
+-- ! Initialize
 function RoxySprite:init(opts)
   opts = opts or {}
   RoxySprite.super.init(self)
@@ -43,7 +44,7 @@ function RoxySprite:init(opts)
   self._drawFn      = nil
 
   -- Attach to a scene immediately (optional)
-  if opts.scene then
+  if opts.scene and opts.scene.addSprite then
     opts.scene:addSprite(self)
   end
 
