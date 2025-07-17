@@ -16,7 +16,12 @@ local pd <const> = playdate
 local tableInsert <const> = table.insert
 local tableRemove <const> = table.remove
 
-local runningSequences = {}
+local runningSequences
+
+-- ! Initialize
+function Sequencer.init()
+  runningSequences = {}
+end
 
 -- ! Add
 -- Adds a sequence to the list of running sequences.
