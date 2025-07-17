@@ -8,7 +8,7 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local getDisplayImage       <const> = Graphics.getDisplayImage
+local getDisplayImage <const> = Graphics.getDisplayImage
 
 local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
 local redrawBackground      <const> = Sprite.redrawBackground
@@ -16,13 +16,13 @@ local redrawBackground      <const> = Sprite.redrawBackground
 local MAX_SCENE_DEPTH <const> = 32
 
 -- Global
-Scene.currentScene = nil  -- Currently active scene (top of stack)
+Scene.currentScene = nil
 
 -- Local
-local scenes = {}     -- Registered scenes
-local stack = {}      -- Scene stack
-local updateList = {} -- Pre-filtered update list
-local bgList = {}     -- Pre-filtered bg update lists
+local scenes
+local stack
+local updateList
+local bgList
 
 -- ----------------------------------------
 -- Utilities
@@ -68,17 +68,33 @@ local function activateScene(scene)
 end
 
 -- ----------------------------------------
+-- ! Initialize Scene module
+-- ----------------------------------------
+
+function Scene.init()
+  -- Clear registered scenes, stack and lists
+  scenes = {}     -- Registered scenes
+  stack = {}      -- Scene stack
+  updateList = {} -- Pre-filtered update list
+  bgList = {}     -- Pre-filtered bg update lists
+
+  Scene.currentScene = nil -- Currently active scene (top of stack)
+
+  rebuildLists()
+end
+
+-- ----------------------------------------
 -- Scene Registration
 -- ----------------------------------------
 
 -- ! Register Scenes
 function Scene.registerScenes(...)
-  local params = { ... }
-  local paramCount = #params
+  local args = { ... }
+  local argCount = #args
 
   -- Case 1: registerScenes("name", sceneTable)
-  if paramCount == 2 then
-    local sceneName, sceneTable = params[1], params[2]
+  if argCount == 2 then
+    local sceneName, sceneTable = args[1], args[2]
 
     if type(sceneName) ~= "string" then
       Log.error("[Scene.registerScenes] First argument must be a string scene name.", 2) --#DEBUG
@@ -94,8 +110,8 @@ function Scene.registerScenes(...)
   end
 
   -- Case 2: registerScenes({ name1 = table1, name2 = table2, ... })
-  if paramCount == 1 then
-    local sceneTable = params[1]
+  if argCount == 1 then
+    local sceneTable = args[1]
 
     if type(sceneTable) ~= "table" then
       Log.error("[Scene.registerScenes] Single argument must be a table of scenes.", 2) --#DEBUG
@@ -151,13 +167,17 @@ function Scene.replaceScene(newScene)
   end
 
   local oldScene = Scene.currentScene
-  Scene.replaceRaw(newScene)
 
-  if oldScene then
-    oldScene:exit()
-    oldScene:cleanup()
+  -- Exit and cleanup all scenes on the stack before replacing
+  for i = #stack, 1, -1 do
+    local scene = stack[i]
+    if scene then
+      scene:exit()
+      scene:cleanup()
+    end
   end
 
+  Scene.replaceRaw(newScene)
   activateScene(newScene)
 end
 
@@ -194,7 +214,6 @@ function Scene.pushScene(newScene)
   end
 
   Scene.pushRaw(newScene)
-
   activateScene(newScene)
 end
 
@@ -223,6 +242,7 @@ function Scene.popScene()
   local oldScene = Scene.popRaw()
 
   if oldScene then
+    oldScene:exit()
     oldScene:cleanup()
   end
 
