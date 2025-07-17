@@ -30,7 +30,7 @@ local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 class("RoxySprite").extends(Sprite)
 
 -- ! Initialize
-function RoxySprite:init(opts)
+function RoxySprite:init(opts, scene)
   opts = opts or {}
   RoxySprite.super.init(self)
 
@@ -43,11 +43,6 @@ function RoxySprite:init(opts)
   self.simpleAnim   = nil
   self._drawFn      = nil
 
-  -- Attach to a scene immediately (optional)
-  if opts.scene and opts.scene.addSprite then
-    opts.scene:addSprite(self)
-  end
-
   if opts.view then
     self:setView(
       opts.view,
@@ -56,6 +51,11 @@ function RoxySprite:init(opts)
       opts.singleAnimLoop ~= false,
       opts.frameDuration or 0.1
     )
+  end
+
+  -- Attach to a scene immediately (optional)
+  if scene and scene.addSprite then
+    scene:addSprite(self)
   end
 end
 
@@ -469,6 +469,11 @@ function RoxySprite:remove()
   if self.isRoxySprite and (self.animation or self.simpleAnim) then
     self:stop()
   end
+
+  -- Pause and disable sprite systems
+  if self.isRoxySprite then self:pause() end
+  self:setUpdatesEnabled(false)
+  self:setCollisionsEnabled(false)
 
   -- Automatically detach from owning scene, if any
   if self.scene then
