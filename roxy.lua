@@ -22,6 +22,7 @@ import "libraries/roxy/core/modules/Debug" --#DEBUG
 
 -- Utilities
 import "libraries/roxy/utilities/Table"
+import "libraries/roxy/utilities/TableBuilder"
 import "libraries/roxy/utilities/Math"
 import "libraries/roxy/utilities/JSON"
 import "libraries/roxy/utilities/Ease"
