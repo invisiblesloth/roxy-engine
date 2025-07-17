@@ -42,19 +42,19 @@ local getConfig <const> = roxy.Config.get
 
 local SAVE_SLOTS_DEFAULT <const> = 3
 
-local maxSlots
+local maxSlots = SAVE_SLOTS_DEFAULT
 
 --------------------------------------------------------------------------------
 -- Internal state Declarations
 --------------------------------------------------------------------------------
 
-local gameData
-local defaults
-local haveSetup
-local slotCountAtSetup
-local numberOfSlots
-local currentSlot
-local savePending
+local gameData         = {}     -- [slot] = { data=tbl, timestamp=int, dirty=bool }
+local defaults         = nil    -- Template table
+local haveSetup        = false
+local slotCountAtSetup = 1
+local numberOfSlots    = 1
+local currentSlot      = 1
+local savePending      = false  -- Batch-save flag
 
 --------------------------------------------------------------------------------
 -- Utilities
@@ -171,22 +171,6 @@ end
 -- Setup
 --------------------------------------------------------------------------------
 
--- ! Initialize
-function GameData.init()
-  -- Fetch config for save slot limits
-  local gameDataConfig = getConfig("gameData") or {}
-  maxSlots = gameDataConfig.saveSlots or SAVE_SLOTS_DEFAULT
-
-  -- Reset internal state (safe to call multiple times)
-  gameData         = {}     -- [slot] = { data=tbl, timestamp=int, dirty=bool }
-  defaults         = nil    -- Template table
-  haveSetup        = false
-  slotCountAtSetup = 1
-  numberOfSlots    = 1
-  currentSlot      = 1
-  savePending      = false  -- Batch-save flag
-end
-
 -- ! Setup
 function GameData.setup(template, slots, opts)
   if haveSetup then return false end
@@ -194,10 +178,15 @@ function GameData.setup(template, slots, opts)
   if slots and (type(slots) ~= "number" or slots < 1) then return false end
   opts = opts or {}
 
+  -- Fetch config for save slot limits (moved from init)
+  local gameDataConfig = getConfig("gameData") or {}
+  local configMaxSlots = gameDataConfig.saveSlots or SAVE_SLOTS_DEFAULT
+
   defaults = template
   slotCountAtSetup = slots or 1
-  -- TODO: Add in config `getConfig("maxSaveSlots", SAVE_SLOTS_DEFAULT)`
-  maxSlots = max(slotCountAtSetup, SAVE_SLOTS_DEFAULT)
+
+  -- Use the higher of requested slots or config limit
+  maxSlots = max(slotCountAtSetup, configMaxSlots)
 
   for i = 1, slotCountAtSetup do
     local stored = readData("Game" .. i)
@@ -208,7 +197,10 @@ function GameData.setup(template, slots, opts)
     local missing = false
     if useStored then
       for k in pairs(defaults) do
-        if rawget(dataTbl, k) == nil then dataTbl[k] = defaults[k]; missing = true end
+        if rawget(dataTbl, k) == nil then
+          dataTbl[k] = defaults[k]
+          missing = true
+        end
       end
     end
 
