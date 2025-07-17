@@ -13,9 +13,9 @@ local Object  <const> = pd.object
 local addSequence     <const> = roxy.Sequencer.add
 local removeSequence  <const> = roxy.Sequencer.remove
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- ! Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 class("RoxySequence").extends(Object)
 
@@ -37,9 +37,9 @@ function RoxySequence:init(scene)
   self.getTotalDuration = self.easingArray.getTotalDuration
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Sequence Props
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Name
 function RoxySequence:setName(name)
@@ -58,9 +58,9 @@ function RoxySequence:getPacing()
   return self.pacing
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Manage Sequence
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Add
 function RoxySequence:add()
@@ -91,9 +91,9 @@ function RoxySequence:clear(clearEasings)
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Easing & Keyframing
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Add Easing
 function RoxySequence:addEasing(timestamp, from, to, duration, easeFunction)
@@ -144,9 +144,9 @@ function RoxySequence:callback(callbackFunction, timeOffset)
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Rinse & Repeat
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Loop
 -- Set sequence to loop continuously
@@ -185,17 +185,39 @@ function RoxySequence:disableLoop()
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Playback
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
--- ! Start
-function RoxySequence:start()
+-- ! Play
+-- Start or resume the sequence from current position
+function RoxySequence:play()
   if #self.easingArray == 0 then return self end
   if not self.isRunning then
     self:add()
   end
   return self
+end
+
+-- ! Pause
+-- Pause the sequence at current position (can be resumed with play)
+function RoxySequence:pause()
+  if self.isRunning then
+    self:remove()
+  end
+  return self
+end
+
+-- ! Is Paused
+-- Check if sequence is paused (has easings but not running)
+function RoxySequence:isPaused()
+  return #self.easingArray > 0 and not self.isRunning
+end
+
+-- ! Is Playing
+-- Check if sequence is actively playing
+function RoxySequence:isPlaying()
+  return self.isRunning
 end
 
 -- ! Stop
@@ -223,9 +245,9 @@ function RoxySequence:reset()
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Runtime
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Is Done
 function RoxySequence:isDone()
