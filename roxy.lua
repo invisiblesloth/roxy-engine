@@ -37,10 +37,10 @@ import "libraries/roxy/core/modules/Assets"
 import "libraries/roxy/core/modules/Input"
 import "libraries/roxy/core/modules/Sequencer"
 import "libraries/roxy/core/modules/Camera"
-import "libraries/roxy/core/modules/Scene"
-import "libraries/roxy/core/modules/Transition"
 import "libraries/roxy/core/modules/Sounds"
 import "libraries/roxy/core/modules/Music"
+import "libraries/roxy/core/modules/Scene"
+import "libraries/roxy/core/modules/Transition"
 
 -- Core Components
 import "libraries/roxy/core/sequences/RoxySequence"
@@ -51,13 +51,6 @@ import "libraries/roxy/core/physics/RoxyPhysicsBody"
 import "libraries/roxy/core/animations/RoxyAnimation"
 import "libraries/roxy/core/tilemaps/RoxyTilemap"
 import "libraries/roxy/core/scenes/RoxyScene"
-
--- Transitions
-import "libraries/roxy/core/transitions/RoxyTransition"
-import "libraries/roxy/core/transitions/Cut"
-import "libraries/roxy/core/transitions/FadeToColor"
-import "libraries/roxy/core/transitions/CrossDissolve"
-import "libraries/roxy/core/transitions/ImageTable"
 
 -- Create global Roxy table if it does not already exist
 roxy = roxy or {}
@@ -114,13 +107,6 @@ local FPS_X_DEFAULT     <const> = 385     --#DEBUG
 local FPS_Y_DEFAULT     <const> = 228     --#DEBUG
 local LOG_LEVEL_DEFAULT <const> = "info"  --#DEBUG
 
-local DEFAULT_TRANSITIONS = {
-  Cut           = Cut,
-  FadeToColor   = FadeToColor,
-  CrossDissolve = CrossDissolve,
-  ImageTable    = ImageTable,
-}
-
 -- Local State
 local engineInitialized = false
 local engineStarted = false
@@ -157,25 +143,14 @@ end
 
 -- ! Register Modules
 function r.registerModules(config)
-  -- Register transitions
-  local userTransitions
-  local allTransitions
-  if config.customTransitions then
-    userTransitions = config and config.customTransitions or {}
-    allTransitions = mergeImmutable(DEFAULT_TRANSITIONS, userTransitions)
-  else
-    allTransitions = DEFAULT_TRANSITIONS
-  end
-  loadTransitions(allTransitions)
-
-  -- Initialize managers
   Cache.init()
   Input.init()
   Sequencer.init()
   Camera.reset()
-  Scene.init()
   Sounds.init()
   Music.init()
+  Scene.init()
+  Transition.init()
 end
 
 -- ! Replace Scene

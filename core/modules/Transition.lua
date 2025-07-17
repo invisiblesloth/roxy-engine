@@ -1,5 +1,11 @@
 -- core/modules/Transition.lua
 
+import "libraries/roxy/core/transitions/RoxyTransition"
+import "libraries/roxy/core/transitions/Cut"
+import "libraries/roxy/core/transitions/FadeToColor"
+import "libraries/roxy/core/transitions/CrossDissolve"
+import "libraries/roxy/core/transitions/ImageTable"
+
 roxy = roxy or {}
 roxy.Transition = roxy.Transition or {}
 local Transition <const> = roxy.Transition
@@ -11,7 +17,7 @@ local r       <const> = roxy
 local Config  <const> = r.Config
 local Scene   <const> = r.Scene
 
-local mergeTableImmutable <const> = r.Table.mergeImmutable
+local mergeImmutable <const> = r.Table.mergeImmutable
 
 local getConfig           <const> = Config.get
 local getTransitionConfig <const> = Config.getTransitionConfig
@@ -24,6 +30,11 @@ local setDrawMode <const> = Graphics.setImageDrawMode
 
 local EMPTY_TABLE   <const> = {}
 
+local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
+
+local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
+local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+
 local STACK_OP_REPLACE <const> = 0
 local STACK_OP_PUSH    <const> = 1
 local STACK_OP_POP     <const> = 2
@@ -32,10 +43,12 @@ local TRANSITION_DEFAULT          <const> = "Cut"
 local TRANSITION_DURATION_DEFAULT <const> = 1.5
 local HOLD_TIME_DEFAULT           <const> = 0.25
 
-local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
-
-local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+local DEFAULT_TRANSITIONS = {
+  Cut           = Cut,
+  FadeToColor   = FadeToColor,
+  CrossDissolve = CrossDissolve,
+  ImageTable    = ImageTable,
+}
 
 -- Global
 Transition.currentTransition  = nil
@@ -47,6 +60,35 @@ Transition.STACK_OP_POP       = STACK_OP_POP
 
 -- Local
 local transitions = {}
+
+-- ----------------------------------------
+-- ! Initialize Transition module
+-- ----------------------------------------
+
+function Transition.init()
+  -- Reset transient state
+  Transition.currentTransition = nil
+  Transition.isTransitioning   = false
+  Transition.stackOp           = STACK_OP_REPLACE
+
+  -- Clear out any previously loaded classes
+  transitions = {}
+
+  -- Merge in user’s customTransitions if present
+  local config          = getConfig("transitions") or EMPTY_TABLE
+  local userTransitions = config.customTransitions
+  local allTransitions  = DEFAULT_TRANSITIONS
+
+  if type(userTransitions) == "table" and next(userTransitions) then
+    allTransitions = mergeImmutable(DEFAULT_TRANSITIONS, userTransitions)
+  end
+
+  -- Actually register them
+  Transition.loadTransitions(allTransitions)
+
+  -- Prime the per‑transition duration/holdTime tables
+  Transition.reloadTransitionsWithNewConfig()
+end
 
 -- ----------------------------------------
 -- Scene Management
@@ -152,7 +194,8 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   local currentScene = Scene.currentScene
 
   -- Use transition or fallback to default
-  local transition = getConfig("transitions").defaultTransition or TRANSITION_DEFAULT
+  local config = getConfig("transitions") or EMPTY_TABLE
+  local transition = config.defaultTransition or TRANSITION_DEFAULT
   local transitionClass = transitions[(transitionName or transition)]
   if not transitionClass then
     Log.warn("[Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. transition) --#DEBUG
@@ -160,7 +203,7 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   end
 
   -- Merge options (arguments take precedence)
-  local transitionOpts = mergeTableImmutable(opts or {}, { stackOp = stackOp })
+  local transitionOpts = mergeImmutable(opts or {}, { stackOp = stackOp })
 
   -- Construct and execute the transition instance
   local transitionInstance = transitionClass(transitionOpts)
