@@ -111,7 +111,7 @@ function FadeToColor:init(opts)
   local baseConfig = getTransitionConfig("FadeToColor")
 
   -- Build final configuration with runtime options
-  local builder = ConfigBuilder(baseConfig)
+  local builder = TableBuilder(baseConfig)
     :with(opts)
 
   local config = builder:build()

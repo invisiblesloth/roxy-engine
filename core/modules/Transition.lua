@@ -97,7 +97,7 @@ function Transition.reloadTransitionsWithNewConfig()
     --    (b)  Global duration / holdTime
     --    (c)  Per-transition overrides (wins on clash)
 
-    local builder = ConfigBuilder({
+    local builder = TableBuilder({
       duration  = globalDuration,
       holdTime  = globalHoldTime,
       name      = name,
