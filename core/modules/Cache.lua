@@ -112,7 +112,7 @@ local function resolveBucket(firstArg, ...)
 end
 
 -- ----------------------------------
--- ! Public API
+-- Public API
 -- ----------------------------------
 
 -- ! Initialize Cache module
