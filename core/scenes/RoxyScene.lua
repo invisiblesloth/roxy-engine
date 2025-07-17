@@ -5,7 +5,8 @@ local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r         <const> = roxy
+local r       <const> = roxy
+local Camera  <const> = r.Camera
 
 local clearScreen         <const> = Graphics.clear
 local setColor            <const> = Graphics.setColor
@@ -17,6 +18,8 @@ local redrawBackground    <const> = Sprite.redrawBackground
 
 local addHandler    <const> = r.Input.addHandler
 local removeHandler <const> = r.Input.removeHandler
+
+local resetCamera <const> = Camera.reset
 
 local COLOR_WHITE <const> = Graphics.kColorWhite
 local COLOR_BLACK <const> = Graphics.kColorBlack
@@ -116,6 +119,8 @@ function RoxyScene:cleanup()
 
   removeHandler(self)
   self:resetDrawOffset()
+
+  resetCamera()
 
   self.backgroundColor = nil
   self.backgroundImage = nil
