@@ -75,6 +75,7 @@ local Cache       <const> = r.Cache
 local Config      <const> = r.Config
 local Input       <const> = r.Input
 local Sequencer   <const> = r.Sequencer
+local Camera      <const> = r.Camera
 local Scene       <const> = r.Scene
 local Transition  <const> = r.Transition
 local Music       <const> = r.Music
@@ -157,14 +158,22 @@ end
 -- ! Register Modules
 function r.registerModules(config)
   -- Register transitions
-  local userTransitions = config and config.customTransitions or nil
-  local allTransitions = mergeImmutable(DEFAULT_TRANSITIONS, userTransitions)
+  local userTransitions
+  local allTransitions
+  if config.customTransitions then
+    userTransitions = config and config.customTransitions or {}
+    allTransitions = mergeImmutable(DEFAULT_TRANSITIONS, userTransitions)
+  else
+    allTransitions = DEFAULT_TRANSITIONS
+  end
   loadTransitions(allTransitions)
 
   -- Initialize managers
-  GameData.init()
   Cache.init()
   Input.init()
+  Sequencer.init()
+  Camera.reset()
+  Scene.init()
   Sounds.init()
   Music.init()
 end
