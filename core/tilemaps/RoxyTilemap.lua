@@ -404,6 +404,11 @@ function RoxyTilemap:init(jsonPath, opts, scene)
       self.objectLayers[layer.name] = layer.objects or {}
     end
   end
+
+  -- Attach to a scene immediately (optional)
+  if opts.scene and opts.scene.addTilemap then
+    opts.scene:addTilemap(self)
+  end
 end
 
 -- ---------------------------------- --

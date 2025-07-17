@@ -8,6 +8,9 @@ local Sprite    <const> = Graphics.sprite
 local r       <const> = roxy
 local Camera  <const> = r.Camera
 
+local tableInsert <const> = table.insert
+local tableRemove <const> = table.remove
+
 local clearScreen         <const> = Graphics.clear
 local setColor            <const> = Graphics.setColor
 local setDrawOffset       <const> = Graphics.setDrawOffset
@@ -63,6 +66,7 @@ function RoxyScene:init(background)
 
   self.inputHandler = {}
   self.sprites = {}
+  self.tilemaps = {}
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -146,6 +150,7 @@ function RoxyScene:cleanup()
   end
 
   self:removeAllSprites()
+  self:removeAllTilemaps()
 
   self:resetDrawOffset()
 
@@ -216,7 +221,7 @@ function RoxyScene:addSprite(sprite)
     end
   end
 
-  table.insert(self.sprites, sprite)
+  tableInsert(self.sprites, sprite)
   sprite:add()
 end
 
@@ -228,7 +233,7 @@ function RoxyScene:removeSprite(sprite)
     if self.sprites[i] == sprite then
       sprite.scene = nil -- Clear back‑pointer
       sprite:remove()
-      table.remove(self.sprites, i)
+      tableRemove(self.sprites, i)
       return
     end
   end
@@ -247,6 +252,54 @@ function RoxyScene:spawnSprite(spriteOpts)
   spriteOpts = spriteOpts or {}
   spriteOpts.scene = self
   return RoxySprite(spriteOpts)
+end
+
+--------------------------------------------------------------------------------
+-- Tilemaps
+--------------------------------------------------------------------------------
+
+-- ! Add Tilemap
+function RoxyScene:addTilemap(tilemap)
+  if not tilemap then return end
+
+  for i = 1, #self.tilemaps do
+    if self.tilemaps[i] == tilemap then
+      return
+    end
+  end
+
+  tableInsert(self.tilemaps, tilemap)
+
+  -- Give the tilemap a back‑pointer so it can self‑remove later
+  tilemap.scene = self
+end
+
+-- ! Remove Tilemap
+function RoxyScene:removeTilemap(tilemap)
+  if not tilemap then return end
+  for i = #self.tilemaps, 1, -1 do
+    if self.tilemaps[i] == tilemap then
+      tilemap.scene = nil -- Clear back‑pointer
+      tilemap:destroy()
+      tableRemove(self.tilemaps, i)
+      return
+    end
+  end
+end
+
+-- ! Remove All Tilemaps
+function RoxyScene:removeAllTilemaps()
+  for i = #self.tilemaps, 1, -1 do
+    self.tilemaps[i]:destroy() -- <-- Call destroy on each!
+  end
+  self.tilemaps = {}
+end
+
+-- ! Spawn Tilemap
+function RoxyScene:spawnTilemap(path, tilemapOpts)
+  local tilemap = RoxyTilemap(path, tilemapOpts, self)
+  self:addTilemap(tilemap)
+  return tilemap
 end
 
 --------------------------------------------------------------------------------
