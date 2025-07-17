@@ -254,7 +254,7 @@ function FadeToColor:execute(newScene, currentScene)
 
   self:_setupSequence()
   self:_onStart()
-  self.sequence:start()
+  self.sequence:play()
 end
 
 -- ! Draw

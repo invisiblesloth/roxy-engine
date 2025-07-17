@@ -261,7 +261,7 @@ function CrossDissolve:execute(newScene, currentScene)
   self:_onStart()
   self:_onMidpoint()
   self:_onHoldElapsed()
-  self.sequence:start()
+  self.sequence:play()
 end
 
 -- ! Draw

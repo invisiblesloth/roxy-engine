@@ -368,7 +368,7 @@ function ImageTable:execute(newScene, currentScene)
   -- ImageTable-specific execution
   self:_setupSequence()
   self:_onStart()
-  self.sequence:start()
+  self.sequence:play()
 end
 
 -- ! Draw
