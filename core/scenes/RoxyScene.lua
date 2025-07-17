@@ -67,6 +67,7 @@ function RoxyScene:init(background)
   self.inputHandler = {}
   self.sprites = {}
   self.tilemaps = {}
+  self.sequences = {}
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -142,16 +143,9 @@ function RoxyScene:cleanup()
 
   removeHandler(self)
 
-  for i = #self.sprites, 1, -1 do
-    local sprite = self.sprites[i]
-    if sprite.isRoxySprite then sprite:pause() end
-    sprite:setUpdatesEnabled(false)
-    sprite:setCollisionsEnabled(false)
-  end
-
   self:removeAllSprites()
   self:removeAllTilemaps()
-
+  self:removeAllSequences()
   self:resetDrawOffset()
 
   resetCamera()
@@ -249,9 +243,7 @@ end
 
 -- ! Spawn Sprite
 function RoxyScene:spawnSprite(spriteOpts)
-  spriteOpts = spriteOpts or {}
-  spriteOpts.scene = self
-  return RoxySprite(spriteOpts)
+  return RoxySprite(spriteOpts, self)
 end
 
 --------------------------------------------------------------------------------
@@ -290,16 +282,62 @@ end
 -- ! Remove All Tilemaps
 function RoxyScene:removeAllTilemaps()
   for i = #self.tilemaps, 1, -1 do
-    self.tilemaps[i]:destroy() -- <-- Call destroy on each!
+    self.tilemaps[i]:destroy()
   end
   self.tilemaps = {}
 end
 
 -- ! Spawn Tilemap
 function RoxyScene:spawnTilemap(path, tilemapOpts)
-  local tilemap = RoxyTilemap(path, tilemapOpts, self)
-  self:addTilemap(tilemap)
-  return tilemap
+  return RoxyTilemap(path, tilemapOpts, self)
+end
+
+--------------------------------------------------------------------------------
+-- Sequences
+--------------------------------------------------------------------------------
+
+-- ! Add Sequence
+function RoxyScene:addSequence(sequence)
+  if not sequence then return end
+
+  for i = 1, #self.sequences do
+    if self.sequences[i] == sequence then
+      return
+    end
+  end
+
+  tableInsert(self.sequences, sequence)
+
+  -- Give the sequence a back‑pointer so it can self‑remove later
+  sequence.scene = self
+
+  sequence:start()
+end
+
+-- ! Remove Sequence
+function RoxyScene:removeSequence(sequence)
+  if not sequence then return end
+  for i = #self.sequences, 1, -1 do
+    if self.sequences[i] == sequence then
+      sequence.scene = nil -- Clear back‑pointer
+      sequence:clear(true)
+      tableRemove(self.sequences, i)
+      return
+    end
+  end
+end
+
+-- ! Remove All Sequences
+function RoxyScene:removeAllSequences()
+  for i = #self.sequences, 1, -1 do
+    self.sequences[i]:clear(true)
+  end
+  self.sequences = {}
+end
+
+-- ! Spawn Sequence
+function RoxyScene:spawnSequence()
+  return RoxySequence(self)
 end
 
 --------------------------------------------------------------------------------

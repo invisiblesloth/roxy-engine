@@ -19,7 +19,7 @@ local removeSequence  <const> = roxy.Sequencer.remove
 
 class("RoxySequence").extends(Object)
 
-function RoxySequence:init()
+function RoxySequence:init(scene)
   self.isRunning    = false
   self.pacing       = 1
   self.loopType     = 0 -- 0 = no loop, 1 = loop, and 2 = ping-pong
@@ -27,6 +27,11 @@ function RoxySequence:init()
   self.callbacks    = {}
   self.currentValue = 0
   self.completed    = false
+
+  -- Attach to a scene immediately (optional)
+  if scene and scene.addSequence then
+    scene:addSequence(self)
+  end
 
   self.updateAndGetValue = self.easingArray.updateAndGetValue
   self.getTotalDuration = self.easingArray.getTotalDuration
@@ -76,6 +81,13 @@ function RoxySequence:clear(clearEasings)
   self.callbacks = {}
   if clearEasings then
     self.easingArray:clear()
+  end
+
+  if self.scene then
+    local scene = self.scene
+    self.scene = nil
+    -- Guard against double‑removal
+    if scene.removeSequence then scene:removeSequence(self) end
   end
 end
 
