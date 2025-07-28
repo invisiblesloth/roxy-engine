@@ -96,8 +96,6 @@ function RoxyTransition:_onMidpoint()
   if stackOp == STACK_OP_POP then
     if oldScene then
       oldScene:cleanup()
-      collectgarbage("collect")
-      Log.debug("Heap: " .. collectgarbage("count") / 1024 .. " MB")
     end
     if newScene then
       newScene:resume()
@@ -112,8 +110,6 @@ function RoxyTransition:_onMidpoint()
   else -- Replace
     if oldScene then
       oldScene:cleanup()
-      collectgarbage("collect")
-      Log.debug("Heap: " .. collectgarbage("count") / 1024 .. " MB")
     end
     if newScene then
       newScene:enter()
