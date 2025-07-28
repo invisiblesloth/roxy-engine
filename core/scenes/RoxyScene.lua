@@ -143,7 +143,11 @@ end
 function RoxyScene:exit()
   if self._didExit then return end
   self._didExit = true
+
   Log.debug("[RoxyScene:exit] Exiting Scene: " .. self.name) --#DEBUG
+
+  collectgarbage("collect")
+  Log.debug("Heap: " .. collectgarbage("count") / 1024 .. " MB") --#DEBUG
 end
 
 -- ! Cleanup

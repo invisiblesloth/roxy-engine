@@ -240,6 +240,12 @@ function pd.update()
   local dt = getDeltaTime()
   r.deltaTime = dt
 
+  --#DEBUG START
+  if r.deltaTime > 0.05 then
+    Log.debug("Long frame: " .. r.deltaTime)
+  end
+  --#DEBUG END
+
   handleInput()
   updateSequences(dt)
   spriteUpdate()
