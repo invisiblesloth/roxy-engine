@@ -36,7 +36,7 @@ static PDButtons currentState = 0;
 // Track how long each button is held (in frames)
 static int buttonHoldCounts[NUM_BUTTONS] = {0};
 
-// Configurable from Lua: Number of frames a button must be held 
+// Configurable from Lua: Number of frames a button must be held
 // before triggering a hold event.
 static int buttonHoldBufferAmount = 3; // Default: 3 frames
 

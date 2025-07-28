@@ -7,7 +7,7 @@
     "enableVisualDebugChecks": false
   },
   "input": {
-    "buttonHoldBufferAmount": 3,
+    "buttonHoldBufferAmount": 0,
     "crankDirection": 1
   },
   "assets": {
