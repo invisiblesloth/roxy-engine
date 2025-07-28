@@ -242,7 +242,7 @@ function pd.update()
 
   --#DEBUG START
   if r.deltaTime > 0.05 then
-    Log.debug("long frame " .. r.deltaTime)
+    Log.debug("Long frame: " .. r.deltaTime)
   end
   --#DEBUG END
 
