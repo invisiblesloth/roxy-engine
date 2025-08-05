@@ -24,6 +24,9 @@ local processAllButtons         <const> = Input.processAllButtons
 
 local flushButtonQueue <const> = Input.flushButtonQueue
 
+-- Raw mask of the six tracked buttons (A, B, Up, Down, Left, Right)
+local RAW_BUTTON_MASK <const> = 0x3F
+
 local BUTTON_HOLD_BUFFER_DEFAULT  <const> = 3 -- Frames for button hold detection
 local CRANK_DIRECTION_DEFAULT     <const> = 1
 
@@ -58,6 +61,8 @@ local inputKeys = {
 local stubHandler = {}
 for _, k in ipairs(inputKeys) do stubHandler[k] = function() end end
 
+local _persistentMergedHandler = {}
+
 -- Internal State
 local buttonHoldBufferAmount
 local crankIndicatorActive
@@ -68,7 +73,7 @@ local activeMergedHandler
 local autoFlushEnabled
 local pendingRegistryDirty
 
-Input.crankDirection = CRANK_DIRECTION_DEFAULT
+Input.crankDirection          = CRANK_DIRECTION_DEFAULT
 Input.isEnabled               = true  -- Input starts enabled
 Input._blocked                = false -- true when blocking until all buttons are released
 Input.clearQueueOnSetHandler  = true  -- auto flush/block on handler set
@@ -99,7 +104,8 @@ end
 -- Merges all handlers by priority into a new table
 local function _mergeHandlers()
   tableSort(handlerRegistry, function(a, b) return a.priority > b.priority end)
-  local merged = {}
+  local merged = _persistentMergedHandler
+  for k in pairs(merged) do merged[k] = nil end -- Clear, don't reallocate
   for _, key in ipairs(inputKeys) do
     for _, handler in ipairs(handlerRegistry) do
       local fn = handler.tbl[key]
@@ -121,6 +127,7 @@ function Input.init()
   local inputConfig = getConfig("input") or {}
 
   buttonHoldBufferAmount  = inputConfig.buttonHoldBufferAmount or BUTTON_HOLD_BUFFER_DEFAULT
+
   crankIndicatorActive    = false
   crankIndicatorForced    = false
 
@@ -367,27 +374,38 @@ end
 function Input.handleInput()
   if not Input.isEnabled or not activeMergedHandler then return end
 
+  -- Block until every button is released (scene transitions, etc.)
   if Input._blocked then
-    local current = getButtonState()
-    if current == 0 then
+    if getButtonState() == 0 then
       Log.debug("[Input.handleInput] Buttons released, unblocking input handler.") --#DEBUG
       Input._blocked = false
-      getButtonState() -- Safety
+      getButtonState() -- Flush justPressed/justReleased
     end
     return
   end
 
   local handler = activeMergedHandler
   local mask = processAllButtons()
-  if not mask then return end
 
-  -- Test each bit (0–5)
+  -- Fallback path – call getButtonState() only if helper produced nil or zero
+  if not mask or mask == 0 then
+    local raw = getButtonState() & RAW_BUTTON_MASK
+    if raw == 0 then return end
+    mask = raw
+  end
+
+  -- Dispatch six Hold events
   if mask & 0x01 ~= 0 then _dispatch(handler, 0) end
   if mask & 0x02 ~= 0 then _dispatch(handler, 1) end
   if mask & 0x04 ~= 0 then _dispatch(handler, 2) end
   if mask & 0x08 ~= 0 then _dispatch(handler, 3) end
   if mask & 0x10 ~= 0 then _dispatch(handler, 4) end
   if mask & 0x20 ~= 0 then _dispatch(handler, 5) end
+end
+
+-- Helper for raw polling without leaving Roxy
+function Input.getRawState()
+  return getButtonState() -- Returns the full PDButtons bitfield
 end
 
 -- ----------------------------------------
