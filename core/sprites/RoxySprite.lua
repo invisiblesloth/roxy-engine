@@ -34,14 +34,15 @@ function RoxySprite:init(opts, scene)
   opts = opts or {}
   RoxySprite.super.init(self)
 
-  self.name         = opts.name or "RoxySprite"
-  self.isRoxySprite = true
-  self._added       = false
-  self.isPaused     = true
-  self.flip         = UNFLIPPED
-  self.animation    = nil
-  self.simpleAnim   = nil
-  self._drawFn      = nil
+  self.name               = opts.name or "RoxySprite"
+  self.isRoxySprite       = true
+  self._added             = false
+  self.isPaused           = true
+  self.flip               = UNFLIPPED
+  self.animation          = nil
+  self.simpleAnim         = nil
+  self._drawFn            = nil
+  self._ignoresDrawOffset = false
 
   if opts.view then
     self:setView(
@@ -62,6 +63,12 @@ end
 -- ----------------------------------------
 -- Sprite Setup
 -- ----------------------------------------
+
+-- ! Set Ignores Draw Offset
+function RoxySprite:setIgnoresDrawOffset(flag)
+  self._ignoresDrawOffset = flag
+  RoxySprite.super.setIgnoresDrawOffset(self, flag)
+end
 
 -- ! Set Z-Index
 function RoxySprite:setZIndex(zIndex)
@@ -162,9 +169,30 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       sprite.animation:draw(x, y, flip)
     end
   elseif type(view) == "userdata" then
-    self:setImage(view)
-    self._drawFn = function(_, x, y, flip)
-      view:draw(x, y, flip)
+    -- If it’s an ImageTable (has drawImage), treat as a simpleAnim
+    if view.drawImage then
+      local length = view:getLength()
+      self.simpleAnim = {
+        imagetable    = view,
+        startFrame    = 1,
+        endFrame      = length,
+        currentFrame  = 1,
+        frameDuration = frameDuration or 0.1,
+        accumulator   = 0,
+        loop          = true,
+      }
+      self._drawFn = function(sprite, x, y, flip)
+        local anim = sprite.simpleAnim
+        if anim and anim.imagetable then
+          anim.imagetable:drawImage(anim.currentFrame, x, y, flip)
+        end
+      end
+    else
+      -- otherwise it must be a plain image
+      self:setImage(view)
+      self._drawFn = function(_, x, y, flip)
+        view:draw(x, y, flip)
+      end
     end
   else
     Log.error("[RoxySprite:setView] Unsupported view type for RoxySprite:", type(view)) --#DEBUG
@@ -495,24 +523,34 @@ end
 
 -- ! Is on Screen
 function RoxySprite:isOnScreen()
-  local spriteX, spriteY = self:getPosition()
-  local spriteWidth, spriteHeight = self:getSize()
-  local centerX, centerY = self:getCenter()
-  local left = spriteX - spriteWidth * centerX
-  local top = spriteY - spriteHeight * centerY
-  local right = left + spriteWidth
-  local bottom = top + spriteHeight
+  if self._ignoresDrawOffset then
+    local x, y = self:getPosition()
+    local w, h = self:getSize()
+    return not (
+      x + w < 0 or x > DISPLAY_WIDTH or
+      y + h < 0 or y > DISPLAY_HEIGHT
+    )
+  else
+    -- original world-space check
+    local spriteX, spriteY = self:getPosition()
+    local spriteWidth, spriteHeight = self:getSize()
+    local centerX, centerY = self:getCenter()
+    local left = spriteX - spriteWidth * centerX
+    local top = spriteY - spriteHeight * centerY
+    local right = left + spriteWidth
+    local bottom = top + spriteHeight
 
-  -- Get camera position (top-left corner)
-  local camX, camY = getPosition()
-  local screenWidth, screenHeight = DISPLAY_WIDTH, DISPLAY_HEIGHT
+    -- Get camera position (top-left corner)
+    local camX, camY = getPosition()
+    local screenWidth, screenHeight = DISPLAY_WIDTH, DISPLAY_HEIGHT
 
-  return not (
-    right < camX or
-    left > camX + screenWidth or
-    bottom < camY or
-    top > camY + screenHeight
-  )
+    return not (
+      right < camX or
+      left > camX + screenWidth or
+      bottom < camY or
+      top > camY + screenHeight
+    )
+  end
 end
 
 -- ! Destroy

@@ -45,6 +45,7 @@ import "libraries/roxy/core/modules/Transition"
 -- Core Components
 import "libraries/roxy/core/sequences/RoxySequence"
 import "libraries/roxy/core/sprites/RoxySprite"
+import "libraries/roxy/core/sprites/RoxyParallaxSprite"
 import "libraries/roxy/core/sprites/RoxyActor"
 import "libraries/roxy/core/sprites/RoxyParticles"
 import "libraries/roxy/core/physics/RoxyPhysicsBody"

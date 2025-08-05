@@ -29,6 +29,7 @@ local COLOR_BLACK <const> = Graphics.kColorBlack
 local CLEAR_COLOR <const> = COLOR_WHITE
 
 local _colorCallbacks = {} -- Cache: color --> fn
+local _imageCallbacks = setmetatable({}, { __mode = "k" }) -- Cache: image --> fn, weak keys
 
 --------------------------------------------------------------------------------
 -- Helper
@@ -44,6 +45,19 @@ local function _getColorCallback(color)
       fillRect(x, y, width, height) -- Draw only the dirty rect
     end
     _colorCallbacks[color] = fn
+  end
+  return fn
+end
+
+-- ! Helper: Get Image Callback
+-- Helper for static image
+local function _getImageCallback(img)
+  local fn = _imageCallbacks[img]
+  if fn == nil then
+    fn = function(x, y, width, height)
+      img:draw(x, y, nil, x, y, width, height)
+    end
+    _imageCallbacks[img] = fn
   end
   return fn
 end
@@ -145,9 +159,6 @@ function RoxyScene:exit()
   self._didExit = true
 
   Log.debug("[RoxyScene:exit] Exiting Scene: " .. self.name) --#DEBUG
-
-  collectgarbage("collect")
-  Log.debug("Heap: " .. collectgarbage("count") / 1024 .. " MB") --#DEBUG
 end
 
 -- ! Cleanup
@@ -198,9 +209,7 @@ function RoxyScene:setBackground(background)
     local img = background
     self.backgroundColor = nil
     self.backgroundImage = img
-    self.backgroundDrawFn = function(x, y, width, height)
-      img:draw(x, y, nil, x, y, width, height)
-    end
+    self.backgroundDrawFn = _getImageCallback(img)
     redrawBackground()
     return
   end
