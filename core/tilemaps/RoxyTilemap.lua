@@ -18,6 +18,7 @@ local tableSort   <const> = table.sort
 
 local loadJSON <const> = r.JSON.loadJson
 
+local newImage        <const> = Graphics.image.new
 local newImagetable   <const> = Graphics.imagetable.new
 local newTilemap      <const> = Graphics.tilemap.new
 local addWallSprites  <const> = Graphics.sprite.addWallSprites
@@ -45,9 +46,9 @@ local EMPTY_TABLE <const> = {}
 -- evict an asset another map still needs.
 local refCount = {}
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Helpers
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Retain
 local function retain(path, tbl)
@@ -126,24 +127,193 @@ local function validateOptions(opts)
   end
 
   return {
-    layers                 = opts.layers or {},
-    wrapInSprites          = opts.wrapInSprites ~= false,
-    autoAddSprites         = opts.autoAddSprites ~= false,
-    zIndices               = type(opts.zIndices) == "table" and opts.zIndices or {},
-    cameraBounds           = opts.cameraBounds or false,
-    anchor                 = (opts.anchor == "topLeft") and "topLeft" or "center",
-    collisionResponse      = opts.collisionResponse or "overlap",
-    parallaxOriginX        = opts.parallaxOriginX,
-    parallaxOriginY        = opts.parallaxOriginY,
-    wallSpriteGroup        = opts.wallSpriteGroup,
-    wallCollidesWithGroups = opts.wallCollidesWithGroups or {},
-    layerOptions           = layerOptions,
+    layers                  = opts.layers or {},
+    wrapInSprites           = opts.wrapInSprites ~= false,
+    autoAddSprites          = opts.autoAddSprites ~= false,
+    zIndices                = type(opts.zIndices) == "table" and opts.zIndices or {},
+    cameraBounds            = opts.cameraBounds or false,
+    anchor                  = (opts.anchor == "topLeft") and "topLeft" or "center",
+    collisionResponse       = opts.collisionResponse or "overlap",
+    parallaxOriginX         = opts.parallaxOriginX,
+    parallaxOriginY         = opts.parallaxOriginY,
+    wallSpriteGroup         = opts.wallSpriteGroup,
+    wallCollidesWithGroups  = opts.wallCollidesWithGroups or {},
+    layerOptions            = layerOptions,
+    objectLayers            = opts.objectLayers or {},
+    spriteFactory           = opts.spriteFactory, -- Fn to create sprites from objects
   }
 end
 
--- ----------------------------------------
+-- ! Process Object Layer
+local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, sceneHasAdd)
+  local objects = layer.objects or {}
+  local layerSprites = {}
+
+  for _, obj in ipairs(objects) do
+    local sprite = nil
+
+    -- Use custom sprite factory if provided
+    if opts.spriteFactory and type(opts.spriteFactory) == "function" then
+      sprite = opts.spriteFactory(obj, layer.name, layerOpts)
+    elseif layerOpts.spriteFactory and type(layerOpts.spriteFactory) == "function" then
+      sprite = layerOpts.spriteFactory(obj, layer.name, layerOpts)
+    else
+      -- Default sprite creation
+      sprite = createDefaultObjectSprite(obj, layerOpts)
+    end
+
+    if sprite then
+      -- Set position (Tiled uses top-left, may need adjustment based on anchor)
+      local x, y = obj.x or 0, obj.y or 0
+      if opts.anchor == "center" then
+        -- Adjust for center anchoring if needed
+        x = x + (obj.width or 0) * 0.5
+        y = y + (obj.height or 0) * 0.5
+      end
+
+      -- Handle positioning differently for parallax sprites
+      if sprite.setWorldPosition then
+        -- This is a parallax sprite, set world position
+        sprite:setWorldPosition(x, y)
+      else
+        -- Regular sprite, set screen position
+        sprite:moveTo(x, y)
+      end
+
+      -- Set z-index if specified
+      local zIndex = layerOpts.zIndex or opts.zIndices[layer.name] or 0
+      sprite:setZIndex(zIndex)
+
+      -- Set visibility
+      sprite:setVisible(layerOpts.visible ~= false)
+
+      -- Store object data on sprite for reference
+      sprite.tiledObject = obj
+
+      -- Add collision if requested
+      if layerOpts.collidable == true then
+        sprite:setTag(layerOpts.tag or 2) -- Different from wall sprites (tag 1)
+        sprite:setCollideRect(0, 0, sprite:getSize())
+        if layerOpts.spriteGroup then
+          sprite:setGroups(type(layerOpts.spriteGroup) == "table" and layerOpts.spriteGroup or {layerOpts.spriteGroup})
+        end
+        if layerOpts.collidesWithGroups and type(layerOpts.collidesWithGroups) == "table" and #layerOpts.collidesWithGroups > 0 then
+          sprite:setCollidesWithGroups(layerOpts.collidesWithGroups)
+        end
+        sprite.collisionResponse = layerOpts.collisionResponse or opts.collisionResponse
+      end
+
+      tableInsert(layerSprites, sprite)
+
+      -- Auto-add sprite if requested
+      if autoAdd then
+        if sceneHasAdd then
+          scene:addSprite(sprite)
+        else
+          sprite:add()
+        end
+      end
+    end
+  end
+
+  return layerSprites
+end
+
+-- ! Create default Object Sprite
+local function createDefaultObjectSprite(obj, layerOpts)
+  -- Check if object has parallax properties
+  local hasParallax = false
+  local parallaxX, parallaxY = 1, 1
+  local parallaxOriginX, parallaxOriginY = 0, 0
+  local objectProperties = {}
+
+  -- Parse object properties
+  if obj.properties then
+    for _, prop in ipairs(obj.properties) do
+      objectProperties[prop.name] = prop.value
+
+      -- Check for parallax properties
+      if prop.name == "parallaxX" or prop.name == "parallaxx" then
+        parallaxX = tonumber(prop.value) or 1
+        hasParallax = hasParallax or (parallaxX ~= 1)
+      elseif prop.name == "parallaxY" or prop.name == "parallaxy" then
+        parallaxY = tonumber(prop.value) or 1
+        hasParallax = hasParallax or (parallaxY ~= 1)
+      elseif prop.name == "parallaxOriginX" or prop.name == "parallaxoriginx" then
+        parallaxOriginX = tonumber(prop.value) or 0
+      elseif prop.name == "parallaxOriginY" or prop.name == "parallaxoriginy" then
+        parallaxOriginY = tonumber(prop.value) or 0
+      end
+    end
+  end
+
+  -- Try to load image based on object properties
+  local imagePath = nil
+
+  -- Check for image in object properties (common Tiled pattern)
+  if objectProperties.image or objectProperties.sprite then
+    imagePath = IMAGE_PATH_PREFIX .. (objectProperties.image or objectProperties.sprite)
+  end
+
+  -- Fallback to type-based or name-based image loading
+  if not imagePath then
+    local baseName = obj.type or obj.name or "default"
+    imagePath = IMAGE_PATH_PREFIX .. baseName
+  end
+
+  -- Try to load the image
+  local image = nil
+  local ok, err = pcall(function()
+    image = newImage(imagePath)
+  end)
+  if not ok or not image then
+    Log.warn("[createDefaultObjectSprite] Failed to load image at: " .. tostring(imagePath))
+  end
+
+  local sprite
+
+  -- Create parallax sprite if needed and RoxyParallaxSprite is available
+  if hasParallax and r.RoxyParallaxSprite then
+    local spriteOpts = {
+      view = image,
+      worldX = obj.x or 0,
+      worldY = obj.y or 0,
+      parallaxX = parallaxX,
+      parallaxY = parallaxY,
+      parallaxOriginX = parallaxOriginX,
+      parallaxOriginY = parallaxOriginY
+    }
+    sprite = r.RoxyParallaxSprite(spriteOpts)
+  else
+    -- Create regular sprite
+    sprite = newSprite()
+    if image then
+      sprite:setImage(image)
+    end
+  end
+
+  -- Fallback image creation for regular sprites
+  if not image and not hasParallax then
+    -- Create a simple rectangle sprite as fallback
+    local width = obj.width or 16
+    local height = obj.height or 16
+    local fallbackImage = Graphics.image.new(width, height)
+    Graphics.pushContext(fallbackImage)
+    Graphics.setColor(Graphics.kColorBlack)
+    Graphics.drawRect(0, 0, width, height)
+    Graphics.popContext()
+    sprite:setImage(fallbackImage)
+  end
+
+  -- Store all object properties on the sprite for reference
+  sprite.objectProperties = objectProperties
+
+  return sprite
+end
+
+--------------------------------------------------------------------------------
 -- ! Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 class("RoxyTilemap").extends(Object)
 
@@ -169,7 +339,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   local mapData, err = loadJSON(jsonPath)
   if not mapData then
     Log.error("[RoxyTilemap:init] " .. (err or "unknown error")) --#DEBUG
-    self.layers, self.sprites, self.tilesets, self.objectLayers = {}, {}, nil, nil
+    self.layers, self.sprites, self.tilesets, self.objectLayers, self.objectSprites = {}, {}, nil, nil, {}
     self.worldWidth, self.worldHeight = 0, 0
     return
   end
@@ -227,7 +397,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
     ::continueTileset::
   end
-  self.tilesets = tilesets
+  local key = tileset.name or tileset.image or tostring(#self.tilesets + 1)
+  self.tilesets[key] = tileset
 
   -- Build layers
   self.layers = {}
@@ -395,8 +566,24 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     end
     ::continue::
   end
-
   self.sprites = newSprites
+
+  -- Process object layers (NEW SECTION)
+  local objectSprites = {}
+  for _, layer in ipairs(mapData.layers or {}) do
+    if layer.type == "objectgroup" and (processAll or opts.objectLayers[layer.name]) then
+      local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or {}
+
+      local sprites = processObjectLayer(self, layer, opts, layerOptions, autoAdd, scene, sceneHasAdd)
+      objectSprites[layer.name] = sprites
+
+      -- Add to main sprites list
+      for _, sprite in ipairs(sprites) do
+        tableInsert(newSprites, sprite)
+      end
+    end
+  end
+  self.objectSprites = objectSprites -- Store object sprites
 
   self.objectLayers = {}
   for _, layer in ipairs(mapData.layers or {}) do
@@ -411,9 +598,9 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   end
 end
 
--- ---------------------------------- --
--- ! Public Methods                   --
--- ---------------------------------- --
+--------------------------------------------------------------------------------
+-- ! Public Methods
+--------------------------------------------------------------------------------
 
 -- ! Get Tilemap
 function RoxyTilemap:getTilemap(name)
@@ -428,6 +615,70 @@ end
 -- ! Get Objects
 function RoxyTilemap:getObjects(name)
   return self.objectLayers and self.objectLayers[name]
+end
+
+-- ! Get Object Sprites
+-- Returns all sprites created from the specified object layer
+function RoxyTilemap:getObjectSprites(layerName)
+  return self.objectSprites and self.objectSprites[layerName] or {}
+end
+
+-- ! Get All Sprites
+-- Returns all sprites managed by this tilemap (tile layers + objects)
+function RoxyTilemap:getAllSprites()
+  return self.sprites or {}
+end
+
+-- ! Find Object Sprite
+-- Finds the first sprite whose Tiled object matches the given predicate function
+function RoxyTilemap:findObjectSprite(layerName, predicate)
+  local sprites = self:getObjectSprites(layerName)
+  for _, sprite in ipairs(sprites) do
+    if sprite.tiledObject and predicate(sprite.tiledObject) then
+      return sprite
+    end
+  end
+  return nil
+end
+
+-- ! Find Object Sprites By Type
+-- Returns all sprites from the layer whose Tiled objects have the specified type
+function RoxyTilemap:findObjectSpritesByType(layerName, objectType)
+  return self:findObjectSprites(layerName, function(obj)
+    return obj.type == objectType
+  end)
+end
+
+-- ! Find Object Sprites By Name
+-- Returns all sprites from the layer whose Tiled objects have the specified name
+function RoxyTilemap:findObjectSpritesByName(layerName, objectName)
+  return self:findObjectSprites(layerName, function(obj)
+    return obj.name == objectName
+  end)
+end
+
+-- ! Find Object Sprites
+-- Returns all sprites whose Tiled objects match the given predicate function
+function RoxyTilemap:findObjectSprites(layerName, predicate)
+  local sprites = self:getObjectSprites(layerName)
+  local matches = {}
+  for _, sprite in ipairs(sprites) do
+    if sprite.tiledObject and predicate(sprite.tiledObject) then
+      tableInsert(matches, sprite)
+    end
+  end
+  return matches
+end
+
+-- ! Remove Object Layer
+function RoxyTilemap:removeObjectLayer(layerName)
+  local sprites = self:getObjectSprites(layerName)
+  for _, sprite in ipairs(sprites) do
+    sprite:remove()
+  end
+  if self.objectSprites then
+    self.objectSprites[layerName] = nil
+  end
 end
 
 -- ! Get Tile At
@@ -515,6 +766,7 @@ end
 
 -- ! Destroy
 function RoxyTilemap:destroy()
+  -- Existing tile layer cleanup...
   for _, layer in pairs(self.layers) do
     if layer.sprite then
       layer.sprite:remove()
@@ -528,20 +780,29 @@ function RoxyTilemap:destroy()
     end
     layer.tilemap = nil
   end
+
+  -- Clean up object sprites
+  for _, sprites in pairs(self.objectSprites or {}) do
+    for _, sprite in ipairs(sprites) do
+      sprite:remove()
+    end
+  end
+
   for _, tileset in pairs(self.tilesets or {}) do
     if tileset.imagePath then
       release(tileset.imagePath)
     end
   end
+
   self.layers = {}
   self.sprites = {}
+  self.objectSprites = {} -- NEW
   self.tilesets = nil
   self.objectLayers = nil
 
   if self.scene then
     local scene = self.scene
     self.scene = nil
-    -- Guard against double‑removal
     if scene.removeTilemap then scene:removeTilemap(self) end
   end
 end
