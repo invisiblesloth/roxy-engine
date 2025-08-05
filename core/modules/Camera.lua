@@ -5,6 +5,7 @@ roxy.Camera = roxy.Camera or {}
 local Camera <const> = roxy.Camera
 
 local pd        <const> = playdate
+local Display   <const> = pd.display
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
@@ -27,8 +28,10 @@ local redrawBackground <const> = Sprite.redrawBackground
 local CAMERA_SPEED_DEFAULT <const> = 120  -- Default pan velocity (pixels per second)
 local FRICTION_DEFAULT <const>     = 0.85 -- Default friction factor (0 to 1, higher = slower stop)
 
-local CENTER_X <const> = roxy.Graphics.displayWidthCenter
-local CENTER_Y <const> = roxy.Graphics.displayHeightCenter
+local DISPLAY_WIDTH   <const> = roxy.Graphics.displayWidth
+local DISPLAY_HEIGHT  <const> = roxy.Graphics.displayHeight
+local CENTER_X        <const> = roxy.Graphics.displayWidthCenter
+local CENTER_Y        <const> = roxy.Graphics.displayHeightCenter
 
 -- Global State
 Camera.x                = 0     -- current x position
@@ -41,6 +44,7 @@ Camera._targetX         = 0     -- target x position
 Camera._targetY         = 0     -- target y position
 Camera.target           = nil   -- sprite to follow
 Camera._bounds          = nil   -- { x1, y1, x2, y2 }
+Camera._boundsCache     = nil
 Camera._hasBounds       = false -- whether bounds are active
 Camera._minX            = 0     -- minimum x bound
 Camera._minY            = 0     -- minimum y bound
@@ -58,6 +62,9 @@ Camera.friction         = FRICTION_DEFAULT
 -- Indicates whether the camera needs an update this frame.
 -- Remains true while there’s an active target, any velocity, or an ongoing shake.
 Camera._isActive = true -- Ensure initial update
+
+-- Default to static mode (must be set after all Camera functions exist!)
+Camera._updateFunc = nil
 
 -- ----------------------------------------
 -- Helpers
@@ -82,13 +89,15 @@ end
 
 -- ! Helper: Commit Offset
 local function _commitOffset(dt)
-  local newX = floor(Camera.x + 0.5)
-  local newY = floor(Camera.y + 0.5)
-  local shakeX, shakeY = Camera.shakeDuration > 0 and _applyShake(dt) or 0, 0
-  if newX ~= Camera._lastX or newY ~= Camera._lastY or shakeX ~= 0 or shakeY ~= 0 then
-    setDrawOffset(-newX - shakeX, -newY - shakeY)
+  local newX = round(Camera.x)
+  local newY = round(Camera.y)
+  local shakeX, shakeY = (Camera.shakeDuration > 0) and _applyShake(dt) or 0, 0
+  local totalOffsetX = newX + shakeX
+  local totalOffsetY = newY + shakeY
+  if abs(totalOffsetX - Camera._lastX) >= 1 or abs(totalOffsetY - Camera._lastY) >= 1 then
+    setDrawOffset(-totalOffsetX, -totalOffsetY)
     redrawBackground()
-    Camera._lastX, Camera._lastY = newX, newY
+    Camera._lastX, Camera._lastY = totalOffsetX, totalOffsetY
     Camera._isActive = true
   else
     Camera._isActive = Camera.shakeDuration > 0 or Camera._velocityX ~= 0 or Camera._velocityY ~= 0 or Camera.target ~= nil
@@ -244,6 +253,13 @@ function Camera.setBounds(bounds)
   Camera._maxX = max(bounds.x1, bounds.x2)
   Camera._minY = min(bounds.y1, bounds.y2)
   Camera._maxY = max(bounds.y1, bounds.y2)
+
+  -- Cache bounds table for getBounds efficiency
+  Camera._boundsCache = Camera._boundsCache or { x1 = 0, y1 = 0, x2 = 0, y2 = 0 }
+  Camera._boundsCache.x1 = Camera._minX
+  Camera._boundsCache.y1 = Camera._minY
+  Camera._boundsCache.x2 = Camera._maxX
+  Camera._boundsCache.y2 = Camera._maxY
 end
 
 -- ! Clear Bounds
@@ -253,6 +269,7 @@ function Camera.clearBounds()
   Camera._hasBounds = false
   Camera._minX, Camera._minY = 0, 0
   Camera._maxX, Camera._maxY = 0, 0
+  Camera._boundsCache = nil
 end
 
 -- ! Reset
@@ -268,6 +285,7 @@ function Camera.reset()
   Camera._targetY         = 0
   Camera.target           = nil
   Camera._bounds          = nil
+  Camera._boundsCache     = nil
   Camera._hasBounds       = false
   Camera._minX            = 0
   Camera._minY            = 0
@@ -292,21 +310,27 @@ end
 -- ! Update
 -- Dispatches to updateFollow, updateManualPan, or updateStatic based on camera mode
 function Camera.update(dt)
-  Camera._updateFunc(dt)
+  -- Only update if active, or if shake in progress
+  if Camera._isActive or Camera.shakeDuration > 0 then
+    Camera._updateFunc(dt)
+  end
 end
 
 -- ! Update Follow
 -- Update camera position following a target sprite
 -- Clamps target position before interpolation to ensure smooth boundary stops, and final position for safety.
 function Camera.updateFollow(dt)
+  --#DEBUG START
+  if not Camera.target or not Camera.target.getPosition then
+    Log.error("[Camera.updateFollow] Target sprite is invalid or removed", 2)
+  end
+  --#DEBUG END
+
   local px, py = Camera.target:getPosition()
+
   --#DEBUG START
   if type(px) ~= "number" or type(py) ~= "number" then
-    Log.warn("[Camera.updateFollow] Invalid sprite position: expected numbers (x, y)")
-    Camera.target = nil
-    Camera._updateFunc = Camera.updateStatic
-    Camera._isActive = true
-    return
+    Log.error("[Camera.updateFollow] Invalid sprite position: expected numbers (x, y)")
   end
   --#DEBUG END
 
@@ -323,12 +347,12 @@ function Camera.updateFollow(dt)
     if abs(dx) > halfW then
       desiredX = desiredX - (dx - (dx > 0 and halfW or -halfW))
     else
-      desiredX = Camera._targetX
+      -- desiredX = Camera._targetX
     end
     if abs(dy) > halfH then
       desiredY = desiredY - (dy - (dy > 0 and halfH or -halfH))
     else
-      desiredY = Camera._targetY
+      -- desiredY = Camera._targetY
     end
   end
 
@@ -356,6 +380,18 @@ function Camera.updateFollow(dt)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
   end
 
+  if Camera.smoothing > 0
+    and abs(Camera.x - Camera._targetX) < 0.05
+    and abs(Camera.y - Camera._targetY) < 0.05
+    and abs(Camera._velocityX or 0) < 0.01
+    and abs(Camera._velocityY or 0) < 0.01
+  then
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
+    Camera._targetX = Camera.x
+    Camera._targetY = Camera.y
+  end
+
   -- Apply shake and update draw offset
   _commitOffset(dt)
 end
@@ -372,8 +408,9 @@ function Camera.updateManualPan(dt)
   if Camera._velocityX == 0 and Camera._velocityY == 0 then
     Camera._targetX = lerp(Camera._targetX, Camera.x, 1 - Camera.friction)
     Camera._targetY = lerp(Camera._targetY, Camera.y, 1 - Camera.friction)
-    if abs(Camera._targetX - Camera.x) < 0.1 then Camera._targetX = Camera.x end
-    if abs(Camera._targetY - Camera.y) < 0.1 then Camera._targetY = Camera.y end
+    -- (Uncomment below for snap if necessary)
+    -- if abs(Camera._targetX - Camera.x) < 0.1 then Camera._targetX = Camera.x end
+    -- if abs(Camera._targetY - Camera.y) < 0.1 then Camera._targetY = Camera.y end
   end
 
   -- Clamp target position only if smoothing
@@ -429,12 +466,38 @@ end
 -- Returns the current bounds if set, or nil
 function Camera.getBounds()
   if not Camera._hasBounds then return nil end
-  return {
-    x1 = Camera._minX,
-    y1 = Camera._minY,
-    x2 = Camera._maxX,
-    y2 = Camera._maxY
-  }
+
+  -- Lazily allocate once, then just update fields
+  if not Camera._boundsCache then
+    Camera._boundsCache = { x1 = 0, y1 = 0, x2 = 0, y2 = 0 }
+  end
+
+  local cache = Camera._boundsCache
+  cache.x1 = Camera._minX
+  cache.y1 = Camera._minY
+  cache.x2 = Camera._maxX
+  cache.y2 = Camera._maxY
+  return cache
+end
+
+-- ! Get Bound X1
+function Camera.getBoundX1()
+  return Camera._hasBounds and Camera._minX or nil
+end
+
+-- ! Get Bound X2
+function Camera.getBoundX2()
+  return Camera._hasBounds and Camera._maxX or nil
+end
+
+-- ! Get Bound Y1
+function Camera.getBoundY1()
+  return Camera._hasBounds and Camera._minY or nil
+end
+
+-- ! Get Bound Y2
+function Camera.getBoundY2()
+  return Camera._hasBounds and Camera._maxY or nil
 end
 
 -- ! Get Draw Offset
@@ -447,9 +510,9 @@ end
 -- Returns true if the point (x, y) is within the current screen bounds
 function Camera.isOnScreen(x, y)
   return x >= Camera._lastX
-     and x <  Camera._lastX + pd.display.getWidth()
+     and x <  Camera._lastX + DISPLAY_WIDTH
      and y >= Camera._lastY
-     and y <  Camera._lastY + pd.display.getHeight()
+     and y <  Camera._lastY + DISPLAY_HEIGHT
 end
 
 -- Default to static mode
