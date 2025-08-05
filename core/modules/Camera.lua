@@ -506,6 +506,23 @@ function Camera.getDrawOffset()
   return -Camera._lastX, -Camera._lastY
 end
 
+-- ! World to Screen Converter
+-- Converts world coordinates to screen coordinates, using the current camera offset
+function Camera.worldToScreen(worldX, worldY)
+  -- Use _lastX and _lastY because that's what's currently applied via setDrawOffset
+  local screenX = worldX - Camera._lastX
+  local screenY = worldY - Camera._lastY
+  return screenX, screenY
+end
+
+-- ! Screen to World Converter
+-- Converts screen coordinates to world coordinates, using the current camera offset
+function Camera.screenToWorld(screenX, screenY)
+  local worldX = screenX + Camera._lastX
+  local worldY = screenY + Camera._lastY
+  return worldX, worldY
+end
+
 -- ! Is On Screen
 -- Returns true if the point (x, y) is within the current screen bounds
 function Camera.isOnScreen(x, y)
