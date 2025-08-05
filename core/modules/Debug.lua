@@ -103,7 +103,7 @@ end
 -- ! Check
 local function check(funcRef, original, name)
   if funcRef ~= original then
-    Log.error(string.format("[Debug.runChecks] Debug check failed: %s has been overridden.", name), 2)
+    Log.error("[Debug.runChecks] Debug check failed: " .. name .. " has been overridden.", 2)
   end
 end
 
