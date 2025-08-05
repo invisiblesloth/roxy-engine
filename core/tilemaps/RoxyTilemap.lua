@@ -397,8 +397,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
     ::continueTileset::
   end
-  local key = tileset.name or tileset.image or tostring(#self.tilesets + 1)
-  self.tilesets[key] = tileset
+  self.tilesets = tilesets
 
   -- Build layers
   self.layers = {}
