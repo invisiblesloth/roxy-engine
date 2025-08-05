@@ -370,6 +370,10 @@ function Camera.updateFollow(dt)
     local t = min(Camera.smoothing * dt, 1)
     Camera.x = lerp(Camera.x, Camera._targetX, t)
     Camera.y = lerp(Camera.y, Camera._targetY, t)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   else
     Camera.x, Camera.y = Camera._targetX, Camera._targetY
   end
@@ -378,6 +382,10 @@ function Camera.updateFollow(dt)
   if Camera._hasBounds then
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   end
 
   if Camera.smoothing > 0
@@ -425,6 +433,10 @@ function Camera.updateManualPan(dt)
     local t = min(Camera.smoothing * dt, 1)
     Camera.x = lerp(Camera.x, Camera._targetX, t)
     Camera.y = lerp(Camera.y, Camera._targetY, t)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   else
     Camera.x, Camera.y = Camera._targetX, Camera._targetY
   end
@@ -433,6 +445,10 @@ function Camera.updateManualPan(dt)
   if Camera._hasBounds then
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   end
 
   -- Apply shake and update draw offset

@@ -69,12 +69,12 @@ end
 function RoxyParallaxSprite:update()
   -- Compute parallax-based position
   local camX, camY = Camera.getPosition()
-  local px = self.parallaxX
-  local py = self.parallaxY
-  local pox = self.parallaxOriginX
-  local poy = self.parallaxOriginY
-  local wx = self.worldX
-  local wy = self.worldY
+
+  -- World position & parallax settings:
+  local wx, wy    = self.worldX, self.worldY
+  local px, py    = self.parallaxX, self.parallaxY
+  local pox, poy  = self.parallaxOriginX, self.parallaxOriginY
+
   local screenX = round(wx + pox * (1 - px) - camX * px)
   local screenY = round(wy + poy * (1 - py) - camY * py)
   self:moveTo(screenX, screenY)
