@@ -18,143 +18,208 @@ local CrankIndicator    <const> = pd.ui.crankIndicator
 
 local getConfig <const> = roxy.Config.get
 
--- C functions
-local SetButtonHoldBufferAmount <const> = Input.setButtonHoldBufferAmount
-local processAllButtons         <const> = Input.processAllButtons
+-- Configuration constants
+local BUTTON_HOLD_BUFFER_DEFAULT <const> = 3
+local CRANK_DIRECTION_DEFAULT    <const> = 1
 
-local flushButtonQueue <const> = Input.flushButtonQueue
+-- Pre-defined array for efficient iteration instead of pairs()
+local BUTTON_NAMES <const> = { "A", "B", "up", "down", "left", "right" }
 
--- Raw mask of the six tracked buttons (A, B, Up, Down, Left, Right)
-local RAW_BUTTON_MASK <const> = 0x3F
-
-local BUTTON_HOLD_BUFFER_DEFAULT  <const> = 3 -- Frames for button hold detection
-local CRANK_DIRECTION_DEFAULT     <const> = 1
-
--- List of supported input event keys (keep in sync with stubHandler)
-local inputKeys = {
-  "AButtonDown",
-  "AButtonHeld",
-  "AButtonUp",
-  "AButtonHold",
-  "BButtonDown",
-  "BButtonHeld",
-  "BButtonUp",
-  "BButtonHold",
-  "downButtonDown",
-  "downButtonUp",
-  "downButtonHold",
-  "leftButtonDown",
-  "leftButtonUp",
-  "leftButtonHold",
-  "rightButtonDown",
-  "rightButtonUp",
-  "rightButtonHold",
-  "upButtonDown",
-  "upButtonUp",
-  "upButtonHold",
-  "cranked",
-  "crankDocked",
-  "crankUndocked"
+-- Input event keys - kept in sync with handler merging system
+local INPUT_KEYS <const> = {
+  "AButtonDown", "AButtonHeld", "AButtonUp", "AButtonHold",
+  "BButtonDown", "BButtonHeld", "BButtonUp", "BButtonHold",
+  "downButtonDown", "downButtonUp", "downButtonHold",
+  "leftButtonDown", "leftButtonUp", "leftButtonHold",
+  "rightButtonDown", "rightButtonUp", "rightButtonHold",
+  "upButtonDown", "upButtonUp", "upButtonHold",
+  "cranked", "crankDocked", "crankUndocked"
 }
 
--- Inert stub for blocking and compatibility
-local stubHandler = {}
-for _, k in ipairs(inputKeys) do stubHandler[k] = function() end end
+-- Button name to callback key mapping
+local BUTTON_KEYS <const> = {
+  A     = { down = "AButtonDown",     up = "AButtonUp",     hold = "AButtonHold"     },
+  B     = { down = "BButtonDown",     up = "BButtonUp",     hold = "BButtonHold"     },
+  up    = { down = "upButtonDown",    up = "upButtonUp",    hold = "upButtonHold"    },
+  down  = { down = "downButtonDown",  up = "downButtonUp",  hold = "downButtonHold"  },
+  left  = { down = "leftButtonDown",  up = "leftButtonUp",  hold = "leftButtonHold"  },
+  right = { down = "rightButtonDown", up = "rightButtonUp", hold = "rightButtonHold" },
+}
 
-local _persistentMergedHandler = {}
+--------------------------------------------------------------------------------
+-- Module State
+--------------------------------------------------------------------------------
 
--- Internal State
-local buttonHoldBufferAmount
-local crankIndicatorActive
-local crankIndicatorForced
+-- Button hold state tracking - using direct table access for performance
+local held = {}
+local heldFrames = {}
 
-local handlerRegistry
-local activeMergedHandler
-local autoFlushEnabled
-local pendingRegistryDirty
+-- Handler management
+local handlerRegistry = {}
+local activeMergedHandler = nil
+local persistentMergedHandler = {} -- Reused table to avoid allocation
 
-Input.crankDirection          = CRANK_DIRECTION_DEFAULT
-Input.isEnabled               = true  -- Input starts enabled
-Input._blocked                = false -- true when blocking until all buttons are released
-Input.clearQueueOnSetHandler  = true  -- auto flush/block on handler set
+-- Cache hold callbacks to avoid repeated table lookups in hot path
+local cachedHoldCallbacks = {}
 
--- ----------------------------------------
+-- Configuration state
+local buttonHoldBufferAmount = BUTTON_HOLD_BUFFER_DEFAULT
+local cachedBufferAmount = BUTTON_HOLD_BUFFER_DEFAULT
+
+-- Combined crank indicator state into single object
+local crankIndicator = {
+  active = false,
+  forced = false
+}
+
+-- Core input state
+local autoFlushEnabled = true
+local pendingRegistryDirty = false
+
+-- Public state
+Input.crankDirection = CRANK_DIRECTION_DEFAULT
+Input.isEnabled = true
+Input._blocked = false -- Blocks input until all buttons released
+
+--------------------------------------------------------------------------------
 -- Helpers
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
-local buttonEventMap = {
-  [0] = "AButtonHold",
-  [1] = "BButtonHold",
-  [2] = "upButtonHold",
-  [3] = "downButtonHold",
-  [4] = "leftButtonHold",
-  [5] = "rightButtonHold"
-}
+-- ! Priority Comparator
+-- Cached comparison function to avoid creating closures repeatedly
+local function priorityComparator(a, b)
+  return a.priority > b.priority
+end
 
--- ! Dispatch
--- Dispatch helper for button-hold events
-local function _dispatch(handler, eventIndex)
-  local callbackName = buttonEventMap[eventIndex]
-  if handler and handler[callbackName] then
-    handler[callbackName]()
+-- ! Reset Button Flags
+-- Fast reset using array iteration instead of pairs()
+local function resetButtonFlags()
+  for i = 1, #BUTTON_NAMES do
+    local name = BUTTON_NAMES[i]
+    held[name] = false
+    heldFrames[name] = 0
+  end
+end
+
+-- ! Cache Hold Callbacks
+-- Cache hold callbacks when handler changes to avoid lookups in handleInput
+local function cacheHoldCallbacks(handler)
+  if not handler then
+    for i = 1, #BUTTON_NAMES do
+      cachedHoldCallbacks[BUTTON_NAMES[i]] = nil
+    end
+    return
+  end
+
+  for i = 1, #BUTTON_NAMES do
+    local name = BUTTON_NAMES[i]
+    local keys = BUTTON_KEYS[name]
+    cachedHoldCallbacks[name] = handler[keys.hold]
   end
 end
 
 -- ! Merge Handlers
--- Merges all handlers by priority into a new table
-local function _mergeHandlers()
-  tableSort(handlerRegistry, function(a, b) return a.priority > b.priority end)
-  local merged = _persistentMergedHandler
-  for k in pairs(merged) do merged[k] = nil end -- Clear, don't reallocate
-  for _, key in ipairs(inputKeys) do
-    for _, handler in ipairs(handlerRegistry) do
+-- Efficient handler merging with minimal garbage creation
+local function mergeHandlers()
+  -- Sort handlers by priority (higher numbers = higher priority)
+  tableSort(handlerRegistry, priorityComparator)
+
+  local merged = persistentMergedHandler
+
+  -- Clear only known keys instead of using pairs() which creates garbage
+  for i = 1, #INPUT_KEYS do
+    merged[INPUT_KEYS[i]] = nil
+  end
+
+  -- Find the highest priority handler for each input event
+  for i = 1, #INPUT_KEYS do
+    local key = INPUT_KEYS[i]
+    for j = 1, #handlerRegistry do
+      local handler = handlerRegistry[j]
       local fn = handler.tbl[key]
       if fn then
         merged[key] = fn
-        break
+        break -- First match wins (highest priority)
       end
     end
   end
+
   return merged
 end
 
--- ----------------------------------------
+-- ! Wrap Merged Handler
+-- Enhanced wrapper that tracks button hold state for Down/Up events
+local function wrapMergedHandler(userHandler)
+  if not userHandler then return nil end
+
+  -- Copy handler to avoid mutating the pooled table
+  local wrappedHandler = {}
+  for i = 1, #INPUT_KEYS do
+    local key = INPUT_KEYS[i]
+    wrappedHandler[key] = userHandler[key]
+  end
+
+  -- Wrap Down/Up events to track hold state (only if handlers exist)
+  for i = 1, #BUTTON_NAMES do
+    local name = BUTTON_NAMES[i]
+    local keys = BUTTON_KEYS[name]
+    local origDown, origUp = wrappedHandler[keys.down], wrappedHandler[keys.up]
+
+    -- Only create wrapper functions if original handlers exist or we need state tracking
+    if origDown or userHandler[keys.up] or userHandler[keys.hold] then
+      wrappedHandler[keys.down] = function(...)
+        held[name] = true
+        heldFrames[name] = 0
+        if origDown then origDown(...) end
+      end
+    end
+
+    if origUp or userHandler[keys.down] or userHandler[keys.hold] then
+      wrappedHandler[keys.up] = function(...)
+        held[name] = false
+        heldFrames[name] = 0
+        if origUp then origUp(...) end
+      end
+    end
+  end
+
+  return wrappedHandler
+end
+
+--------------------------------------------------------------------------------
 -- Handler Registration API
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Initialize
 function Input.init()
   local inputConfig = getConfig("input") or {}
 
-  buttonHoldBufferAmount  = inputConfig.buttonHoldBufferAmount or BUTTON_HOLD_BUFFER_DEFAULT
+  cachedBufferAmount = inputConfig.buttonHoldBufferAmount or BUTTON_HOLD_BUFFER_DEFAULT
+  Input.crankDirection = inputConfig.crankDirection or CRANK_DIRECTION_DEFAULT
 
-  crankIndicatorActive    = false
-  crankIndicatorForced    = false
+  -- Reset all state
+  crankIndicator.active = false
+  crankIndicator.forced = false
+  Input.isEnabled = true
+  Input._blocked = false
 
-  Input.crankDirection    = inputConfig.crankDirection or CRANK_DIRECTION_DEFAULT
+  handlerRegistry = {}
+  activeMergedHandler = nil
+  autoFlushEnabled = true
+  pendingRegistryDirty = false
 
-  Input.isEnabled               = true
-  Input._blocked                = false
-  Input.clearQueueOnSetHandler  = true
-
-  -- Handler Merging State
-  handlerRegistry       = {}    -- [{owner=..., tbl=..., priority=...}, ...]
-  activeMergedHandler   = nil   -- Currently active merged handler table
-  autoFlushEnabled      = true  -- Push after register/unregister?
-  pendingRegistryDirty  = false -- Tracks unflushed changes when autoFlush is off
-
-  SetButtonHoldBufferAmount(buttonHoldBufferAmount)
+  resetButtonFlags()
 end
 
 -- ! Add Handler
--- Add (or replace) a handler for an owner at a given priority.
+-- Register or update a handler with given priority (higher = more important)
 function Input.addHandler(owner, tbl, priority)
   Log.assert(owner and tbl, "[Input.addHandler] Must provide owner and table.", 2) --#DEBUG
   priority = priority or 0
 
-  -- Replace if already present
-  for i, handler in ipairs(handlerRegistry) do
-    if handler.owner == owner then
+  -- Replace existing handler in-place to avoid array shifts
+  for i = 1, #handlerRegistry do
+    if handlerRegistry[i].owner == owner then
       handlerRegistry[i] = {
         owner = owner,
         tbl = tbl,
@@ -169,6 +234,7 @@ function Input.addHandler(owner, tbl, priority)
     end
   end
 
+  -- Add new handler
   tableInsert(handlerRegistry, {
     owner = owner,
     tbl = tbl,
@@ -182,8 +248,8 @@ function Input.addHandler(owner, tbl, priority)
   end
 end
 
--- ! Remove Handler
--- Remove a handler by owner identity.
+--Remove Handler
+-- Remove handler by owner identity
 function Input.removeHandler(owner)
   for i = #handlerRegistry, 1, -1 do
     if handlerRegistry[i].owner == owner then
@@ -198,37 +264,48 @@ function Input.removeHandler(owner)
   end
 end
 
--- ! List Handlers
--- List all registered handlers (for debugging/UI)
+-- ! List Handler
+-- Get list of all registered handlers (for debugging)
 function Input.listHandlers()
   return handlerRegistry
 end
 
 -- ! Flush
--- Explicitly rebuilds and pushes merged handler to SDK stack.
+-- Rebuild and activate the merged handler - this is where the magic happens
 function Input.flush()
-  if activeMergedHandler then popInputHandlers() end
+  -- Clean up previous handler
+  if activeMergedHandler then
+    popInputHandlers()
+  end
+
   if #handlerRegistry == 0 then
     activeMergedHandler = nil
+    cacheHoldCallbacks(nil) -- Clear cached callbacks
     pendingRegistryDirty = false
+    resetButtonFlags()
     return
   end
 
-  local merged = _mergeHandlers()
-  activeMergedHandler = merged
-  pushInputHandlers(merged, true)
+  -- Build new merged handler
+  local mergedUser = mergeHandlers()
+  local wrapped = wrapMergedHandler(mergedUser)
+  activeMergedHandler = wrapped
+
+  -- Cache hold callbacks for fast access in handleInput
+  cacheHoldCallbacks(wrapped)
+
+  pushInputHandlers(wrapped, true)
   pendingRegistryDirty = false
-  Log.debug("[Input.flush] Flushed/merged handlers: count=" .. tostring(#handlerRegistry)) --#DEBUG
+  Log.debug("[Input.flush] Merged " .. #handlerRegistry .. " handlers") --#DEBUG
 end
 
 -- ! Suspend Auto Flush
--- Disable auto-flush for batch registration.
+-- Batch registration control - disable auto-flush for performance
 function Input.suspendAutoFlush()
   autoFlushEnabled = false
 end
 
 -- ! Resume Auto Flush
--- Re-enable auto-flush and flush if dirty.
 function Input.resumeAutoFlush()
   autoFlushEnabled = true
   if pendingRegistryDirty then
@@ -237,120 +314,132 @@ function Input.resumeAutoFlush()
 end
 
 -- ! Clear All Handlers
--- Remove all registered handlers and pop from SDK.
+-- Clear all handlers and reset state
 function Input.clearAllHandlers()
   handlerRegistry = {}
   if activeMergedHandler then
     popInputHandlers()
     activeMergedHandler = nil
   end
+  cacheHoldCallbacks(nil) -- Clear cached callbacks
   pendingRegistryDirty = false
+  resetButtonFlags()
   Log.debug("[Input.clearAllHandlers] Cleared all handlers.") --#DEBUG
 end
 
 -- ! Make Modal Handler
--- Builds a modal handler table with inert callbacks for all supported
+-- Create a modal handler that blocks all inputs not explicitly handled
 function Input.makeModalHandler(handler)
   handler = handler or {}
-  for _, key in ipairs(inputKeys) do
+  for i = 1, #INPUT_KEYS do
+    local key = INPUT_KEYS[i]
     if handler[key] == nil then
-      handler[key] = function() end
+      handler[key] = function() end -- Inert callback
     end
   end
   return handler
 end
 
--- ----------------------------------------
--- Button and Input Processing
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Button State Management
+--------------------------------------------------------------------------------
 
 -- ! Flush Button Queue
--- Call once to consume any queued Down/Up events and
--- reset the justPressed/justReleased state.
+-- Direct access to Playdate button state (removed wrapper function)
 function Input.flushButtonQueue()
-  getButtonState() -- Consume current/pressed/released
+  getButtonState() -- Consume queued events
 end
 
 -- ! Block Until Clear
--- Disable Input.handleInput() until *no* buttons are held.
--- Prevents handling a release that began in the previous scene.
+-- Block input processing until all buttons are released (for scene transitions)
 function Input.blockUntilClear()
   Input._blocked = true
 end
 
--- ----------------------------------------
--- Crank Indicator Controls
--- ----------------------------------------
-
--- ! Get Crank Indicator Status
--- Returns the crank indicator’s active and forced states.
-function Input.getCrankIndicatorStatus()
-  return crankIndicatorActive, crankIndicatorForced
+-- ! Get Held
+-- Query if a specific button is currently held
+function Input.getHeld(name)
+  return held[name] == true
 end
 
--- ! Input.setCrankIndicatorStatus
--- Sets the crank indicator’s visibility and behavior.
-function Input.setCrankIndicatorStatus(active, evenWhenUndocked)
-  crankIndicatorActive = active
-  crankIndicatorForced = evenWhenUndocked == true
-  Log.debug("[Input.setCrankIndicatorStatus] Set crank indicator active = " .. tostring(active) .. ", forced = " .. tostring(evenWhenUndocked)) --#DEBUG
+-- ! Get Held Frames
+-- Get how many frames a button has been held
+function Input.getHeldFrames(name)
+  return heldFrames[name] or 0
+end
+
+-- ! Set Button Hold Buffer Amount
+-- Configure hold detection sensitivity
+function Input.setButtonHoldBufferAmount(frames)
+  frames = tonumber(frames) or BUTTON_HOLD_BUFFER_DEFAULT
+  if frames < 0 then frames = 0 end
+  cachedBufferAmount = frames
+end
+
+--------------------------------------------------------------------------------
+-- Crank Controls
+--------------------------------------------------------------------------------
+
+-- ! Set Crank Indicator
+-- Single function to configure crank indicator
+function Input.setCrankIndicator(config)
+  if type(config) == "table" then
+    crankIndicator.active = config.active or false
+    crankIndicator.forced = config.forced or false
+  else
+    -- Legacy support: setCrankIndicator(active, forced)
+    crankIndicator.active = config == true
+    crankIndicator.forced = arguments and arguments[2] == true
+  end
+  Log.debug("[Input.setCrankIndicator] active=" .. tostring(crankIndicator.active) .. ", forced=" .. tostring(crankIndicator.forced)) --#DEBUG
 end
 
 -- ! Get Crank Indicator
--- Returns whether the crank indicator is active.
+-- Get current crank indicator state
 function Input.getCrankIndicator()
-  return crankIndicatorActive
-end
-
--- ! Get Crank Indicator Forced
--- Returns whether the crank indicator is forced to show.
-function Input.getCrankIndicatorForced()
-  return crankIndicatorForced
+  return {
+    active = crankIndicator.active,
+    forced = crankIndicator.forced
+  }
 end
 
 -- ! Draw Crank Indicator
--- Draws the crank indicator if active and conditions are met.
+-- Draw crank indicator if conditions are met
 function Input.drawCrankIndicator()
-  if crankIndicatorActive and (pd.isCrankDocked() or crankIndicatorForced) then
+  if crankIndicator.active and (pd.isCrankDocked() or crankIndicator.forced) then
     CrankIndicator:draw()
   end
 end
 
--- ----------------------------------------
--- Crank Direction Controls
--- ----------------------------------------
-
 -- ! Get Crank Direction
--- Returns the current crank direction multiplier.
+-- Crank direction controls
 function Input.getCrankDirection()
   return Input.crankDirection
 end
 
--- ! Input.setCrankDirection
--- Sets or toggles the crank direction multiplier.
+-- ! Set Crank Direction
 function Input.setCrankDirection(direction)
   if direction == nil then
     Input.crankDirection = -Input.crankDirection
-    Log.debug("[Input.setCrankDirection] toggled crank direction.") --#DEBUG
+    Log.debug("[Input.setCrankDirection] Toggled crank direction") --#DEBUG
   elseif direction == 1 or direction == -1 then
     Input.crankDirection = direction
-    Log.debug("[Input.setCrankDirection] set crank direction to " .. direction) --#DEBUG
+    Log.debug("[Input.setCrankDirection] Set direction to " .. direction) --#DEBUG
   end
 end
 
 -- ! Reset Crank Direction
--- Resets the crank direction to its default value.
 function Input.resetCrankDirection()
   Input.crankDirection = CRANK_DIRECTION_DEFAULT
-  Log.debug("[Input.resetCrankDirection] Reset crank direction to default.") --#DEBUG
+  Log.debug("[Input.resetCrankDirection] Reset to default") --#DEBUG
 end
 
--- ----------------------------------------
--- Crank Events (uses merged handler)
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Crank Event Handlers
+--------------------------------------------------------------------------------
 
 -- ! Crank Docked
--- Triggers the crankDocked callback if defined and enabled.
+-- Trigger crank docked callback through merged handler
 function Input.crankDocked()
   if Input.isEnabled and activeMergedHandler and activeMergedHandler.crankDocked then
     activeMergedHandler.crankDocked()
@@ -358,89 +447,79 @@ function Input.crankDocked()
 end
 
 -- ! Crank Undocked
--- Triggers the crankUndocked callback if defined and enabled.
+-- Trigger crank undocked callback through merged handler
 function Input.crankUndocked()
   if Input.isEnabled and activeMergedHandler and activeMergedHandler.crankUndocked then
     activeMergedHandler.crankUndocked()
   end
 end
 
--- ----------------------------------------
--- Main Per-frame Input Processing
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Main Input Processing (Performance Critical)
+--------------------------------------------------------------------------------
 
 -- ! Handle Input
--- Processes button hold events and triggers corresponding callbacks.
+-- Main per-frame input processing with minimal overhead
 function Input.handleInput()
   if not Input.isEnabled or not activeMergedHandler then return end
 
-  -- Block until every button is released (scene transitions, etc.)
+  -- Handle input blocking during scene transitions
   if Input._blocked then
-    if getButtonState() == 0 then
-      Log.debug("[Input.handleInput] Buttons released, unblocking input handler.") --#DEBUG
+    if getButtonState() == 0 then -- No buttons pressed
+      Log.debug("[Input.handleInput] Unblocking input") --#DEBUG
       Input._blocked = false
-      getButtonState() -- Flush justPressed/justReleased
+      getButtonState() -- Flush button state
+      resetButtonFlags()
     end
     return
   end
 
-  local handler = activeMergedHandler
-  local mask = processAllButtons()
+  local buf = cachedBufferAmount
 
-  -- Fallback path – call getButtonState() only if helper produced nil or zero
-  if not mask or mask == 0 then
-    local raw = getButtonState() & RAW_BUTTON_MASK
-    if raw == 0 then return end
-    mask = raw
+  -- Use cached callbacks and array iteration for maximum performance
+  for i = 1, #BUTTON_NAMES do
+    local name = BUTTON_NAMES[i]
+    if held[name] then
+      local frames = heldFrames[name] + 1
+      heldFrames[name] = frames
+
+      if frames >= buf then
+        local callback = cachedHoldCallbacks[name]
+        if callback then callback() end
+      end
+    end
   end
-
-  -- Dispatch six Hold events
-  if mask & 0x01 ~= 0 then _dispatch(handler, 0) end
-  if mask & 0x02 ~= 0 then _dispatch(handler, 1) end
-  if mask & 0x04 ~= 0 then _dispatch(handler, 2) end
-  if mask & 0x08 ~= 0 then _dispatch(handler, 3) end
-  if mask & 0x10 ~= 0 then _dispatch(handler, 4) end
-  if mask & 0x20 ~= 0 then _dispatch(handler, 5) end
 end
 
--- Helper for raw polling without leaving Roxy
-function Input.getRawState()
-  return getButtonState() -- Returns the full PDButtons bitfield
-end
+--------------------------------------------------------------------------------
+-- Enable / Disable Controls
+--------------------------------------------------------------------------------
 
--- ----------------------------------------
--- Enable/Disable Processing
--- ----------------------------------------
-
--- ! Get Is Enabled
--- Returns whether input processing is enabled.
+-- ! Get isEnabled
 function Input.getIsEnabled()
   return Input.isEnabled
 end
 
--- ! Set Is Enabled
--- Sets whether input processing is enabled.
+-- ! Set isEnabled
 function Input.setIsEnabled(value)
   if value ~= true and value ~= false then
-    Log.warn("[Input.setIsEnabled] setIsEnabled: Expected boolean.") --#DEBUG
+    Log.warn("[Input.setIsEnabled] Expected boolean value") --#DEBUG
     return
   end
   Input.isEnabled = value
-  Log.debug("[Input.setIsEnabled] set isEnabled = " .. tostring(value)) --#DEBUG
+  Log.debug("[Input.setIsEnabled] Set to " .. tostring(value)) --#DEBUG
 end
 
 --[[
-
-Example usage:
-
+USAGE EXAMPLE:
 Input.addHandler(player, playerControls, 0)
-Input.addHandler(menu, menuControls, 100)
+Input.addHandler(menu, menuControls, 100) -- Higher priority
 Input.removeHandler(menu)
 
+-- Batch operations for better performance
 Input.suspendAutoFlush()
-for _, w in ipairs(widgets) do
-  Input.addHandler(w, w:getInputTable(), 20)
+for _, widget in ipairs(widgets) do
+  Input.addHandler(widget, widget:getInputTable(), 20)
 end
 Input.resumeAutoFlush()
-
 ]]--
