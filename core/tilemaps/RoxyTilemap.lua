@@ -106,42 +106,44 @@ end
 
 -- ! Validate Options
 local function validateOptions(opts)
+  -- Mutate the original opts table instead of creating a new one
   opts = opts or {}
-  local layerOptions = opts.layerOptions or {}
+
+  -- Only create layerOptions table if it doesn't exist
+  if not opts.layerOptions then
+    opts.layerOptions = {}
+  end
+  local layerOptions = opts.layerOptions
 
   -- Validate per-layer emptyIDs
-  for layerName, opts in pairs(layerOptions) do
-    if opts.emptyIDs ~= nil then
-      if type(opts.emptyIDs) ~= "table" then
+  for layerName, layerOpts in pairs(layerOptions) do
+    if layerOpts.emptyIDs ~= nil then
+      if type(layerOpts.emptyIDs) ~= "table" then
         Log.warn("[validateOptions] layerOptions['" .. layerName .. "'].emptyIDs must be a table") --#DEBUG
-        opts.emptyIDs = EMPTY_TABLE
+        layerOpts.emptyIDs = EMPTY_TABLE
       else
-        for i, id in ipairs(opts.emptyIDs) do
+        for i, id in ipairs(layerOpts.emptyIDs) do
           if type(id) ~= "number" then
             Log.warn("[validateOptions] emptyIDs contains non-number at index " .. i .. " for layer '" .. layerName .. "'") --#DEBUG
-            opts.emptyIDs[i] = 0
+            layerOpts.emptyIDs[i] = 0
           end
         end
       end
     end
   end
 
-  return {
-    layers                  = opts.layers or {},
-    wrapInSprites           = opts.wrapInSprites ~= false,
-    autoAddSprites          = opts.autoAddSprites ~= false,
-    zIndices                = type(opts.zIndices) == "table" and opts.zIndices or {},
-    cameraBounds            = opts.cameraBounds or false,
-    anchor                  = (opts.anchor == "topLeft") and "topLeft" or "center",
-    collisionResponse       = opts.collisionResponse or "overlap",
-    parallaxOriginX         = opts.parallaxOriginX,
-    parallaxOriginY         = opts.parallaxOriginY,
-    wallSpriteGroup         = opts.wallSpriteGroup,
-    wallCollidesWithGroups  = opts.wallCollidesWithGroups or {},
-    layerOptions            = layerOptions,
-    objectLayers            = opts.objectLayers or {},
-    spriteFactory           = opts.spriteFactory, -- Fn to create sprites from objects
-  }
+  -- Set defaults directly on opts
+  if opts.layers == nil then opts.layers = {} end
+  if opts.wrapInSprites == nil then opts.wrapInSprites = true end
+  if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = {} end
+  if opts.cameraBounds == nil then opts.cameraBounds = false end
+  if opts.anchor == nil or opts.anchor ~= "topLeft" then opts.anchor = "center" end
+  if opts.collisionResponse == nil then opts.collisionResponse = "overlap" end
+  if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = {} end
+  if opts.objectLayers == nil then opts.objectLayers = {} end
+
+  -- Return the mutated opts instead of a new table
+  return opts
 end
 
 -- ! Create default Object Sprite
@@ -237,9 +239,11 @@ local function createDefaultObjectSprite(obj, layerOpts)
 end
 
 -- ! Process Object Layer
-local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, sceneHasAdd)
+local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, sceneHasAdd, newSprites)
   local objects = layer.objects or {}
-  local layerSprites = {}
+
+  -- Preallocate Object-Layer Tables
+  local layerSprites = createTable(#objects, 0)
 
   for _, obj in ipairs(objects) do
     local sprite = nil
@@ -297,6 +301,11 @@ local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, 
 
       tableInsert(layerSprites, sprite)
 
+      -- Directly Append Sprites
+      if newSprites then
+        tableInsert(newSprites, sprite)
+      end
+
       -- Auto-add sprite if requested
       if autoAdd then
         if sceneHasAdd then
@@ -309,6 +318,22 @@ local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, 
   end
 
   return layerSprites
+end
+
+-- ! Create Parallax Update
+-- Hoist and Cache sprite:update - Move parallax update function outside per-sprite loop
+-- Define the parallax update function once, outside the sprite creation loop
+-- This avoids creating new function instances for each sprite
+local function createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, px, py, rnd, camGetter)
+  return function(self)
+    local cameraX, cameraY = camGetter()
+    local screenX = rnd(worldX + pivotAdjustX - cameraX * px)
+    local screenY = rnd(worldY + pivotAdjustY - cameraY * py)
+    local currentX, currentY = self:getPosition()
+    if screenX ~= currentX or screenY ~= currentY then
+      self:moveTo(screenX, screenY)
+    end
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -325,7 +350,7 @@ class("RoxyTilemap").extends(Object)
 ]]
 function RoxyTilemap:init(jsonPath, opts, scene)
   opts = validateOptions(opts)
-  local autoAdd = opts.wrapInSprites and opts.autoAddSprites
+  local autoAdd = opts.wrapInSprites and (opts.autoAddSprites ~= false)
   local sceneHasAdd = scene and type(scene) == "table" and type(scene.addSprite) == "function" or false
 
   --#DEBUG START
@@ -354,6 +379,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     }
   end
   tableSort(gidRanges, function(a, b) return a.first < b.first end)
+
+  -- Cache First Tileset per Layer - Define tilesetForGid function once
   local function tilesetForGid(gid)
     for i = #gidRanges, 1, -1 do
       local range = gidRanges[i]
@@ -409,7 +436,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
       local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or {}
       local data = layer.data or {}
 
-      -- Auto-detect the tileset for this layer (first nonzero GID)
+      -- Cache First Tileset per Layer - Find first nonzero GID and cache the tileset
       local usedTileset = nil
       for i = 1, #data do
         local rawGid = data[i]
@@ -454,6 +481,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
         for i = 1, #data do
           local rawGid = data[i]
           local gid = rawGid & 0x1FFFFFFF
+          -- Use cached usedTileset instead of calling tilesetForGid for each tile
           indices[i] = (gid ~= 0) and (gid - firstgid + 1) or 0
         end
         tilemap:setTiles(indices, layer.width)
@@ -503,6 +531,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           layerData.parallaxoriginx = pox
           layerData.parallaxoriginy = poy
 
+          -- Hoist and Cache sprite:update - Cache constants as locals
           local camGetter = getCameraPosition
           local rnd = round
 
@@ -510,18 +539,14 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           if useParallax and (px ~= 1 or py ~= 1 or offsetX ~= 0 or offsetY ~= 0) then
             sprite:setIgnoresDrawOffset(true)
             sprite:setUpdatesEnabled(true)
+
+            -- Cache constants as locals to avoid table lookups each frame
             local pivotAdjustX = pox * (1 - px)
             local pivotAdjustY = poy * (1 - py)
             local worldX, worldY = originX, originY
-            function sprite:update()
-              local cameraX, cameraY = camGetter()
-              local screenX = rnd(worldX + pivotAdjustX - cameraX * px)
-              local screenY = rnd(worldY + pivotAdjustY - cameraY * py)
-              local currentX, currentY = self:getPosition()
-              if screenX ~= currentX or screenY ~= currentY then
-                self:moveTo(screenX, screenY)
-              end
-            end
+
+            -- Use the hoisted createParallaxUpdate function
+            sprite.update = createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, px, py, rnd, camGetter)
           else
             sprite:moveTo(originX, originY)
           end
@@ -574,13 +599,9 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     if layer.type == "objectgroup" and (processAll or opts.objectLayers[layer.name]) then
       local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or {}
 
-      local sprites = processObjectLayer(self, layer, opts, layerOptions, autoAdd, scene, sceneHasAdd)
+      -- Pass newSprites to processObjectLayer for direct insertion
+      local sprites = processObjectLayer(self, layer, opts, layerOptions, autoAdd, scene, sceneHasAdd, newSprites)
       objectSprites[layer.name] = sprites
-
-      -- Add to main sprites list
-      for _, sprite in ipairs(sprites) do
-        tableInsert(newSprites, sprite)
-      end
     end
   end
   self.objectSprites = objectSprites -- Store object sprites
