@@ -249,7 +249,6 @@ function pd.update()
 
   handleInput()
   updateSequences(dt)
-  spriteUpdate()
 
   local updateList = getUpdateList()
   for i = 1, #updateList do
@@ -259,6 +258,8 @@ function pd.update()
   for i = 1, #bgList do
     bgList[i]:updateBackground(dt)
   end
+
+  spriteUpdate()
 
   if Transition.isTransitioning then
     local currentTransition = Transition.currentTransition
