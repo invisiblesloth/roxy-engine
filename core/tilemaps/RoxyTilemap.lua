@@ -87,6 +87,10 @@ end
 
 -- ! Get Image Table
 local function getImageTable(path)
+  if type(path) ~= "string" or path == "" then
+    Log.warn("[getImageTable] Invalid or missing path: " .. tostring(path))
+    return nil
+  end
   local cached = getCachedAsset(path)
   if cached then
     -- If cached is a thunk, call it
@@ -111,7 +115,7 @@ local function validateOptions(opts)
 
   -- Only create layerOptions table if it doesn't exist
   if not opts.layerOptions then
-    opts.layerOptions = {}
+    opts.layerOptions = EMPTY_TABLE
   end
   local layerOptions = opts.layerOptions
 
@@ -133,14 +137,14 @@ local function validateOptions(opts)
   end
 
   -- Set defaults directly on opts
-  if opts.layers == nil then opts.layers = {} end
+  if opts.layers == nil then opts.layers = EMPTY_TABLE end
   if opts.wrapInSprites == nil then opts.wrapInSprites = true end
-  if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = {} end
+  if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = EMPTY_TABLE end
   if opts.cameraBounds == nil then opts.cameraBounds = false end
   if opts.anchor == nil or opts.anchor ~= "topLeft" then opts.anchor = "center" end
   if opts.collisionResponse == nil then opts.collisionResponse = "overlap" end
-  if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = {} end
-  if opts.objectLayers == nil then opts.objectLayers = {} end
+  if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = EMPTY_TABLE end
+  if opts.objectLayers == nil then opts.objectLayers = EMPTY_TABLE end
 
   -- Return the mutated opts instead of a new table
   return opts
@@ -259,21 +263,36 @@ local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, 
     end
 
     if sprite then
-      -- Set position (Tiled uses top-left, may need adjustment based on anchor)
+      -- Base object position in world‐pixels (top‐left or centered)
       local x, y = obj.x or 0, obj.y or 0
       if opts.anchor == "center" then
-        -- Adjust for center anchoring if needed
-        x = x + (obj.width or 0) * 0.5
+        x = x + (obj.width  or 0) * 0.5
         y = y + (obj.height or 0) * 0.5
       end
 
-      -- Handle positioning differently for parallax sprites
-      if sprite.setWorldPosition then
-        -- This is a parallax sprite, set world position
-        sprite:setWorldPosition(x, y)
+      -- Compute final screen coordinates (sx, sy)
+      local sx, sy
+      if self.isIsometric then
+        -- Convert from world-pixels to world-tiles for projection
+        local layerData = self.layers[layer.name] or self.layers[Object.keys(self.layers)[1]]
+        if layerData then
+          local tileX = x / layerData.tileWidth
+          local tileY = y / layerData.tileHeight
+          sx, sy = self:worldToScreen(tileX, tileY, layerData)
+        else
+          sx, sy = x, y -- fallback
+        end
       else
-        -- Regular sprite, set screen position
-        sprite:moveTo(x, y)
+        sx, sy = x, y
+      end
+
+      -- Position the sprite
+      if sprite.setWorldPosition then
+        -- Parallax‐aware sprite
+        sprite:setWorldPosition(sx, sy)
+      else
+        -- Normal screen‐positioned sprite
+        sprite:moveTo(sx, sy)
       end
 
       -- Set z-index if specified
@@ -368,6 +387,10 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     self.worldWidth, self.worldHeight = 0, 0
     return
   end
+
+  -- Read Tiled’s orientation field and set a flag
+  self.orientation = mapData.orientation or "orthogonal"
+  self.isIsometric = (self.orientation == "isometric")
 
   -- Build GID ranges for tileset auto-detection
   local gidRanges = {}
@@ -491,7 +514,9 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           tilemap = tilemap,
           anchor = opts.anchor,
           tileWidth = tileWidth,
-          tileHeight = tileHeight
+          tileHeight = tileHeight,
+          isIsometric = self.isIsometric,
+          imageTable = usedTileset.imageTable
         }
 
         -- Wrap in sprite if requested
@@ -510,6 +535,10 @@ function RoxyTilemap:init(jsonPath, opts, scene)
             originX = (mapWidth * 0.5) + offsetX
             originY = (mapHeight * 0.5) + offsetY
           end
+
+          -- Keep this for both projections, so worldToScreen can use it
+          layerData.originX = originX
+          layerData.originY = originY
 
           local sprite = newSprite()
           sprite:setTilemap(tilemap)
@@ -747,6 +776,49 @@ end
 -- This is cached at init-time and available even if cameraBounds is false.
 function RoxyTilemap:getWorldSize()
   return self.worldWidth, self.worldHeight
+end
+
+-- ! World to Screen
+-- Convert tile/world coords to screen coords, with parallax & orientation
+function RoxyTilemap:worldToScreen(worldX, worldY, layer)
+  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
+  local originX, originY = layer.originX or 0, layer.originY or 0
+  local px, py = layer.parallaxx or 1, layer.parallaxy or 1
+  local camX, camY = getCameraPosition()
+  if self.isIsometric then
+    -- Isometric projection
+    local isoX = originX + (worldX - worldY) * (tileWidth / 2)
+    local isoY = originY + (worldX + worldY) * (tileHeight / 2)
+    return round(isoX - camX * px), round(isoY - camY * py)
+  else
+    -- Orthogonal projection
+    local orthoX = originX + worldX * tileWidth
+    local orthoY = originY + worldY * tileHeight
+    return round(orthoX - camX * px), round(orthoY - camY * py)
+  end
+end
+
+-- ! Screen to World
+-- Convert screen coordinates back to world coordinates
+function RoxyTilemap:screenToWorld(screenX, screenY, layer)
+  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
+  local originX, originY = layer.originX or 0, layer.originY or 0
+  local px, py = layer.parallaxx or 1, layer.parallaxy or 1
+  local camX, camY = getCameraPosition()
+
+  if self.isIsometric then
+    -- Reverse isometric projection
+    local adjX = (screenX + camX * px) - originX
+    local adjY = (screenY + camY * py) - originY
+    local worldX = (adjX / (tileWidth / 2) + adjY / (tileHeight / 2)) / 2
+    local worldY = (adjY / (tileHeight / 2) - adjX / (tileWidth / 2)) / 2
+    return worldX, worldY
+  else
+    -- Reverse orthogonal projection
+    local worldX = ((screenX + camX * px) - originX) / tileWidth
+    local worldY = ((screenY + camY * py) - originY) / tileHeight
+    return worldX, worldY
+  end
 end
 
 -- ! Hide Layer
