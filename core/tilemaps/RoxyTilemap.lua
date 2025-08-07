@@ -144,81 +144,6 @@ local function validateOptions(opts)
   }
 end
 
--- ! Process Object Layer
-local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, sceneHasAdd)
-  local objects = layer.objects or {}
-  local layerSprites = {}
-
-  for _, obj in ipairs(objects) do
-    local sprite = nil
-
-    -- Use custom sprite factory if provided
-    if opts.spriteFactory and type(opts.spriteFactory) == "function" then
-      sprite = opts.spriteFactory(obj, layer.name, layerOpts)
-    elseif layerOpts.spriteFactory and type(layerOpts.spriteFactory) == "function" then
-      sprite = layerOpts.spriteFactory(obj, layer.name, layerOpts)
-    else
-      -- Default sprite creation
-      sprite = createDefaultObjectSprite(obj, layerOpts)
-    end
-
-    if sprite then
-      -- Set position (Tiled uses top-left, may need adjustment based on anchor)
-      local x, y = obj.x or 0, obj.y or 0
-      if opts.anchor == "center" then
-        -- Adjust for center anchoring if needed
-        x = x + (obj.width or 0) * 0.5
-        y = y + (obj.height or 0) * 0.5
-      end
-
-      -- Handle positioning differently for parallax sprites
-      if sprite.setWorldPosition then
-        -- This is a parallax sprite, set world position
-        sprite:setWorldPosition(x, y)
-      else
-        -- Regular sprite, set screen position
-        sprite:moveTo(x, y)
-      end
-
-      -- Set z-index if specified
-      local zIndex = layerOpts.zIndex or opts.zIndices[layer.name] or 0
-      sprite:setZIndex(zIndex)
-
-      -- Set visibility
-      sprite:setVisible(layerOpts.visible ~= false)
-
-      -- Store object data on sprite for reference
-      sprite.tiledObject = obj
-
-      -- Add collision if requested
-      if layerOpts.collidable == true then
-        sprite:setTag(layerOpts.tag or 2) -- Different from wall sprites (tag 1)
-        sprite:setCollideRect(0, 0, sprite:getSize())
-        if layerOpts.spriteGroup then
-          sprite:setGroups(type(layerOpts.spriteGroup) == "table" and layerOpts.spriteGroup or {layerOpts.spriteGroup})
-        end
-        if layerOpts.collidesWithGroups and type(layerOpts.collidesWithGroups) == "table" and #layerOpts.collidesWithGroups > 0 then
-          sprite:setCollidesWithGroups(layerOpts.collidesWithGroups)
-        end
-        sprite.collisionResponse = layerOpts.collisionResponse or opts.collisionResponse
-      end
-
-      tableInsert(layerSprites, sprite)
-
-      -- Auto-add sprite if requested
-      if autoAdd then
-        if sceneHasAdd then
-          scene:addSprite(sprite)
-        else
-          sprite:add()
-        end
-      end
-    end
-  end
-
-  return layerSprites
-end
-
 -- ! Create default Object Sprite
 local function createDefaultObjectSprite(obj, layerOpts)
   -- Check if object has parallax properties
@@ -309,6 +234,81 @@ local function createDefaultObjectSprite(obj, layerOpts)
   sprite.objectProperties = objectProperties
 
   return sprite
+end
+
+-- ! Process Object Layer
+local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, sceneHasAdd)
+  local objects = layer.objects or {}
+  local layerSprites = {}
+
+  for _, obj in ipairs(objects) do
+    local sprite = nil
+
+    -- Use custom sprite factory if provided
+    if opts.spriteFactory and type(opts.spriteFactory) == "function" then
+      sprite = opts.spriteFactory(obj, layer.name, layerOpts)
+    elseif layerOpts.spriteFactory and type(layerOpts.spriteFactory) == "function" then
+      sprite = layerOpts.spriteFactory(obj, layer.name, layerOpts)
+    else
+      -- Default sprite creation
+      sprite = createDefaultObjectSprite(obj, layerOpts)
+    end
+
+    if sprite then
+      -- Set position (Tiled uses top-left, may need adjustment based on anchor)
+      local x, y = obj.x or 0, obj.y or 0
+      if opts.anchor == "center" then
+        -- Adjust for center anchoring if needed
+        x = x + (obj.width or 0) * 0.5
+        y = y + (obj.height or 0) * 0.5
+      end
+
+      -- Handle positioning differently for parallax sprites
+      if sprite.setWorldPosition then
+        -- This is a parallax sprite, set world position
+        sprite:setWorldPosition(x, y)
+      else
+        -- Regular sprite, set screen position
+        sprite:moveTo(x, y)
+      end
+
+      -- Set z-index if specified
+      local zIndex = layerOpts.zIndex or opts.zIndices[layer.name] or 0
+      sprite:setZIndex(zIndex)
+
+      -- Set visibility
+      sprite:setVisible(layerOpts.visible ~= false)
+
+      -- Store object data on sprite for reference
+      sprite.tiledObject = obj
+
+      -- Add collision if requested
+      if layerOpts.collidable == true then
+        sprite:setTag(layerOpts.tag or 2) -- Different from wall sprites (tag 1)
+        sprite:setCollideRect(0, 0, sprite:getSize())
+        if layerOpts.spriteGroup then
+          sprite:setGroups(type(layerOpts.spriteGroup) == "table" and layerOpts.spriteGroup or {layerOpts.spriteGroup})
+        end
+        if layerOpts.collidesWithGroups and type(layerOpts.collidesWithGroups) == "table" and #layerOpts.collidesWithGroups > 0 then
+          sprite:setCollidesWithGroups(layerOpts.collidesWithGroups)
+        end
+        sprite.collisionResponse = layerOpts.collisionResponse or opts.collisionResponse
+      end
+
+      tableInsert(layerSprites, sprite)
+
+      -- Auto-add sprite if requested
+      if autoAdd then
+        if sceneHasAdd then
+          scene:addSprite(sprite)
+        else
+          sprite:add()
+        end
+      end
+    end
+  end
+
+  return layerSprites
 end
 
 --------------------------------------------------------------------------------
@@ -490,7 +490,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           else
             sprite:setCenter(0.5, 0.5)
           end
-          sprite:setZIndex(opts.zIndices[layer.name] or 0)
+          sprite:setZIndex(layerOptions.zIndex or opts.zIndices[layer.name] or 0)
+
 
           local px = tonumber(layer.parallaxx) or 1
           local py = tonumber(layer.parallaxy) or 1
