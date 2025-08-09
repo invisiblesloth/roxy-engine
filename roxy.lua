@@ -261,6 +261,11 @@ function pd.update()
 
   spriteUpdate()
 
+  local list = Scene.getDrawList()
+  for i = 1, #list do
+    list[i]:draw(r.deltaTime)
+  end
+
   if Transition.isTransitioning then
     local currentTransition = Transition.currentTransition
     if currentTransition.captureScreenshotsDuringTransition then

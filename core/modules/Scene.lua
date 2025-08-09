@@ -13,7 +13,13 @@ local getDisplayImage <const> = Graphics.getDisplayImage
 local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
 local redrawBackground      <const> = Sprite.redrawBackground
 
+-- Cache a reference to your base scene class draw, if available
+local BaseSceneDraw <const> = (rawget(_G, "RoxyScene") and RoxyScene.draw) or nil
+
 local MAX_SCENE_DEPTH <const> = 32
+
+-- Shared no-op function to avoid per-activation allocations
+local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
 -- Global
 Scene.currentScene = nil
@@ -23,6 +29,7 @@ local scenes
 local stack
 local updateList
 local bgList
+local drawList
 
 -- ----------------------------------------
 -- Utilities
@@ -32,27 +39,90 @@ local bgList
 -- Rebuilds the update lists based on the current stack.
 local function rebuildLists()
   local currentScene = Scene.currentScene
-  local updateCount, bgCount = 0, 0
-  for i = 1, #stack do
-    local scene = stack[i]
+  local updateCount, bgCount = 0, 0 -- Counters for update lists
+  local drawCount = 0 -- Counter for draw list
+
+  -- Localize frequently used references for speed
+  local sceneStack = stack
+  local uList = updateList
+  local bList = bgList
+  local dList = drawList
+  local depth = #sceneStack
+
+  -- Early out for empty stack
+  if depth == 0 then
+    -- Trim tails in case previous state left items in the lists
+    if #uList > 0 then for i = 1, #uList do uList[i] = nil end end
+    if #bList > 0 then for i = 1, #bList do bList[i] = nil end end
+    if #dList > 0 then for i = 1, #dList do dList[i] = nil end end
+    Log.debug("[Scene.rebuildLists] update=0 bg=0 draw=0") --#DEBUG
+    return
+  end
+
+  -- (1) Build update and background lists
+  for i = 1, depth do
+    local scene = sceneStack[i]
     if scene == currentScene or scene.alwaysUpdate then
       updateCount += 1
-      updateList[updateCount] = scene
+      uList[updateCount] = scene
     elseif scene.updateBackground then
       bgCount += 1
-      bgList[bgCount] = scene
+      bList[bgCount] = scene
     end
   end
 
-  -- Trim tails
-  for i = updateCount + 1, #updateList do
-    updateList[i] = nil
-  end
-  for i = bgCount + 1, #bgList do
-    bgList[i] = nil
+  -- (2) Build draw list honoring scene stacking rules
+  -- Find the highest scene that blocks lower draw, scanning from top downward.
+  local startIndex = 1
+  for i = depth, 1, -1 do
+    local scene = sceneStack[i]
+    if scene and scene.blocksLowerDraw == true then
+      startIndex = i
+      break
+    end
   end
 
-  Log.debug("[Scene.rebuildLists] update=".. updateCount .. " bg=" .. bgCount) --#DEBUG
+  -- Collect visible scenes from startIndex --> top (bottom-to-top draw order)
+  for i = startIndex, depth do
+    local scene = sceneStack[i]
+    if scene and scene.isVisible ~= false then
+      -- Only include scenes that override draw (skip base no-op)
+      local cls = getmetatable(scene)
+      cls = cls and cls.__index or nil -- Class table for this instance
+      local fn = cls and cls.draw or nil -- Resolved draw for this class
+      local include = false
+
+      if type(fn) == "function" then
+        if BaseSceneDraw then
+          include = (fn ~= BaseSceneDraw) -- Different from base no-op
+        else
+          include = true -- Fallback if base unknown
+        end
+      end
+
+      if include then
+        drawCount += 1
+        dList[drawCount] = scene
+      end
+    end
+  end
+
+  -- (3) Trim tails
+  local uLen = #uList
+  local bLen = #bList
+  local dLen = #dList
+
+  if updateCount < uLen then
+    for i = updateCount + 1, uLen do uList[i] = nil end
+  end
+  if bgCount < bLen then
+    for i = bgCount + 1, bLen do bList[i] = nil end
+  end
+  if drawCount < dLen then
+    for i = drawCount + 1, dLen do dList[i] = nil end
+  end
+
+  Log.debug("[Scene.rebuildLists] update=" .. updateCount .. " bg=" .. bgCount .. " draw=" .. drawCount) --#DEBUG
 end
 
 -- ! Utility: Activate Scene
@@ -61,7 +131,7 @@ local function activateScene(scene)
   Scene.currentScene = scene
   if scene then
     scene:enter()
-    local backgroundDrawFn = scene.backgroundDrawFn or function(x, y, width, height) end
+    local backgroundDrawFn = scene.backgroundDrawFn or NO_OP_BG_DRAW
     setBackgroundDrawing(backgroundDrawFn)
     redrawBackground()
   end
@@ -77,6 +147,7 @@ function Scene.init()
   stack = {}      -- Scene stack
   updateList = {} -- Pre-filtered update list
   bgList = {}     -- Pre-filtered bg update lists
+  drawList = {}   -- Pre-filtered draw list
 
   Scene.currentScene = nil -- Currently active scene (top of stack)
 
@@ -165,8 +236,6 @@ function Scene.replaceScene(newScene)
     Log.error("[Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
-
-  local oldScene = Scene.currentScene
 
   -- Exit and cleanup all scenes on the stack before replacing
   for i = #stack, 1, -1 do
@@ -281,4 +350,10 @@ end
 -- ! Get Background List
 function Scene.getBackgroundList()
   return bgList
+end
+
+-- ! Get Draw List (Added)
+-- Returns the cached draw list honoring blocksLowerDraw and isVisible flags.
+function Scene.getDrawList()
+  return drawList
 end
