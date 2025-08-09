@@ -3,6 +3,7 @@
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
+
 local r         <const> = roxy
 local Camera   <const> = r.Camera
 
@@ -11,7 +12,8 @@ local newImagetable <const> = Graphics.imagetable.new
 
 local performAfterDelay <const> = pd.timer.performAfterDelay
 
-local getPosition <const> = Camera.getPosition
+local getPosition   <const> = Camera.getPosition
+local worldToScreen <const> = Camera.worldToScreen
 
 local UNFLIPPED   <const> = Graphics.kImageUnflipped
 local FLIPPED_X   <const> = Graphics.kImageFlippedX
@@ -23,9 +25,9 @@ local MS_PER_SECOND <const> = 1000
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 class("RoxySprite").extends(Sprite)
 
@@ -60,9 +62,9 @@ function RoxySprite:init(opts, scene)
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Sprite Setup
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Ignores Draw Offset
 function RoxySprite:setIgnoresDrawOffset(flag)
@@ -94,9 +96,9 @@ function RoxySprite:moveTo(x, y)
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- View Management
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set View
 -- Sets the visual representation for the sprite (image or animation).
@@ -202,9 +204,9 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Flip Flip
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set Flip State
 -- Updates flip state and marks dirty only when changed.
@@ -231,11 +233,10 @@ function RoxySprite:getOrientation()
   return self.flip
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Animation Helpers
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
---
 -- ! Add Animation
 -- Adds an animation definition to this sprite.
 -- Table‑based addAnimation; delegates cleanly to RoxyAnimation
@@ -246,7 +247,6 @@ function RoxySprite:addAnimation(name, nextContinuity, unlessThisAnimation)
   return self
 end
 
---
 -- ! Set Animation
 -- Switches the currently playing animation.
 --
@@ -259,9 +259,9 @@ function RoxySprite:setAnimation(name, nextContinuity, unlessThisAnimation)
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Playback
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Get isPaused
 function RoxySprite:getIsPaused()
@@ -350,9 +350,9 @@ function RoxySprite:reverse()
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Speed and Frame Duration
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Get Speed
 function RoxySprite:getSpeed()
@@ -400,9 +400,9 @@ function RoxySprite:setFrameDuration(frameDuration, currentOnly)
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Frame Control
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Draw Specific Frame
 function RoxySprite:drawSpecificFrame(frame, andPause)
@@ -428,9 +428,9 @@ function RoxySprite:stepFrame(direction)
   return self
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Rendering
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Update
 function RoxySprite:update()
@@ -442,23 +442,41 @@ function RoxySprite:update()
   local dt = r.deltaTime or 0
 
   -- (Fast) Simple animation path
-  local simpleAnimation = self.simpleAnim
-  if simpleAnimation then
-    local old = simpleAnimation.currentFrame
-    simpleAnimation.accumulator = simpleAnimation.accumulator + dt
-    if simpleAnimation.accumulator >= simpleAnimation.frameDuration then
-      simpleAnimation.currentFrame = simpleAnimation.currentFrame + 1
-      if simpleAnimation.currentFrame > simpleAnimation.endFrame then
-        if simpleAnimation.loop then
-          simpleAnimation.currentFrame = simpleAnimation.startFrame
+  local simpleAnim = self.simpleAnim
+  if simpleAnim then
+    -- Cache frequently accessed table fields as locals
+    local currentFrame = simpleAnim.currentFrame
+    local accumulator = simpleAnim.accumulator
+    local frameDuration = simpleAnim.frameDuration
+    local endFrame = simpleAnim.endFrame
+    local startFrame = simpleAnim.startFrame
+    local loop = simpleAnim.loop
+
+    local oldFrame = currentFrame -- Track if frame changes
+
+    accumulator = accumulator + dt
+    if accumulator >= frameDuration then
+      currentFrame = currentFrame + 1
+      if currentFrame > endFrame then
+        if loop then
+          currentFrame = startFrame
         else
-          simpleAnimation.currentFrame = simpleAnimation.endFrame
+          currentFrame = endFrame
         end
       end
-      simpleAnimation.accumulator = simpleAnimation.accumulator - simpleAnimation.frameDuration -- Preserve overflow for smooth timing
-      if simpleAnimation.currentFrame ~= old then
+      accumulator = accumulator - frameDuration -- Preserve overflow for smooth timing
+
+      -- Write back the changed values
+      simpleAnim.currentFrame = currentFrame
+      simpleAnim.accumulator = accumulator
+
+      -- Only mark dirty if frame actually changed
+      if currentFrame ~= oldFrame then
         self:markDirty()
       end
+    else
+      -- Only update accumulator if we didn't enter the timing branch
+      simpleAnim.accumulator = accumulator
     end
     return
   end
@@ -481,9 +499,9 @@ function RoxySprite:draw()
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Sprite Lifecycle
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Add Sprite
 function RoxySprite:add()
@@ -525,13 +543,13 @@ end
 function RoxySprite:isOnScreen()
   if self._ignoresDrawOffset then
     local x, y = self:getPosition()
-    local w, h = self:getSize()
+    local width, height = self:getSize()
     return not (
-      x + w < 0 or x > DISPLAY_WIDTH or
-      y + h < 0 or y > DISPLAY_HEIGHT
+      x + width < 0 or x > DISPLAY_WIDTH or
+      y + height < 0 or y > DISPLAY_HEIGHT
     )
   else
-    -- original world-space check
+    -- Original world-space check
     local spriteX, spriteY = self:getPosition()
     local spriteWidth, spriteHeight = self:getSize()
     local centerX, centerY = self:getCenter()
@@ -542,14 +560,21 @@ function RoxySprite:isOnScreen()
 
     -- Get camera position (top-left corner)
     local camX, camY = getPosition()
-    local screenWidth, screenHeight = DISPLAY_WIDTH, DISPLAY_HEIGHT
-
     return not (
       right < camX or
-      left > camX + screenWidth or
+      left > camX + DISPLAY_WIDTH or
       bottom < camY or
-      top > camY + screenHeight
+      top > camY + DISPLAY_HEIGHT
     )
+  end
+end
+
+-- ! Get Screen Position
+function RoxySprite:getScreenPosition()
+  if self._ignoresDrawOffset then
+    return self.x, self.y
+  else
+    return worldToScreen(self.x, self.y)
   end
 end
 

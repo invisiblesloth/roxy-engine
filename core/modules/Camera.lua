@@ -370,6 +370,10 @@ function Camera.updateFollow(dt)
     local t = min(Camera.smoothing * dt, 1)
     Camera.x = lerp(Camera.x, Camera._targetX, t)
     Camera.y = lerp(Camera.y, Camera._targetY, t)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   else
     Camera.x, Camera.y = Camera._targetX, Camera._targetY
   end
@@ -378,6 +382,10 @@ function Camera.updateFollow(dt)
   if Camera._hasBounds then
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   end
 
   if Camera.smoothing > 0
@@ -425,6 +433,10 @@ function Camera.updateManualPan(dt)
     local t = min(Camera.smoothing * dt, 1)
     Camera.x = lerp(Camera.x, Camera._targetX, t)
     Camera.y = lerp(Camera.y, Camera._targetY, t)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   else
     Camera.x, Camera.y = Camera._targetX, Camera._targetY
   end
@@ -433,6 +445,10 @@ function Camera.updateManualPan(dt)
   if Camera._hasBounds then
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
+
+    -- Snap to nearest pixel
+    Camera.x = round(Camera.x)
+    Camera.y = round(Camera.y)
   end
 
   -- Apply shake and update draw offset
@@ -509,17 +525,24 @@ end
 -- ! World to Screen Converter
 -- Converts world coordinates to screen coordinates, using the current camera offset
 function Camera.worldToScreen(worldX, worldY)
-  -- Use _lastX and _lastY because that's what's currently applied via setDrawOffset
-  local screenX = worldX - Camera._lastX
-  local screenY = worldY - Camera._lastY
+  if worldX == nil or worldY == nil then
+    Log.warn("worldToScreen received nil coordinate(s)") --#DEBUG
+  end
+
+  local screenX = worldX ~= nil and (worldX - Camera._lastX) or 0
+  local screenY = worldY ~= nil and (worldY - Camera._lastY) or 0
   return screenX, screenY
 end
 
 -- ! Screen to World Converter
 -- Converts screen coordinates to world coordinates, using the current camera offset
 function Camera.screenToWorld(screenX, screenY)
-  local worldX = screenX + Camera._lastX
-  local worldY = screenY + Camera._lastY
+  if screenX == nil or screenY == nil then
+    Log.warn("screenToWorld received nil coordinate(s)") --#DEBUG
+  end
+
+  local worldX = screenX ~= nil and (screenX + Camera._lastX) or 0
+  local worldY = screenY ~= nil and (screenY + Camera._lastY) or 0
   return worldX, worldY
 end
 

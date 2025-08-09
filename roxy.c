@@ -3,7 +3,6 @@
 #include "pd_api.h"
 #include "utilities/roxy_math.h"
 #include "utilities/roxy_ease.h"
-#include "core/modules/roxy_input.h"
 #include "core/transitions/roxy_transition.h"
 #include "core/sequences/roxy_sequence.h"
 #include "core/animations/roxy_animation.h"
@@ -174,23 +173,6 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
     };
     for (int i = 0; i < sizeof(easingFunctions) / sizeof(easingFunctions[0]); ++i) {
         if (!pd->lua->addFunction(easingFuncs[i], easingFunctions[i], &error)) {
-            pd->system->logToConsole("%s:%i: addFunction failed, %s", __FILE__, __LINE__, error);
-            return -1;
-        }
-    }
-
-    // ! Register Input Functions
-    roxy_input_setPlaydateAPI(pd);
-    const char* inputFunctions[] = {
-        "roxy.Input.setButtonHoldBufferAmount",
-        "roxy.Input.processAllButtons"
-    };
-    int (*inputFuncs[])(lua_State*) = {
-        roxy_input_setButtonHoldBufferAmount_l,
-        roxy_input_processAllButtons_l
-    };
-    for (int i = 0; i < sizeof(inputFunctions) / sizeof(inputFunctions[0]); ++i) {
-        if (!pd->lua->addFunction(inputFuncs[i], inputFunctions[i], &error)) {
             pd->system->logToConsole("%s:%i: addFunction failed, %s", __FILE__, __LINE__, error);
             return -1;
         }
