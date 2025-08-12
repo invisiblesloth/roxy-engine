@@ -251,16 +251,22 @@ function pd.update()
   handleInput()
   updateSequences(dt)
 
+  -- Cache list once and length once.
   local updateList = getUpdateList()
-  for i = 1, #updateList do
+  local updateCount = #updateList
+  for i = 1, updateCount do
     updateList[i]:update(dt)
   end
+
   local bgList = getBackgroundList()
-  for i = 1, #bgList do
+  local bgCount = #bgList
+  for i = 1, bgCount do
     bgList[i]:updateBackground(dt)
   end
 
-  if Transition.isTransitioning then
+  local isTransitioning = Transition.isTransitioning
+
+  if isTransitioning then
     local currentTransition = Transition.currentTransition
     if currentTransition then
       prepareTransitionScreenshot() -- Push offscreen context here (pre-render)
@@ -270,12 +276,13 @@ function pd.update()
   spriteUpdate()
 
   local list = getDrawList()
-  for i = 1, #list do
+  local drawCount = #list
+  for i = 1, drawCount do
     list[i]:draw(dt)
   end
 
   -- Now render the transition overlay
-  if Transition.isTransitioning then
+  if isTransitioning then
     executeTransitionDrawing() -- This will pop the offscreen context
   end
 
