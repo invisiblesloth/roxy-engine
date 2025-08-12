@@ -323,6 +323,12 @@ function Scene.popScene()
   activateScene(newScene)
 end
 
+-- ! Invalidate Lists
+-- Public access to rebuild lists utility
+function Scene.invalidateLists()
+  rebuildLists()
+end
+
 -- ----------------------------------------
 -- Scene State / Getters
 -- ----------------------------------------
