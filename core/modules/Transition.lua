@@ -24,12 +24,15 @@ local getTransitionConfig <const> = Config.getTransitionConfig
 
 local pushContext <const> = Graphics.pushContext
 local popContext  <const> = Graphics.popContext
+local setColor    <const> = Graphics.setColor
+local fillRect    <const> = Graphics.fillRect
 local newImage    <const> = Graphics.image.new
 local getDrawMode <const> = Graphics.getImageDrawMode
 local setDrawMode <const> = Graphics.setImageDrawMode
 
 local EMPTY_TABLE   <const> = {}
 
+local COLOR_WHITE     <const> = Graphics.kColorWhite
 local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
@@ -191,7 +194,7 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   end
 
   Transition.isTransitioning = true
-  local currentScene = Scene.currentScene
+  local scene = Scene.currentScene
 
   -- Use transition or fallback to default
   local config = getConfig("transitions") or EMPTY_TABLE
@@ -208,7 +211,7 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   -- Construct and execute the transition instance
   local transitionInstance = transitionClass(transitionOpts)
   Transition.currentTransition = transitionInstance
-  transitionInstance:execute(newScene, currentScene)
+  transitionInstance:execute(newScene, scene)
 end
 
 -- ----------------------------------------
@@ -218,34 +221,56 @@ end
 -- ! Prepare Transition Screenshot
 -- Prepares a screenshot for transitions if needed.
 function Transition.prepareTransitionScreenshot()
-  local currentTransition = Transition.currentTransition
-  if not currentTransition or not currentTransition.captureScreenshotsDuringTransition then return end
+  local transition = Transition.currentTransition
+  if not transition or not transition.captureScreenshot then return end
 
-  currentTransition.newSceneScreenshot = newImage(DISPLAY_WIDTH, DISPLAY_HEIGHT)
-  pushContext(currentTransition.newSceneScreenshot) -- Push context for capturing screenshot
-  currentTransition._screenshotContextPushed = true -- Track context state
+  -- Reuse the same image
+  local img = transition.newSceneScreenshot
+  if not img or img.width ~= DISPLAY_WIDTH or img.height ~= DISPLAY_HEIGHT then
+    img = newImage(DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    transition.newSceneScreenshot = img
+  end
+
+  pushContext(img) -- Draw the whole frame into this image
+  transition._screenshotContextPushed = true
+end
+
+-- ! Clear Transition Screenshot
+-- Fills the current transition's screenshot image with a solid color.
+-- This is optional — most transitions fully redraw the frame anyway.
+function Transition.clearTransitionScreenshot(color)
+  local transition = Transition.currentTransition
+  if not transition or not transition.newSceneScreenshot then return end
+
+  -- Default to white if no color passed
+  local fillColor = color or COLOR_WHITE
+
+  pushContext(transition.newSceneScreenshot)
+    setColor(fillColor)
+    fillRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+  popContext()
 end
 
 -- ! Execute Transition Drawing
 -- Executes rendering for the active transition effect, restoring draw mode afterward.
 function Transition.executeTransitionDrawing()
   if not Transition.isTransitioning then return end
-  local currentTransition = Transition.currentTransition
-  if not currentTransition then return end
+  local transition = Transition.currentTransition
+  if not transition then return end
 
-  -- Pop context only once after capture, not every frame!
-  if currentTransition.captureScreenshotsDuringTransition and currentTransition._screenshotContextPushed then
+  -- Pop only if we pushed this frame
+  if transition.captureScreenshot and transition._screenshotContextPushed then
     popContext()
-    currentTransition._screenshotContextPushed = false
+    transition._screenshotContextPushed = false
   end
 
-  local drawMode = currentTransition.drawMode or DRAW_MODE_COPY
-  local prevDrawMode = getDrawMode()
-  if prevDrawMode ~= drawMode then
+  local drawMode = transition.drawMode or DRAW_MODE_COPY
+  local prev = getDrawMode()
+  if prev ~= drawMode then
     setDrawMode(drawMode)
   end
-  currentTransition:draw()
-  if drawMode ~= prevDrawMode then
-    setDrawMode(prevDrawMode)
+  transition:draw()
+  if drawMode ~= prev then
+    setDrawMode(prev)
   end
 end

@@ -98,6 +98,7 @@ local executeTransitionDrawing    <const> = Transition.executeTransitionDrawing
 local replaceScene      <const> = Scene.replaceScene
 local getUpdateList     <const> = Scene.getUpdateList
 local getBackgroundList <const> = Scene.getBackgroundList
+local getDrawList       <const> = Scene.getDrawList
 
 local updateDebug <const> = Debug.update --#DEBUG
 local drawFPS     <const> = pd.drawFPS --#DEBUG
@@ -242,31 +243,47 @@ function pd.update()
   r.deltaTime = dt
 
   --#DEBUG START
-  if r.deltaTime > 0.05 then
-    Log.debug("Long frame: " .. r.deltaTime)
+  if dt > 0.05 then
+    Log.debug("Long frame: " .. dt)
   end
   --#DEBUG END
 
   handleInput()
   updateSequences(dt)
 
+  -- Cache list once and length once.
   local updateList = getUpdateList()
-  for i = 1, #updateList do
+  local updateCount = #updateList
+  for i = 1, updateCount do
     updateList[i]:update(dt)
   end
+
   local bgList = getBackgroundList()
-  for i = 1, #bgList do
+  local bgCount = #bgList
+  for i = 1, bgCount do
     bgList[i]:updateBackground(dt)
+  end
+
+  local isTransitioning = Transition.isTransitioning
+
+  if isTransitioning then
+    local currentTransition = Transition.currentTransition
+    if currentTransition then
+      prepareTransitionScreenshot() -- Push offscreen context here (pre-render)
+    end
   end
 
   spriteUpdate()
 
-  if Transition.isTransitioning then
-    local currentTransition = Transition.currentTransition
-    if currentTransition.captureScreenshotsDuringTransition then
-      prepareTransitionScreenshot()
-    end
-    executeTransitionDrawing()
+  local list = getDrawList()
+  local drawCount = #list
+  for i = 1, drawCount do
+    list[i]:draw(dt)
+  end
+
+  -- Now render the transition overlay
+  if isTransitioning then
+    executeTransitionDrawing() -- This will pop the offscreen context
   end
 
   drawCrankIndicator()

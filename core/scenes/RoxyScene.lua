@@ -16,33 +16,40 @@ local setColor            <const> = Graphics.setColor
 local setDrawOffset       <const> = Graphics.setDrawOffset
 local setBackgroundColor  <const> = Graphics.setBackgroundColor
 local fillRect            <const> = Graphics.fillRect
+local setClipRect         <const> = Graphics.setClipRect
+local clearClipRect       <const> = Graphics.clearClipRect
 
-local redrawBackground    <const> = Sprite.redrawBackground
+local redrawBackground <const> = Sprite.redrawBackground
 
 local addHandler    <const> = r.Input.addHandler
 local removeHandler <const> = r.Input.removeHandler
 
 local resetCamera <const> = Camera.reset
 
-local COLOR_WHITE <const> = Graphics.kColorWhite
-local COLOR_BLACK <const> = Graphics.kColorBlack
-local CLEAR_COLOR <const> = COLOR_WHITE
+local COLOR_WHITE   <const> = Graphics.kColorWhite
+local COLOR_BLACK   <const> = Graphics.kColorBlack
+local CLEAR_COLOR   <const> = COLOR_WHITE
+
+local UNFLIPPED     <const> = Graphics.kImageUnflipped
+
+local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
 local _colorCallbacks = {} -- Cache: color --> fn
 local _imageCallbacks = setmetatable({}, { __mode = "k" }) -- Cache: image --> fn, weak keys
 
 --------------------------------------------------------------------------------
--- Helper
+-- Helpers
 --------------------------------------------------------------------------------
 
 -- ! Helper: Get Color Callback
--- builds (and returns) a drawing callback for a solid color
+-- Builds (and returns) a drawing callback for a solid color.
 local function _getColorCallback(color)
   local fn = _colorCallbacks[color]
   if fn == nil then
     fn = function(x, y, width, height)
+      -- Draw only the dirty rect
       setColor(color)
-      fillRect(x, y, width, height) -- Draw only the dirty rect
+      fillRect(x, y, width, height)
     end
     _colorCallbacks[color] = fn
   end
@@ -50,12 +57,15 @@ local function _getColorCallback(color)
 end
 
 -- ! Helper: Get Image Callback
--- Helper for static image
+-- Helper for static image. Draws only the dirty rect via clipping.
 local function _getImageCallback(img)
   local fn = _imageCallbacks[img]
   if fn == nil then
     fn = function(x, y, width, height)
-      img:draw(x, y, nil, x, y, width, height)
+      -- Set a clip to the dirty rect, then draw the full image once.
+      setClipRect(x, y, width, height)  -- Only redraw the dirty rect
+      img:draw(0, 0, UNFLIPPED)         -- Avoid per-call src rect; let clip do the work
+      clearClipRect()                   -- Restore clip
     end
     _imageCallbacks[img] = fn
   end
@@ -83,9 +93,13 @@ function RoxyScene:init(background)
   self.tilemaps = {}
   self.sequences = {}
 
+  -- Sensible defaults used by Scene draw filtering
+  self.isVisible = true
+  self.blocksLowerDraw = false
+
   self.backgroundColor = nil
   self.backgroundImage = nil
-  self.backgroundDrawFn = function(x, y, width, height) end
+  self.backgroundDrawFn = NO_OP_BG_DRAW -- Use shared no-op (avoid per-instance closure)
 
   self:setBackground(background)
 end
@@ -103,7 +117,12 @@ function RoxyScene:enter()
 end
 
 -- ! Update
-function RoxyScene:update()
+function RoxyScene:update(dt)
+  -- noop by default
+end
+
+-- ! Draw
+function RoxyScene:draw(dt)
   -- noop by default
 end
 
@@ -114,16 +133,18 @@ function RoxyScene:pause()
   self.isPaused = true
 
   -- Disable sprites from updating or colliding
-  for i = #self.sprites, 1, -1 do
-    local sprite = self.sprites[i]
+  local sprites = self.sprites
+  for i = #sprites, 1, -1 do
+    local sprite = sprites[i]
     sprite:pause()
     sprite:setUpdatesEnabled(false)
     sprite:setCollisionsEnabled(false)
   end
 
-  -- Disable sequence from updating
-  for i = #self.sequences, 1, -1 do
-    local sequence = self.sequences[i]
+  -- Disable sequences from updating
+  local sequences = self.sequences
+  for i = #sequences, 1, -1 do
+    local sequence = sequences[i]
     sequence:pause()
   end
 
@@ -137,16 +158,18 @@ function RoxyScene:resume()
   self.isPaused = false
 
   -- Enable sprites for updating and colliding
-  for i = #self.sprites, 1, -1 do
-    local sprite = self.sprites[i]
+  local sprites = self.sprites
+  for i = #sprites, 1, -1 do
+    local sprite = sprites[i]
     sprite:setUpdatesEnabled(true)
     sprite:setCollisionsEnabled(true)
     sprite:play()
   end
 
   -- Enable sequences for updating
-  for i = #self.sequences, 1, -1 do
-    local sequence = self.sequences[i]
+  local sequences = self.sequences
+  for i = #sequences, 1, -1 do
+    local sequence = sequences[i]
     sequence:play()
   end
 
@@ -183,8 +206,6 @@ function RoxyScene:cleanup()
   self.frozenBackground = nil -- Clean up screenshot from transitions
 end
 
--- TODO: Add sprite management methods etc. HERE
-
 --------------------------------------------------------------------------------
 -- Background Drawing
 --------------------------------------------------------------------------------
@@ -194,19 +215,31 @@ function RoxyScene:setBackground(background)
   -- Solid color
   if background == nil or type(background) == "number" then
     local color = background or CLEAR_COLOR
-    Log.debug("[RoxyScene:setBackground] Setting background color to " .. color)
+    local colorFn = _getColorCallback(color) -- Avoid double lookup/construction
+
+    -- Early-out if unchanged color and no image
+    if self.backgroundImage == nil and self.backgroundColor == color and self.backgroundDrawFn == colorFn then
+      return
+    end
+
+    Log.debug("[RoxyScene:setBackground] Setting background color to " .. color) --#DEBUG
     setBackgroundColor(color)
     self.backgroundColor = color
     self.backgroundImage = nil
-    self.backgroundDrawFn = _getColorCallback(color)
+    self.backgroundDrawFn = colorFn
     redrawBackground()
     return
   end
 
   -- Background image
   if type(background) == "userdata" then
-    Log.debug("[RoxyScene:setBackground] Setting background image")
     local img = background
+    -- Early-out if unchanged image
+    if self.backgroundImage == img then
+      return
+    end
+
+    Log.debug("[RoxyScene:setBackground] Setting background image") --#DEBUG
     self.backgroundColor = nil
     self.backgroundImage = img
     self.backgroundDrawFn = _getImageCallback(img)
@@ -214,12 +247,13 @@ function RoxyScene:setBackground(background)
     return
   end
 
-  Log.debug("[RoxyScene:setBackground] Falling back to background color: " .. CLEAR_COLOR)
   -- Fallback
+  Log.debug("[RoxyScene:setBackground] Falling back to background color: " .. CLEAR_COLOR) --#DEBUG
+  local colorFn = _getColorCallback(CLEAR_COLOR) -- Avoid double lookup/construction
   setBackgroundColor(CLEAR_COLOR)
   self.backgroundColor = CLEAR_COLOR
   self.backgroundImage = nil
-  self.backgroundDrawFn = _getColorCallback(CLEAR_COLOR)
+  self.backgroundDrawFn = colorFn
   redrawBackground()
 end
 
@@ -231,14 +265,15 @@ end
 function RoxyScene:addSprite(sprite)
   if not sprite then return end
 
-  -- Give the sprite a back‑pointer so it can self‑remove later
-  sprite.scene = self
-
+  -- Avoid duplicates
   for i = 1, #self.sprites do
     if self.sprites[i] == sprite then
       return
     end
   end
+
+  -- Give the sprite a back-pointer so it can self-remove later
+  sprite.scene = self
 
   tableInsert(self.sprites, sprite)
   sprite:add()
@@ -250,7 +285,7 @@ function RoxyScene:removeSprite(sprite)
 
   for i = #self.sprites, 1, -1 do
     if self.sprites[i] == sprite then
-      sprite.scene = nil -- Clear back‑pointer
+      sprite.scene = nil -- Clear back-pointer
       sprite:remove()
       tableRemove(self.sprites, i)
       return
@@ -260,8 +295,11 @@ end
 
 -- ! Remove All Sprites
 function RoxyScene:removeAllSprites()
-  for i = #self.sprites, 1, -1 do
-    self.sprites[i]:remove()
+  local sprites = self.sprites
+  for i = #sprites, 1, -1 do
+    local sprite = sprites[i]
+    sprite.scene = nil -- Clear back-pointer
+    sprite:remove()
   end
   self.sprites = {}
 end
@@ -287,7 +325,7 @@ function RoxyScene:addTilemap(tilemap)
 
   tableInsert(self.tilemaps, tilemap)
 
-  -- Give the tilemap a back‑pointer so it can self‑remove later
+  -- Give the tilemap a back-pointer so it can self-remove later
   tilemap.scene = self
 end
 
@@ -296,7 +334,7 @@ function RoxyScene:removeTilemap(tilemap)
   if not tilemap then return end
   for i = #self.tilemaps, 1, -1 do
     if self.tilemaps[i] == tilemap then
-      tilemap.scene = nil -- Clear back‑pointer
+      tilemap.scene = nil -- Clear back-pointer
       tilemap:destroy()
       tableRemove(self.tilemaps, i)
       return
@@ -306,8 +344,11 @@ end
 
 -- ! Remove All Tilemaps
 function RoxyScene:removeAllTilemaps()
-  for i = #self.tilemaps, 1, -1 do
-    self.tilemaps[i]:destroy()
+  local tilemaps = self.tilemaps
+  for i = #tilemaps, 1, -1 do
+    local tilemap = tilemaps[i]
+    tilemap.scene = nil -- Clear back-pointer
+    tilemap:destroy()
   end
   self.tilemaps = {}
 end
@@ -333,7 +374,7 @@ function RoxyScene:addSequence(sequence)
 
   tableInsert(self.sequences, sequence)
 
-  -- Give the sequence a back‑pointer so it can self‑remove later
+  -- Give the sequence a back-pointer so it can self-remove later
   sequence.scene = self
 
   sequence:play()
@@ -344,7 +385,7 @@ function RoxyScene:removeSequence(sequence)
   if not sequence then return end
   for i = #self.sequences, 1, -1 do
     if self.sequences[i] == sequence then
-      sequence.scene = nil -- Clear back‑pointer
+      sequence.scene = nil -- Clear back-pointer
       sequence:clear(true)
       tableRemove(self.sequences, i)
       return
@@ -354,8 +395,11 @@ end
 
 -- ! Remove All Sequences
 function RoxyScene:removeAllSequences()
-  for i = #self.sequences, 1, -1 do
-    self.sequences[i]:clear(true)
+  local sequences = self.sequences
+  for i = #sequences, 1, -1 do
+    local sequence = sequences[i]
+    sequence.scene = nil -- Clear back-pointer
+    sequence:clear(true)
   end
   self.sequences = {}
 end
@@ -371,8 +415,9 @@ end
 
 -- ! Set Input Handler
 function RoxyScene:addHandler()
-  if self.inputHandler and (type(self.inputHandler) == "table" or type(self.inputHandler) == "function") then
-    addHandler(self, self.inputHandler, 0)
+  local inputHandler = self.inputHandler
+  if inputHandler and (type(inputHandler) == "table" or type(inputHandler) == "function") then
+    addHandler(self, inputHandler, 0)
   end
 end
 
