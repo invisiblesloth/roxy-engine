@@ -20,9 +20,13 @@ local tableSort   <const> = table.sort
 
 local loadJSON <const> = r.JSON.loadJson
 
+local pushContext     <const> = Graphics.pushContext
+local popContext      <const> = Graphics.popContext
+local setColor        <const> = Graphics.setColor
 local newImage        <const> = Graphics.image.new
 local newImagetable   <const> = Graphics.imagetable.new
 local newTilemap      <const> = Graphics.tilemap.new
+local fillRect        <const> = Graphics.fillRect
 local addWallSprites  <const> = Graphics.sprite.addWallSprites
 local newSprite       <const> = Graphics.sprite.new
 
@@ -37,6 +41,10 @@ local setCameraBounds   <const> = Camera.setBounds
 local getCameraPosition <const> = Camera.getPosition
 
 local IMAGE_PATH_PREFIX <const> = "assets/images/"
+
+local SPRITE_DEFAULT_DIMS <const> = 16
+
+local COLOR_BLACK <const> = Graphics.kColorBlack
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
@@ -79,7 +87,7 @@ local function normalizeImgPath(tiledImgPath)
     return nil
   end
   local filename = tiledImgPath:match("([^/]+)$") or ""
-  local base     = filename:gsub("%-table%-%d+%-%d+%.png$", "")
+  local base = filename:gsub("%-table%-%d+%-%d+%.png$", "")
   if base == filename then
     Log.warn("[normalizeImgPath] Unexpected image path pattern: " .. tostring(tiledImgPath)) --#DEBUG
     return IMAGE_PATH_PREFIX .. filename
@@ -87,10 +95,10 @@ local function normalizeImgPath(tiledImgPath)
   return IMAGE_PATH_PREFIX .. base
 end
 
--- ! Get Image Table
-local function getImageTable(path)
+-- ! Get Imagetable
+local function getImagetable(path)
   if type(path) ~= "string" or path == "" then
-    Log.warn("[getImageTable] Invalid or missing path: " .. tostring(path))
+    Log.warn("[getImagetable] Invalid or missing path: " .. tostring(path))
     return nil
   end
   local cached = getCachedAsset(path)
@@ -104,7 +112,7 @@ local function getImageTable(path)
   if loaded then
     cacheAsset(path, function() return loaded end)
   else --#DEBUG
-    Log.warn("[getImageTable] Failed to load imagetable at path: " .. path) --#DEBUG
+    Log.warn("[getImagetable] Failed to load imagetable at path: " .. path) --#DEBUG
   end
 
   return loaded
@@ -152,63 +160,18 @@ local function validateOptions(opts)
   return opts
 end
 
--- ! Compute Draw Parameters
--- Compute screen position and sourceRect for direct drawing
-local function _computeDrawParams(layer)
-  local camX, camY = getCameraPosition()
-  local px, py = layer.parallaxx or 1, layer.parallaxy or 1
-  local originX, originY = layer.originX or 0, layer.originY or 0
-  local mapPixelWidth, mapPixelHeight = layer.mapPixelWidth or 0, layer.mapPixelHeight or 0
-
-  -- Compute where the tilemap’s top-left should appear on screen
-  local round = round
-  local screenX, screenY
-  if layer.anchor == "topLeft" then
-    screenX = round(originX - camX * px)
-    screenY = round(originY - camY * py)
-  else
-    -- Centered: origin is the map center; shift to top-left
-    screenX = round(originX - (mapPixelWidth * 0.5)  - camX * px)
-    screenY = round(originY - (mapPixelHeight * 0.5) - camY * py)
-  end
-
-  -- Build a sourceRect (in map local pixels) to avoid drawing offscreen areas
-  local srcX = 0
-  local srcY = 0
-  local srcWidth = mapPixelWidth
-  local srcHeight = mapPixelHeight
-
-  -- Clip against the screen: if the map is shifted left/up, start inside the map
-  if screenX < 0 then srcX = -screenX end
-  if screenY < 0 then srcY = -screenY end
-
-  -- Visible width/height on screen (do not exceed map bounds)
-  local maxW = DISPLAY_WIDTH  - max(0, screenX)
-  local maxH = DISPLAY_HEIGHT - max(0, screenY)
-  srcWidth = min(srcWidth - srcX, max(0, maxW))
-  srcHeight = min(srcHeight - srcY, max(0, maxH))
-
-  -- Nothing visible?
-  if srcWidth <= 0 or srcHeight <= 0 then
-    return screenX, screenY, nil, true
-  end
-
-  -- sourceRect is relative to the map (x,y,width,height)
-  return screenX, screenY, srcX, srcY, srcWidth, srcHeight, false
-end
-
 -- ! Create default Object Sprite
 local function createDefaultObjectSprite(obj, layerOpts)
   -- Check if object has parallax properties
   local hasParallax = false
   local parallaxX, parallaxY = 1, 1
   local parallaxOriginX, parallaxOriginY = 0, 0
-  local objectProperties = {}
+  local objectProps = {}
 
   -- Parse object properties
   if obj.properties then
     for _, prop in ipairs(obj.properties) do
-      objectProperties[prop.name] = prop.value
+      objectProps[prop.name] = prop.value
 
       -- Check for parallax properties
       if prop.name == "parallaxX" or prop.name == "parallaxx" then
@@ -229,8 +192,8 @@ local function createDefaultObjectSprite(obj, layerOpts)
   local imagePath = nil
 
   -- Check for image in object properties (common Tiled pattern)
-  if objectProperties.image or objectProperties.sprite then
-    imagePath = IMAGE_PATH_PREFIX .. (objectProperties.image or objectProperties.sprite)
+  if objectProps.image or objectProps.sprite then
+    imagePath = IMAGE_PATH_PREFIX .. (objectProps.image or objectProps.sprite)
   end
 
   -- Fallback to type-based or name-based image loading
@@ -248,9 +211,8 @@ local function createDefaultObjectSprite(obj, layerOpts)
     Log.warn("[createDefaultObjectSprite] Failed to load image at: " .. tostring(imagePath))
   end
 
-  local sprite
-
   -- Create parallax sprite if needed and RoxyParallaxSprite is available
+  local sprite
   if hasParallax and r.RoxyParallaxSprite then
     local spriteOpts = {
       view = image,
@@ -273,18 +235,18 @@ local function createDefaultObjectSprite(obj, layerOpts)
   -- Fallback image creation for regular sprites
   if not image and not hasParallax then
     -- Create a simple rectangle sprite as fallback
-    local width = obj.width or 16
-    local height = obj.height or 16
-    local fallbackImage = Graphics.image.new(width, height)
-    Graphics.pushContext(fallbackImage)
-    Graphics.setColor(Graphics.kColorBlack)
-    Graphics.drawRect(0, 0, width, height)
-    Graphics.popContext()
+    local width = obj.width or SPRITE_DEFAULT_DIMS
+    local height = obj.height or SPRITE_DEFAULT_DIMS
+    local fallbackImage = newImage(width, height)
+    pushContext(fallbackImage)
+      setColor(COLOR_BLACK)
+      fillRect(0, 0, width, height)
+    popContext()
     sprite:setImage(fallbackImage)
   end
 
   -- Store all object properties on the sprite for reference
-  sprite.objectProperties = objectProperties
+  sprite.objectProps = objectProps
 
   return sprite
 end
@@ -317,16 +279,16 @@ local function processObjectLayer(self, layer, opts, layerOpts, autoAdd, scene, 
         y = y + (obj.height or 0) * 0.5
       end
 
-      -- Compute final screen coordinates (sx, sy)
-      local sx, sy = x, y
+      -- Compute final screen coordinates (screenX, screenY)
+      local screenX, screenY = x, y
 
       -- Position the sprite
       if sprite.setWorldPosition then
         -- Parallax‐aware sprite
-        sprite:setWorldPosition(sx, sy)
+        sprite:setWorldPosition(screenX, screenY)
       else
         -- Normal screen‐positioned sprite
-        sprite:moveTo(sx, sy)
+        sprite:moveTo(screenX, screenY)
       end
 
       -- Set z-index if specified
@@ -377,11 +339,11 @@ end
 -- Hoist and Cache sprite:update - Move parallax update function outside per-sprite loop
 -- Define the parallax update function once, outside the sprite creation loop
 -- This avoids creating new function instances for each sprite
-local function createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, px, py, rnd, camGetter)
+local function createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, parallaxX, parallaxY, rnd, camGetter)
   return function(self)
     local cameraX, cameraY = camGetter()
-    local screenX = rnd(worldX + pivotAdjustX - cameraX * px)
-    local screenY = rnd(worldY + pivotAdjustY - cameraY * py)
+    local screenX = rnd(worldX + pivotAdjustX - cameraX * parallaxX)
+    local screenY = rnd(worldY + pivotAdjustY - cameraY * parallaxY)
     local currentX, currentY = self:getPosition()
     if screenX ~= currentX or screenY ~= currentY then
       self:moveTo(screenX, screenY)
@@ -424,12 +386,27 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     return
   end
 
+  -- Keep raw map/grid metadata for projection leaves
+  self.mapWidth = mapData.width or 0
+  self.mapHeight = mapData.height or 0
+  self.mapTileWidth = mapData.tilewidth or 0
+  self.mapTileHeight = mapData.tileheight or 0
+
+  -- Store Tiled map orientation metadata for projection leaves
+  self.mapOrientation = mapData.orientation -- "isometric" | "staggered" | "orthogonal" | ...
+  self.staggerAxis = mapData.staggeraxis -- "x" | "y" | nil
+  self.staggerIndex = mapData.staggerindex -- "odd" | "even" | nil
+
+  -- Your original world size (orthographic assumption)
+  self.worldWidth = (mapData.width or 0) * (mapData.tilewidth or 0)
+  self.worldHeight = (mapData.height or 0) * (mapData.tileheight or 0)
+
   -- Build GID ranges for tileset auto-detection
   local gidRanges = {}
   for _, tileset in ipairs(mapData.tilesets or {}) do
     gidRanges[#gidRanges + 1] = {
-      first   = tileset.firstgid,
-      last    = tileset.firstgid + (tileset.tilecount or 0) - 1,
+      first = tileset.firstgid,
+      last = tileset.firstgid + (tileset.tilecount or 0) - 1,
       tileset = tileset
     }
   end
@@ -446,9 +423,6 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     end
     return nil
   end
-
-  self.worldWidth  = (mapData.width  or 0) * (mapData.tilewidth  or 0)
-  self.worldHeight = (mapData.height or 0) * (mapData.tileheight or 0)
 
   -- Apply camera bounds if requested
   if opts.cameraBounds then
@@ -473,7 +447,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     end
 
     tileset.imagePath = normPath -- Store normalized path
-    tileset.imageTable = getImageTable(normPath)
+    tileset.imageTable = getImagetable(normPath)
     retain(normPath, tileset.imageTable)
     tilesets[tileset.name] = tileset
 
@@ -574,12 +548,12 @@ function RoxyTilemap:init(jsonPath, opts, scene)
         layerData.originX = originX
         layerData.originY = originY
 
-        local px = tonumber(layer.parallaxx) or 1
-        local py = tonumber(layer.parallaxy) or 1
+        local parallaxX = tonumber(layer.parallaxx) or 1
+        local parallaxY = tonumber(layer.parallaxy) or 1
         local pox = opts.parallaxOriginX or mapPox
         local poy = opts.parallaxOriginY or mapPoy
-        layerData.parallaxx = px
-        layerData.parallaxy = py
+        layerData.parallaxx = parallaxX
+        layerData.parallaxy = parallaxY
         layerData.parallaxoriginx = pox
         layerData.parallaxoriginy = poy
 
@@ -597,15 +571,15 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           local camGetter = getCameraPosition
           local rnd = round
           local useParallax = (layerOptions.parallax ~= false)
-          if useParallax and (px ~= 1 or py ~= 1 or offsetX ~= 0 or offsetY ~= 0) then
+          if useParallax and (parallaxX ~= 1 or parallaxY ~= 1 or offsetX ~= 0 or offsetY ~= 0) then
             sprite:setIgnoresDrawOffset(true)
             sprite:setUpdatesEnabled(true)
 
-            local pivotAdjustX = pox * (1 - px)
-            local pivotAdjustY = poy * (1 - py)
+            local pivotAdjustX = pox * (1 - parallaxX)
+            local pivotAdjustY = poy * (1 - parallaxY)
             local worldX, worldY = originX, originY
 
-            sprite.update = createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, px, py, rnd, camGetter)
+            sprite.update = createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, parallaxX, parallaxY, rnd, camGetter)
           else
             sprite:moveTo(originX, originY)
           end
@@ -634,7 +608,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
             sprite:setTag(1)
             sprite:setCollideRect(0, 0, sprite:getSize())
             if wallGroup then
-              sprite:setGroups(type(wallGroup) == "table" and wallGroup or {wallGroup})
+              sprite:setGroups(type(wallGroup) == "table" and wallGroup or { wallGroup })
             end
             if layerCollidesWithGroups and type(layerCollidesWithGroups) == "table" and #layerCollidesWithGroups > 0 then
               sprite:setCollidesWithGroups(layerCollidesWithGroups)
@@ -772,23 +746,6 @@ function RoxyTilemap:getTileAt(name, x, y)
   return tilemap and tilemap:getTileAtPosition(x, y) or nil
 end
 
--- ! Set Tile At
--- Sets the tile at the given tile coordinates (x, y) on the specified layer.
--- Note: Coordinates are in tile units, not pixels.
-function RoxyTilemap:setTileAt(name, x, y, tileIndex, updateSprite)
-  local layer = self.layers[name]
-  if not layer then return end
-
-  layer.tilemap:setTileAtPosition(x, y, tileIndex)
-
-  if updateSprite and layer.sprite then
-    local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-    -- Top-left of tile in pixels
-    local screenX, screenY = self:worldToScreen(x - 1, y - 1, layer)
-    addDirtyRect(screenX, screenY, tileWidth, tileHeight)
-  end
-end
-
 -- ! For Each Tile
 -- Iterates over each tile on the specified layer, calling the provided function.
 -- Note: Coordinates passed to the function are in tile units.
@@ -809,32 +766,6 @@ end
 -- This is cached at init-time and available even if cameraBounds is false.
 function RoxyTilemap:getWorldSize()
   return self.worldWidth, self.worldHeight
-end
-
--- ! World to Screen
--- Convert tile/world coords to screen coords with parallax (orthogonal only)
-function RoxyTilemap:worldToScreen(worldX, worldY, layer)
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-  local originX, originY = layer.originX or 0, layer.originY or 0
-  local px, py = layer.parallaxx or 1, layer.parallaxy or 1
-  local camX, camY = getCameraPosition()
-
-  local orthoX = originX + worldX * tileWidth
-  local orthoY = originY + worldY * tileHeight
-  return round(orthoX - camX * px), round(orthoY - camY * py)
-end
-
--- ! Screen to World
--- Convert screen coordinates back to world coordinates (orthogonal only)
-function RoxyTilemap:screenToWorld(screenX, screenY, layer)
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-  local originX, originY = layer.originX or 0, layer.originY or 0
-  local px, py = layer.parallaxx or 1, layer.parallaxy or 1
-  local camX, camY = getCameraPosition()
-
-  local worldX = ((screenX + camX * px) - originX) / tileWidth
-  local worldY = ((screenY + camY * py) - originY) / tileHeight
-  return worldX, worldY
 end
 
 -- ! Hide Layer
@@ -928,7 +859,7 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remap)
   if type(newImageTableOrPath) == "string" then
     -- Normalize path like tileset loader does
     newPath = normalizeImgPath(newImageTableOrPath) or newImageTableOrPath
-    newTable = getImageTable(newPath)
+    newTable = getImagetable(newPath)
     if not newTable then
       Log.warn("[RoxyTilemap:setLayerImageTable] Failed to load imagetable: " .. tostring(newPath)) --#DEBUG
       return false
@@ -996,16 +927,16 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remap)
   local mapPixelWidth  = mapWidthTiles  * tileWidth
   local mapPixelHeight = mapHeightTiles * tileHeight
 
-  local px, py = layer.parallaxx or 1, layer.parallaxy or 1
-  local camX, camY = getCameraPosition()
+  local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
+  local cameraX, cameraY = getCameraPosition()
   local originX, originY = layer.originX or 0, layer.originY or 0
   local centerX = (layer.anchor == "topLeft") and 0 or 0.5
   local centerY = (layer.anchor == "topLeft") and 0 or 0.5
 
-  local screenX = round(originX - mapPixelWidth * centerX  - camX * px)
-  local screenY = round(originY - mapPixelHeight * centerY - camY * py)
+  local screenX = round(originX - mapPixelWidth * centerX  - cameraX * parallaxX)
+  local screenY = round(originY - mapPixelHeight * centerY - cameraY * parallaxY)
 
-  addDirtyRect(screenX, screenY, mapPixelWidth, mapPixelHeight) -- ADDED
+  addDirtyRect(screenX, screenY, mapPixelWidth, mapPixelHeight)
 
   return true
 end
@@ -1049,53 +980,15 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Draw
--- Draw a single tile layer directly (no sprite required)
 function RoxyTilemap:draw(name)
-  local layer = self.layers and self.layers[name]
-  if not layer or not layer.tilemap or layer.visible == false then return end
-
-  local screenX, screenY, srcX, srcY, srcWidth, srcHeight, culled = _computeDrawParams(layer)
-  if culled then return end
-
-  -- Use drawIgnoringOffset because we already applied camera/offset logic
-  if srcX then
-    layer.tilemap:drawIgnoringOffset(screenX, screenY, srcX, srcY, srcWidth, srcHeight)
-  else
-    layer.tilemap:drawIgnoringOffset(screenX, screenY)
-  end
+  -- Subclasses should implement their own drawing.
+  Log.warn("[RoxyTilemap:draw] Abstract. Implement in a projection leaf.") --#DEBUG
 end
 
 -- ! Draw Visible
--- Draw all visible tile layers by zIndex (ascending)
 function RoxyTilemap:drawVisible()
-  if not self.layers then return end
-
-  -- Collect visible layers
-  local list = {}
-  for name, layer in pairs(self.layers) do
-    if layer.tilemap and layer.visible ~= false then
-      tableInsert(list, layer)
-    end
-  end
-
-  -- Sort by zIndex to match sprite render order
-  tableSort(list, function(a, b)
-    return (a.zIndex or 0) < (b.zIndex or 0)
-  end)
-
-  -- Draw in order
-  for i = 1, #list do
-    local layer = list[i]
-    local screenX, screenY, srcX, srcY, srcWidth, srcHeight, culled = _computeDrawParams(layer)
-    if not culled then
-      local drawIgnoring = layer.tilemap.drawIgnoringOffset
-      if srcX then
-        drawIgnoring(layer.tilemap, screenX, screenY, srcX, srcY, srcWidth, srcHeight)
-      else
-        drawIgnoring(layer.tilemap, screenX, screenY)
-      end
-    end
-  end
+  -- Subclasses should implement their own drawing.
+  Log.warn("[RoxyTilemap:drawVisible] Abstract. Implement in a projection leaf.") --#DEBUG
 end
 
 --------------------------------------------------------------------------------
