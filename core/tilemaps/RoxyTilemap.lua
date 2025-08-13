@@ -976,6 +976,60 @@ function RoxyTilemap:rebuildLayerCollisions(name, emptyIDs, wallGroup, collidesW
 end
 
 --------------------------------------------------------------------------------
+-- Origin helpers
+--------------------------------------------------------------------------------
+
+-- ! Set Layer Origin
+-- Updates the origin for a single layer and keeps any display sprite in sync.
+function RoxyTilemap:setLayerOrigin(name, originX, originY)
+  local layer = self.layers and self.layers[name]
+  if not layer then return false end
+
+  -- Update stored origin used by both sprite and direct draw
+  layer.originX = originX or 0
+  layer.originY = originY or 0
+
+  -- Keep an existing sprite in sync
+  local sprite = layer.sprite
+  if sprite then
+    local parallaxX = layer.parallaxx or 1
+    local parallaxY = layer.parallaxy or 1
+    local pox = layer.parallaxoriginx or 0
+    local poy = layer.parallaxoriginy or 0
+
+    -- If this layer was using a parallax update closure, rebuild it with the new origin.
+    if sprite.update and sprite.setUpdatesEnabled then
+      -- Recreate the cached updater using the shared helper
+      local pivotAdjustX = pox * (1 - parallaxX)
+      local pivotAdjustY = poy * (1 - parallaxY)
+      sprite.update = createParallaxUpdate(
+        layer.originX, layer.originY,
+        pivotAdjustX, pivotAdjustY,
+        parallaxX, parallaxY,
+        round, getCameraPosition
+      )
+      -- Ensure we do not double-apply draw offset
+      sprite:setIgnoresDrawOffset(true)
+      sprite:setUpdatesEnabled(true)
+    else
+      -- No parallax updater; just move the sprite to the new origin
+      sprite:moveTo(layer.originX, layer.originY)
+    end
+  end
+
+  return true
+end
+
+-- ! Set Origin For All Layers
+-- Convenience to apply the same origin to every tile layer.
+function RoxyTilemap:setOriginForAllLayers(originX, originY)
+  if not self.layers then return end
+  for name, _ in pairs(self.layers) do
+    self:setLayerOrigin(name, originX, originY)
+  end
+end
+
+--------------------------------------------------------------------------------
 -- Drawing
 --------------------------------------------------------------------------------
 
