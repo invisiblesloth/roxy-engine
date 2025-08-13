@@ -355,7 +355,7 @@ end
 
 -- ! Spawn Tilemap
 function RoxyScene:spawnTilemap(path, tilemapOpts)
-  return RoxyTilemap(path, tilemapOpts, self)
+  return RoxyOrthoTilemap(path, tilemapOpts, self)
 end
 
 --------------------------------------------------------------------------------
