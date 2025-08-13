@@ -51,6 +51,8 @@ import "libraries/roxy/core/sprites/RoxyParticles"
 import "libraries/roxy/core/physics/RoxyPhysicsBody"
 import "libraries/roxy/core/animations/RoxyAnimation"
 import "libraries/roxy/core/tilemaps/RoxyTilemap"
+import "libraries/roxy/core/tilemaps/RoxyOrthoTilemap"
+import "libraries/roxy/core/tilemaps/RoxyIsoTilemap"
 import "libraries/roxy/core/scenes/RoxyScene"
 
 -- Create global Roxy table if it does not already exist
