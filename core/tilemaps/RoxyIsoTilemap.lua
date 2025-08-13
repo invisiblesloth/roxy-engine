@@ -30,7 +30,7 @@ local function _isoDrawOffsets(tileWidth, tileHeight, img)
   -- Tiled’s isometric origin expects images taller than the logical tile.
   -- Offset X by half the extra width; offset Y by the full extra height.
   local imgWidth, imgHeight = img:getSize()
-  local offsetX = (tileWidth  - imgWidth)  * 0.5
+  local offsetX = (tileWidth - imgWidth) * 0.5
   local offsetY = (tileHeight - imgHeight)
   return offsetX, offsetY
 end
@@ -43,16 +43,24 @@ class("RoxyIsoTilemap").extends(RoxyTilemap)
 
 function RoxyIsoTilemap:init(jsonPath, opts, scene)
   opts = opts or {}
-  -- Disable sprite wrapping to avoid orthographic renderer.
+  
+  -- Disable sprite wrapping to avoid orthographic renderer
   opts.wrapInSprites = false
   RoxyIsoTilemap.super.init(self, jsonPath, opts, scene)
 
-  -- Fix world height for staggered‑Y: rows advance by half tile height.
+  -- World height for staggered‑Y: rows advance by half tile height
   if self.mapOrientation == "staggered" and self.staggerAxis == "y" then
     local halfHeight = (self.mapTileHeight or 0) * 0.5
-    -- Total height = first row’s full height + (rows-1) * halfHeight --> halfHeight * (rows + 1)
-    self.worldHeight = halfHeight * (self.mapHeight + 1)
-    -- Width is usually fine as columns * tileWidth; keep as-is unless you need the extra half tile on the right.
+    self.worldHeight = halfHeight * (self.mapHeight + 1) -- First row full + (rows-1) half steps
+
+    -- World width when the last row is shifted to the right
+    local halfWidth = (self.mapTileWidth or 0) * 0.5
+    local lastRowIsShifted =
+      (self.staggerIndex == "odd"  and (self.mapHeight % 2 == 1)) or -- H odd --> last row is odd --> shifted
+      (self.staggerIndex == "even" and (self.mapHeight % 2 == 0)) -- H even --> last row is even --> shifted
+    if lastRowIsShifted then
+      self.worldWidth += halfWidth -- Add the extra overhang on the right edge
+    end
   end
 end
 
