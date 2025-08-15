@@ -24,6 +24,7 @@ local CRANK_DIRECTION_DEFAULT    <const> = 1
 
 -- Pre-defined array for efficient iteration instead of pairs()
 local BUTTON_NAMES <const> = { "A", "B", "up", "down", "left", "right" }
+local BUTTON_COUNT <const> = #BUTTON_NAMES
 
 -- Input event keys - kept in sync with handler merging system
 local INPUT_KEYS <const> = {
@@ -35,6 +36,7 @@ local INPUT_KEYS <const> = {
   "upButtonDown", "upButtonUp", "upButtonHold",
   "cranked", "crankDocked", "crankUndocked"
 }
+local INPUT_KEY_COUNT <const> = #INPUT_KEYS
 
 -- Button name to callback key mapping
 local BUTTON_KEYS <const> = {
@@ -63,7 +65,6 @@ local persistentMergedHandler = {} -- Reused table to avoid allocation
 local cachedHoldCallbacks = {}
 
 -- Configuration state
-local buttonHoldBufferAmount = BUTTON_HOLD_BUFFER_DEFAULT
 local cachedBufferAmount = BUTTON_HOLD_BUFFER_DEFAULT
 
 -- Combined crank indicator state into single object
@@ -80,6 +81,7 @@ local pendingRegistryDirty = false
 Input.crankDirection = CRANK_DIRECTION_DEFAULT
 Input.isEnabled = true
 Input._blocked = false -- Blocks input until all buttons released
+Input._paused = false  -- Pauses all input callbacks until resumed
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -94,7 +96,7 @@ end
 -- ! Reset Button Flags
 -- Fast reset using array iteration instead of pairs()
 local function resetButtonFlags()
-  for i = 1, #BUTTON_NAMES do
+  for i = 1, BUTTON_COUNT do
     local name = BUTTON_NAMES[i]
     held[name] = false
     heldFrames[name] = 0
@@ -105,17 +107,23 @@ end
 -- Cache hold callbacks when handler changes to avoid lookups in handleInput
 local function cacheHoldCallbacks(handler)
   if not handler then
-    for i = 1, #BUTTON_NAMES do
+    for i = 1, BUTTON_COUNT do
       cachedHoldCallbacks[BUTTON_NAMES[i]] = nil
     end
     return
   end
 
-  for i = 1, #BUTTON_NAMES do
+  for i = 1, BUTTON_COUNT do
     local name = BUTTON_NAMES[i]
     local keys = BUTTON_KEYS[name]
     cachedHoldCallbacks[name] = handler[keys.hold]
   end
+end
+
+-- ! Should Process Input
+-- Centralized check for whether callbacks should run
+local function shouldProcessInput()
+  return Input.isEnabled and (not Input._paused) and (not Input._blocked)
 end
 
 -- ! Merge Handlers
@@ -127,12 +135,12 @@ local function mergeHandlers()
   local merged = persistentMergedHandler
 
   -- Clear only known keys instead of using pairs() which creates garbage
-  for i = 1, #INPUT_KEYS do
+  for i = 1, INPUT_KEY_COUNT do
     merged[INPUT_KEYS[i]] = nil
   end
 
   -- Find the highest priority handler for each input event
-  for i = 1, #INPUT_KEYS do
+  for i = 1, INPUT_KEY_COUNT do
     local key = INPUT_KEYS[i]
     for j = 1, #handlerRegistry do
       local handler = handlerRegistry[j]
@@ -154,20 +162,27 @@ local function wrapMergedHandler(userHandler)
 
   -- Copy handler to avoid mutating the pooled table
   local wrappedHandler = {}
-  for i = 1, #INPUT_KEYS do
+  for i = 1, INPUT_KEY_COUNT do
     local key = INPUT_KEYS[i]
-    wrappedHandler[key] = userHandler[key]
+    local original = userHandler[key]
+    if original then
+      -- Gate every callback behind shouldProcessInput()
+      wrappedHandler[key] = function(...)
+        if shouldProcessInput() then original(...) end
+      end
+    end
   end
 
   -- Wrap Down/Up events to track hold state (only if handlers exist)
-  for i = 1, #BUTTON_NAMES do
+  for i = 1, BUTTON_COUNT do
     local name = BUTTON_NAMES[i]
     local keys = BUTTON_KEYS[name]
-    local origDown, origUp = wrappedHandler[keys.down], wrappedHandler[keys.up]
+    local origDown, origUp = userHandler[keys.down], userHandler[keys.up]
 
     -- Only create wrapper functions if original handlers exist or we need state tracking
     if origDown or userHandler[keys.up] or userHandler[keys.hold] then
       wrappedHandler[keys.down] = function(...)
+        if not shouldProcessInput() then return end
         held[name] = true
         heldFrames[name] = 0
         if origDown then origDown(...) end
@@ -176,6 +191,7 @@ local function wrapMergedHandler(userHandler)
 
     if origUp or userHandler[keys.down] or userHandler[keys.hold] then
       wrappedHandler[keys.up] = function(...)
+        if not shouldProcessInput() then return end
         held[name] = false
         heldFrames[name] = 0
         if origUp then origUp(...) end
@@ -202,6 +218,7 @@ function Input.init()
   crankIndicator.forced = false
   Input.isEnabled = true
   Input._blocked = false
+  Input._paused = false
 
   handlerRegistry = {}
   activeMergedHandler = nil
@@ -331,7 +348,7 @@ end
 -- Create a modal handler that blocks all inputs not explicitly handled
 function Input.makeModalHandler(handler)
   handler = handler or {}
-  for i = 1, #INPUT_KEYS do
+  for i = 1, INPUT_KEY_COUNT do
     local key = INPUT_KEYS[i]
     if handler[key] == nil then
       handler[key] = function() end -- Inert callback
@@ -377,19 +394,51 @@ function Input.setButtonHoldBufferAmount(frames)
 end
 
 --------------------------------------------------------------------------------
+-- Pause / Resume Controls
+--------------------------------------------------------------------------------
+
+-- ! Pause
+-- Pause all input handling immediately (no callbacks will fire)
+function Input.pause()
+  Input._paused = true
+  -- Flush any queued events so they do not leak through after resume
+  Input.flushButtonQueue()
+  resetButtonFlags()
+  Log.debug("[Input.pause] Input paused") --#DEBUG
+end
+
+-- ! Resume
+-- Resume input handling. Optionally block until buttons are clear.
+function Input.resume(blockUntilClear)
+  Input._paused = false
+  if blockUntilClear then
+    Input.blockUntilClear()
+  else
+    Input.flushButtonQueue()
+    resetButtonFlags()
+  end
+  Log.debug("[Input.resume] Input resumed (blockUntilClear=" .. tostring(blockUntilClear) .. ")") --#DEBUG
+end
+
+-- ! Is Paused
+-- Query paused state
+function Input.isPaused()
+  return Input._paused
+end
+
+--------------------------------------------------------------------------------
 -- Crank Controls
 --------------------------------------------------------------------------------
 
 -- ! Set Crank Indicator
 -- Single function to configure crank indicator
-function Input.setCrankIndicator(config)
+function Input.setCrankIndicator(config, forced)
   if type(config) == "table" then
     crankIndicator.active = config.active or false
     crankIndicator.forced = config.forced or false
   else
-    -- Legacy support: setCrankIndicator(active, forced)
     crankIndicator.active = config == true
-    crankIndicator.forced = arguments and arguments[2] == true
+    crankIndicator.forced = forced == true
   end
   Log.debug("[Input.setCrankIndicator] active=" .. tostring(crankIndicator.active) .. ", forced=" .. tostring(crankIndicator.forced)) --#DEBUG
 end
@@ -441,7 +490,7 @@ end
 -- ! Crank Docked
 -- Trigger crank docked callback through merged handler
 function Input.crankDocked()
-  if Input.isEnabled and activeMergedHandler and activeMergedHandler.crankDocked then
+  if shouldProcessInput() and activeMergedHandler and activeMergedHandler.crankDocked then
     activeMergedHandler.crankDocked()
   end
 end
@@ -449,7 +498,7 @@ end
 -- ! Crank Undocked
 -- Trigger crank undocked callback through merged handler
 function Input.crankUndocked()
-  if Input.isEnabled and activeMergedHandler and activeMergedHandler.crankUndocked then
+  if shouldProcessInput() and activeMergedHandler and activeMergedHandler.crankUndocked then
     activeMergedHandler.crankUndocked()
   end
 end
@@ -461,11 +510,11 @@ end
 -- ! Handle Input
 -- Main per-frame input processing with minimal overhead
 function Input.handleInput()
-  if not Input.isEnabled or not activeMergedHandler then return end
-
-  -- Handle input blocking during scene transitions
-  if Input._blocked then
-    if getButtonState() == 0 then -- No buttons pressed
+  if not activeMergedHandler then return end
+  if not shouldProcessInput() then
+    -- Handle input blocking during scene transitions
+    -- Avoid double getButtonState() call if not blocked
+    if Input._blocked and getButtonState() == 0 then
       Log.debug("[Input.handleInput] Unblocking input") --#DEBUG
       Input._blocked = false
       getButtonState() -- Flush button state
@@ -477,12 +526,11 @@ function Input.handleInput()
   local buf = cachedBufferAmount
 
   -- Use cached callbacks and array iteration for maximum performance
-  for i = 1, #BUTTON_NAMES do
+  for i = 1, BUTTON_COUNT do
     local name = BUTTON_NAMES[i]
     if held[name] then
       local frames = heldFrames[name] + 1
       heldFrames[name] = frames
-
       if frames >= buf then
         local callback = cachedHoldCallbacks[name]
         if callback then callback() end

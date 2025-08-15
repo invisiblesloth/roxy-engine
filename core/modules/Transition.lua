@@ -22,13 +22,15 @@ local mergeImmutable <const> = r.Table.mergeImmutable
 local getConfig           <const> = Config.get
 local getTransitionConfig <const> = Config.getTransitionConfig
 
-local pushContext <const> = Graphics.pushContext
-local popContext  <const> = Graphics.popContext
-local setColor    <const> = Graphics.setColor
-local fillRect    <const> = Graphics.fillRect
-local newImage    <const> = Graphics.image.new
-local getDrawMode <const> = Graphics.getImageDrawMode
-local setDrawMode <const> = Graphics.setImageDrawMode
+local getDrawOffset <const> = Graphics.getDrawOffset
+local setDrawOffset <const> = Graphics.setDrawOffset
+local pushContext   <const> = Graphics.pushContext
+local popContext    <const> = Graphics.popContext
+local setColor      <const> = Graphics.setColor
+local fillRect      <const> = Graphics.fillRect
+local newImage      <const> = Graphics.image.new
+local getDrawMode   <const> = Graphics.getImageDrawMode
+local setDrawMode   <const> = Graphics.setImageDrawMode
 
 local EMPTY_TABLE   <const> = {}
 
@@ -265,12 +267,22 @@ function Transition.executeTransitionDrawing()
   end
 
   local drawMode = transition.drawMode or DRAW_MODE_COPY
-  local prev = getDrawMode()
-  if prev ~= drawMode then
+  local prevMode = getDrawMode()
+  if prevMode ~= drawMode then
     setDrawMode(drawMode)
   end
+
+  -- Draw transitions in screen space (ignore camera)
+  local offsetX, offsetY = getDrawOffset()
+  if offsetX ~= 0 or offsetY ~= 0 then
+    setDrawOffset(0, 0)
+  end
   transition:draw()
-  if drawMode ~= prev then
-    setDrawMode(prev)
+  if offsetX ~= 0 or offsetY ~= 0 then
+    setDrawOffset(offsetX, offsetY)
+  end
+
+  if drawMode ~= prevMode then
+    setDrawMode(prevMode)
   end
 end

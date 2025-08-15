@@ -134,6 +134,7 @@ local function activateScene(scene)
     local backgroundDrawFn = scene.backgroundDrawFn or NO_OP_BG_DRAW
     setBackgroundDrawing(backgroundDrawFn)
     redrawBackground()
+    scene:start()
   end
 end
 
