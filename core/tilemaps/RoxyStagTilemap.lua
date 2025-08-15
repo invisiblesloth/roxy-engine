@@ -1,5 +1,7 @@
--- core/tilemaps/RoxyIsoTilemap.lua
--- Classic diamond isometric tilemaps for Roxy (no stagger logic).
+-- core/tilemaps/RoxyStagTilemap.lua
+-- Staggered-Y isometric tilemaps that match Tiled:
+-- Only rows whose parity matches Tiled's staggerindex are shifted.
+-- Direction is configurable via self.staggerDirection = "left" | "right" (default "right").
 
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
@@ -32,8 +34,30 @@ local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 -- Helpers
 --------------------------------------------------------------------------------
 
+-- ! Row Shift X for Row 0
+-- Return the horizontal row shift (in pixels) for a given 0-based row index.
+-- Matches Tiled: shift ONLY rows whose parity equals self.staggerIndex.
+local function _rowShiftX_for_row0(self, row0, halfWidth)
+  if self.staggerAxis ~= "y" then return 0 end
+
+  local rowIsOdd = (row0 % 2) == 1
+  local shouldShift
+  if self.staggerIndex == "odd" then
+    shouldShift = rowIsOdd
+  elseif self.staggerIndex == "even" then
+    shouldShift = not rowIsOdd
+  else
+    shouldShift = false
+  end
+  if not shouldShift then return 0 end
+
+  local direction = self.staggerDirection or "right"
+  return (direction == "right") and (halfWidth) or (-halfWidth)
+end
+
+-- ! Get Max Image Height
 -- Helper to compute and cache max image height for the layer
-local function _getMaxImgH(layer)
+local function _getMaxImgHeight(layer)
   if layer._maxImgH then return layer._maxImgH end
   local imagetable = layer.imageTable
   local imagetableLength = imagetable and imagetable:getLength() or 0
@@ -55,26 +79,33 @@ end
 -- ! Class Definition and Initialize
 --------------------------------------------------------------------------------
 
-class("RoxyIsoTilemap").extends(RoxyTilemap)
+class("RoxyStagTilemap").extends(RoxyTilemap)
 
-function RoxyIsoTilemap:init(jsonPath, opts, scene)
+function RoxyStagTilemap:init(jsonPath, opts, scene)
   opts = opts or {}
   opts.wrapInSprites = false
   opts.anchor = "topLeft"
-  RoxyIsoTilemap.super.init(self, jsonPath, opts, scene)
+  RoxyStagTilemap.super.init(self, jsonPath, opts, scene)
 
-  -- Mark the projection for clarity/debugging
-  self._projection = "iso"
+  self._projection = "staggered-y"
+
+  -- Tiled fields read in base class:
+  --   self.staggerAxis  -> expected "y"
+  --   self.staggerIndex -> "odd" | "even"
+  -- Direction knob: which way the shifted rows move horizontally in pixels
+  self.staggerDirection = self.staggerDirection or "right" -- "left" | "right"
 end
 
 --------------------------------------------------------------------------------
--- Projection (classic diamond isometric)
--- screenX = originX + (worldX - worldY) * (tileWidth  * 0.5)
--- screenY = originY + (worldX + worldY) * (tileHeight * 0.5)
+-- Projection (Staggered-Y)
+-- Row spacing = halfHeight; Column step = tileWidth.
+-- Shift rule (Tiled):
+--   If row parity matches staggerIndex -> shift by ±halfWidth (dir knob)
+--   Otherwise -> no shift
 --------------------------------------------------------------------------------
 
 -- ! World to Screen
-function RoxyIsoTilemap:worldToScreen(worldX, worldY, layer)
+function RoxyStagTilemap:worldToScreen(worldX, worldY, layer)
   local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
   local halfWidth, halfHeight = tileWidth * 0.5, tileHeight * 0.5
 
@@ -82,22 +113,25 @@ function RoxyIsoTilemap:worldToScreen(worldX, worldY, layer)
   local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
   local cameraX, cameraY = getCameraPosition()
 
-  -- Parallax-origin pivot so direct math matches sprite path
+  local row0 = floor(worldY + 1e-6)
+  local shiftX = _rowShiftX_for_row0(self, row0, halfWidth)
+
+  -- Parallax-origin pivot to mirror sprite behavior
   local parallaxOriginX = layer.parallaxoriginx or 0
   local parallaxOriginY = layer.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
-  local isoX = originX + (worldX - worldY) * halfWidth
-  local isoY = originY + (worldX + worldY) * halfHeight
+  local screenX = originX + worldX * tileWidth + shiftX
+  local screenY = originY + worldY * halfHeight
 
-  -- Include pivotAdjust* before subtracting camera
-  return round(isoX + pivotAdjustX - cameraX * parallaxX),
-         round(isoY + pivotAdjustY - cameraY * parallaxY)
+  -- Apply pivotAdjust* before subtracting camera
+  return round(screenX + pivotAdjustX - cameraX * parallaxX),
+         round(screenY + pivotAdjustY - cameraY * parallaxY)
 end
 
 -- ! Screen to World
-function RoxyIsoTilemap:screenToWorld(screenX, screenY, layer)
+function RoxyStagTilemap:screenToWorld(screenX, screenY, layer)
   local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
   local halfWidth, halfHeight = tileWidth * 0.5, tileHeight * 0.5
 
@@ -105,7 +139,7 @@ function RoxyIsoTilemap:screenToWorld(screenX, screenY, layer)
   local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
   local cameraX, cameraY = getCameraPosition()
 
-  -- Parallax-origin pivot so direct math matches sprite path
+  -- Parallax-origin pivot to mirror sprite behavior
   local parallaxOriginX = layer.parallaxoriginx or 0
   local parallaxOriginY = layer.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
@@ -115,8 +149,11 @@ function RoxyIsoTilemap:screenToWorld(screenX, screenY, layer)
   local dx = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
   local dy = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
 
-  local worldX = (dx / halfWidth + dy / halfHeight) * 0.5
-  local worldY = (dy / halfHeight - dx / halfWidth) * 0.5
+  local worldY = dy / halfHeight
+  local row0 = floor(worldY + 1e-6)
+  local shiftX = _rowShiftX_for_row0(self, row0, halfWidth)
+
+  local worldX = (dx - shiftX) / tileWidth
   return worldX, worldY
 end
 
@@ -125,7 +162,7 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Set Tile At
-function RoxyIsoTilemap:setTileAt(name, x, y, tileIndex, updateSprite)
+function RoxyStagTilemap:setTileAt(name, x, y, tileIndex, updateSprite)
   local layer = self.layers and self.layers[name]
   if not layer then return end
 
@@ -143,44 +180,40 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Draw
--- Draw a single tile layer with conservative vertical culling.
-function RoxyIsoTilemap:draw(name)
+function RoxyStagTilemap:draw(name)
   local layer = self.layers and self.layers[name]
   if not layer or not layer.tilemap or layer.visible == false then return end
 
   local mapWidthTiles, mapHeightTiles = layer.tilemap:getSize()
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-
-  -- Get world coordinates of screen corners
-  local topLeftX, topLeftY = self:screenToWorld(0, 0, layer)
-  local topRightX, topRightY = self:screenToWorld(DISPLAY_WIDTH, 0, layer)
-  local bottomLeftX, bottomLeftY = self:screenToWorld(0, DISPLAY_HEIGHT, layer)
-  local bottomRightX, bottomRightY = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
-
-  -- Find the bounds of visible tiles with margin for image height
-  local maxImgH = _getMaxImgH(layer)
+  local tileHeight = layer.tileHeight or 0
   local halfHeight = tileHeight * 0.5
+  
+  -- Get screen corners in world space
+  local leftWorld, topWorld = self:screenToWorld(0, 0, layer)
+  local rightWorld, bottomWorld = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
+  
+  -- Calculate margin based on tallest image (like RoxyIsoTilemap)
+  local maxImgH = _getMaxImgHeight(layer)
   local overdraw = max(0, maxImgH - tileHeight)
   local margin = ceil(overdraw / max(1, halfHeight)) + 1
-
-  -- Calculate conservative bounds
-  local minWorldX = min(topLeftX, topRightX, bottomLeftX, bottomRightX) - margin
-  local maxWorldX = max(topLeftX, topRightX, bottomLeftX, bottomRightX) + margin
-  local minWorldY = min(topLeftY, topRightY, bottomLeftY, bottomRightY) - margin
-  local maxWorldY = max(topLeftY, topRightY, bottomLeftY, bottomRightY) + margin
-
+  
+  -- Calculate bounds with proper margin
+  local minWorldX = min(leftWorld, rightWorld) - margin
+  local maxWorldX = max(leftWorld, rightWorld) + margin
+  local minWorldY = min(topWorld, bottomWorld) - margin
+  local maxWorldY = max(topWorld, bottomWorld) + margin
+  
   -- Convert to tile coordinates (1-based)
   local minTileX = max(1, floor(minWorldX) + 1)
   local maxTileX = min(mapWidthTiles, ceil(maxWorldX) + 1)
   local minTileY = max(1, floor(minWorldY) + 1)
   local maxTileY = min(mapHeightTiles, ceil(maxWorldY) + 1)
 
-  self:drawLayerRegion(name, minTileX, maxTileX, minTileY, maxTileY)
+  self:drawLayerRows(name, minTileY, maxTileY, minTileX, maxTileX)
 end
 
 -- ! Draw Visible
--- Draw all visible tile layers sorted by z-index.
-function RoxyIsoTilemap:drawVisible()
+function RoxyStagTilemap:drawVisible()
   if not self.layers then return end
 
   local list = {}
@@ -194,38 +227,36 @@ function RoxyIsoTilemap:drawVisible()
   for i = 1, #list do
     local layer = list[i]
     local mapWidthTiles, mapHeightTiles = layer.tilemap:getSize()
-    local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-
-    -- Get world coordinates of screen corners
-    local topLeftX, topLeftY = self:screenToWorld(0, 0, layer)
-    local topRightX, topRightY = self:screenToWorld(DISPLAY_WIDTH, 0, layer)
-    local bottomLeftX, bottomLeftY = self:screenToWorld(0, DISPLAY_HEIGHT, layer)
-    local bottomRightX, bottomRightY = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
-
-    -- Find the bounds of visible tiles with margin for image height
-    local maxImgH = _getMaxImgH(layer)
+    local tileHeight = layer.tileHeight or 0
     local halfHeight = tileHeight * 0.5
+    
+    -- Get screen corners in world space
+    local leftWorld, topWorld = self:screenToWorld(0, 0, layer)
+    local rightWorld, bottomWorld = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
+    
+    -- Calculate margin based on tallest image
+    local maxImgH = _getMaxImgHeight(layer)
     local overdraw = max(0, maxImgH - tileHeight)
     local margin = ceil(overdraw / max(1, halfHeight)) + 1
-
-    -- Calculate conservative bounds
-    local minWorldX = min(topLeftX, topRightX, bottomLeftX, bottomRightX) - margin
-    local maxWorldX = max(topLeftX, topRightX, bottomLeftX, bottomRightX) + margin
-    local minWorldY = min(topLeftY, topRightY, bottomLeftY, bottomRightY) - margin
-    local maxWorldY = max(topLeftY, topRightY, bottomLeftY, bottomRightY) + margin
-
+    
+    -- Calculate bounds with proper margin
+    local minWorldX = min(leftWorld, rightWorld) - margin
+    local maxWorldX = max(leftWorld, rightWorld) + margin
+    local minWorldY = min(topWorld, bottomWorld) - margin
+    local maxWorldY = max(topWorld, bottomWorld) + margin
+    
     -- Convert to tile coordinates (1-based)
     local minTileX = max(1, floor(minWorldX) + 1)
     local maxTileX = min(mapWidthTiles, ceil(maxWorldX) + 1)
     local minTileY = max(1, floor(minWorldY) + 1)
     local maxTileY = min(mapHeightTiles, ceil(maxWorldY) + 1)
 
-    self:drawLayerRegion(layer.name, minTileX, maxTileX, minTileY, maxTileY)
+    self:drawLayerRows(layer.name, minTileY, maxTileY, minTileX, maxTileX)
   end
 end
 
--- ! Draw Layer Region
-function RoxyIsoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
+-- ! Draw Layer Rows
+function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minCol, maxCol)
   local restoreX, restoreY = _beginManualDraw()
 
   local layer = self.layers and self.layers[layerName]
@@ -245,88 +276,88 @@ function RoxyIsoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTileY,
   local mapWidthTiles, mapHeightTiles = tilemap:getSize()
   local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
 
-  -- Clamp bounds
-  minTileX = max(1, minTileX)
-  maxTileX = min(mapWidthTiles, maxTileX)
-  minTileY = max(1, minTileY)
-  maxTileY = min(mapHeightTiles, maxTileY)
+  local rowStart = max(1, minRow or 1)
+  local rowEnd   = min(mapHeightTiles, maxRow or mapHeightTiles)
+  if rowStart > rowEnd then _endManualDraw(restoreX, restoreY); return end
 
-  if minTileX > maxTileX or minTileY > maxTileY then
-    _endManualDraw(restoreX, restoreY); return
+  -- Use passed column bounds if provided, otherwise calculate them
+  local minX, maxX
+  if minCol and maxCol then
+    minX = max(1, minCol)
+    maxX = min(mapWidthTiles, maxCol)
+  else
+    -- Fallback to old calculation for backwards compatibility
+    local leftWorld, topWorld = self:screenToWorld(0, 0, layer)
+    local rightWorld, bottomWorld = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
+    local minWorldX = floor(min(leftWorld, rightWorld)) - 2
+    local maxWorldX = ceil (max(leftWorld, rightWorld)) + 2
+    minX = max(1, minWorldX + 1)
+    maxX = min(mapWidthTiles, maxWorldX + 1)
   end
+
+  if minX > maxX then _endManualDraw(restoreX, restoreY); return end
 
   local tiles, widthFromTileMap = tilemap:getTiles()
   local stride = widthFromTileMap or mapWidthTiles
 
-  -- Camera and parallax calculations
+  -- Use the same pivot adjust as worldToScreen/sprite path (like RoxyIsoTilemap)
   local originX, originY = layer.originX or 0, layer.originY or 0
   local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
   local parallaxOriginX = layer.parallaxoriginx or 0
   local parallaxOriginY = layer.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
-
+  
   local cameraX, cameraY = getCameraPosition()
   local halfHeight, halfWidth = tileHeight * 0.5, tileWidth * 0.5
 
-  -- Draw tiles in the specified region
-  for tileY = minTileY, maxTileY do
-    for tileX = minTileX, maxTileX do
-      local i = (tileY - 1) * stride + tileX
-      local idx = tiles and tiles[i] or 0
+  for tileY = rowStart, rowEnd do
+    local row0 = tileY - 1
+    local rowShiftX = _rowShiftX_for_row0(self, row0, halfWidth)
 
+    -- Apply pivot adjustments consistently
+    local baseScreenX = round(originX + rowShiftX + pivotAdjustX - cameraX * parallaxX)
+    local baseScreenY = round(originY + row0 * halfHeight + pivotAdjustY - cameraY * parallaxY)
+
+    local currentX = baseScreenX + (minX - 1) * tileWidth
+    local currentY = baseScreenY
+
+    local i = row0 * stride + minX
+    for tileX = minX, maxX do
+      local idx = tiles and tiles[i] or 0
       if idx and idx ~= 0 then
         local img = cache[idx]
         if not img then img = imageTable:getImage(idx); cache[idx] = img end
-
         if img then
-          -- Convert tile coordinates to screen position
-          local worldX, worldY = tileX - 1, tileY - 1
-          local screenX = originX + (worldX - worldY) * halfWidth
-          local screenY = originY + (worldX + worldY) * halfHeight
-
-          local finalScreenX = round(screenX + pivotAdjustX - cameraX * parallaxX)
-          local finalScreenY = round(screenY + pivotAdjustY - cameraY * parallaxY)
-
           local offX, offY = _isoDrawOffsets(tileWidth, tileHeight, img)
-          local drawX, drawY = finalScreenX + offX, finalScreenY + offY
-
-          -- Final screen bounds check (optional optimization)
-          local imgW, imgH = img:getSize()
+          local drawX, drawY = currentX + offX, currentY + offY
+          local imgWidth, imgHeight = img:getSize()
           if not (drawX > DISPLAY_WIDTH or drawY > DISPLAY_HEIGHT or
-                  drawX + imgW < 0 or drawY + imgH < 0) then
+                  drawX + imgWidth < 0 or drawY + imgHeight < 0) then
             img:draw(drawX, drawY)
           end
         end
       end
+
+      currentX = currentX + tileWidth
+      i += 1
     end
   end
 
   _endManualDraw(restoreX, restoreY)
 end
 
--- ! Get Rows From Screen
--- Convert a screen pixel to a 1-based row (tileY).
-function RoxyIsoTilemap:getRowFromScreen(screenX, screenY, layerName)
+-- ! Get Row From Screen
+function RoxyStagTilemap:getRowFromScreen(screenX, screenY, layerName)
   local targetLayer = self.layers and self.layers[layerName]
   if not targetLayer then
-    -- Fall back to any layer if needed
-    for _, layer in pairs(self.layers or {}) do
-      if layer.tilemap then
-        targetLayer = layer
-        break
-      end
-    end
+    for _, layer in pairs(self.layers or {}) do if layer.tilemap then targetLayer = layer; break end end
     if not targetLayer then return 1 end
   end
 
   local _, mapHeightTiles = targetLayer.tilemap:getSize()
   local _, worldY = self:screenToWorld(screenX, screenY, targetLayer)
   local row = floor(worldY + 1)
-  if row < 1 then
-    row = 1
-  elseif row > mapHeightTiles then
-    row = mapHeightTiles
-  end
+  if row < 1 then row = 1 elseif row > mapHeightTiles then row = mapHeightTiles end
   return row
 end
