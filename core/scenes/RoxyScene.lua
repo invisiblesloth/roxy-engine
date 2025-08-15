@@ -73,12 +73,11 @@ local function _getImageCallback(img)
 end
 
 --------------------------------------------------------------------------------
--- Class Definition & Init
+-- ! Class Definition and Initialize
 --------------------------------------------------------------------------------
 
 class("RoxyScene").extends(Object)
 
---! Initialize
 function RoxyScene:init(background)
   self.name = self.className or "RoxyScene"
   Log.debug("[RoxyScene:init] Initializing Scene: " .. self.name) --#DEBUG
@@ -92,6 +91,9 @@ function RoxyScene:init(background)
   self.sprites = {}
   self.tilemaps = {}
   self.sequences = {}
+
+  self._spriteAutoAddQueue = {}
+  self._sequenceAutoStartQueue = {}
 
   -- Sensible defaults used by Scene draw filtering
   self.isVisible = true
@@ -114,6 +116,20 @@ function RoxyScene:enter()
   self._didEnter = true
   Log.debug("[RoxyScene:enter] Entering Scene: " .. self.name) --#DEBUG
   self:addHandler()
+
+  -- Flush any queued sprite auto-adds
+  local spriteQueue = self._spriteAutoAddQueue
+  for i = 1, #spriteQueue do
+    spriteQueue[i]:add()
+  end
+  self._spriteAutoAddQueue = {}
+
+  -- Flush any queued sequence auto-starts
+  local sequenceQueue = self._sequenceAutoStartQueue
+  for i = 1, #sequenceQueue do
+    sequenceQueue[i]:play()
+  end
+  self._sequenceAutoStartQueue = {}
 end
 
 -- ! Update
@@ -200,6 +216,10 @@ function RoxyScene:cleanup()
 
   resetCamera()
 
+  self._spriteAutoAddQueue = {}
+  self._sequenceAutoStartQueue = {}
+  self._tilemapActivateQueue = {}
+
   self.backgroundColor = nil
   self.backgroundImage = nil
   self.backgroundDrawFn = nil
@@ -267,16 +287,21 @@ function RoxyScene:addSprite(sprite)
 
   -- Avoid duplicates
   for i = 1, #self.sprites do
-    if self.sprites[i] == sprite then
-      return
-    end
+    if self.sprites[i] == sprite then return end
   end
 
   -- Give the sprite a back-pointer so it can self-remove later
   sprite.scene = self
 
   tableInsert(self.sprites, sprite)
-  sprite:add()
+
+  if self._didEnter then
+    -- Scene is active -- attach immediately
+    sprite:add()
+  else
+    -- Scene isn't active yet -- queue for enter()
+    tableInsert(self._spriteAutoAddQueue, sprite)
+  end
 end
 
 -- ! Remove Sprite
@@ -318,9 +343,7 @@ function RoxyScene:addTilemap(tilemap)
   if not tilemap then return end
 
   for i = 1, #self.tilemaps do
-    if self.tilemaps[i] == tilemap then
-      return
-    end
+    if self.tilemaps[i] == tilemap then return end
   end
 
   tableInsert(self.tilemaps, tilemap)
@@ -367,9 +390,7 @@ function RoxyScene:addSequence(sequence)
   if not sequence then return end
 
   for i = 1, #self.sequences do
-    if self.sequences[i] == sequence then
-      return
-    end
+    if self.sequences[i] == sequence then return end
   end
 
   tableInsert(self.sequences, sequence)
@@ -377,7 +398,13 @@ function RoxyScene:addSequence(sequence)
   -- Give the sequence a back-pointer so it can self-remove later
   sequence.scene = self
 
-  sequence:play()
+  if self._didEnter then
+    -- Scene is active -- start now
+    sequence:play()
+  else
+    -- Scene isn't active yet -- queue for enter()
+    tableInsert(self._sequenceAutoStartQueue, sequence)
+  end
 end
 
 -- ! Remove Sequence
