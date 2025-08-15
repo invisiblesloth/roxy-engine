@@ -299,6 +299,7 @@ function Camera.reset()
   Camera._deadZoneWidth   = 0
   Camera._deadZoneHeight  = 0
   Camera.friction         = FRICTION_DEFAULT
+  Camera._updateFunc      = Camera.updateStatic
 
   -- Immediate screen‑space reset
   setDrawOffset(0, 0)
