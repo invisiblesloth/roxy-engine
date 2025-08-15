@@ -6,6 +6,7 @@ local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
 local r       <const> = roxy
+local Input   <const> = r.Input
 local Camera  <const> = r.Camera
 
 local tableInsert <const> = table.insert
@@ -21,8 +22,10 @@ local clearClipRect       <const> = Graphics.clearClipRect
 
 local redrawBackground <const> = Sprite.redrawBackground
 
-local addHandler    <const> = r.Input.addHandler
-local removeHandler <const> = r.Input.removeHandler
+local addHandler    <const> = Input.addHandler
+local pauseHandler  <const> = Input.pause
+local resumeHandler <const> = Input.resume
+local removeHandler <const> = Input.removeHandler
 
 local resetCamera <const> = Camera.reset
 
@@ -84,6 +87,7 @@ function RoxyScene:init(background)
 
   self.isPaused = false
   self._didEnter = false
+  self._didStart = false
   self._didExit = false
   self._didCleanup = false
 
@@ -113,9 +117,8 @@ end
 -- ! Enter
 function RoxyScene:enter()
   if self._didEnter then return end
-  self._didEnter = true
   Log.debug("[RoxyScene:enter] Entering Scene: " .. self.name) --#DEBUG
-  self:addHandler()
+  self._didEnter = true
 
   -- Flush any queued sprite auto-adds
   local spriteQueue = self._spriteAutoAddQueue
@@ -130,6 +133,15 @@ function RoxyScene:enter()
     sequenceQueue[i]:play()
   end
   self._sequenceAutoStartQueue = {}
+end
+
+-- ! Start
+function RoxyScene:start()
+  if self._didStart then return end
+  Log.debug("[RoxyScene:start] Starting Scene: " .. self.name) --#DEBUG
+  self._didStart = true
+
+  self:addHandler()
 end
 
 -- ! Update
@@ -195,18 +207,19 @@ end
 -- ! Exit
 function RoxyScene:exit()
   if self._didExit then return end
+  Log.debug("[RoxyScene:exit] Exiting Scene: " .. self.name) --#DEBUG
   self._didExit = true
 
-  Log.debug("[RoxyScene:exit] Exiting Scene: " .. self.name) --#DEBUG
+  pauseHandler()
 end
 
 -- ! Cleanup
 function RoxyScene:cleanup()
   if self._didCleanup then return end
+  Log.debug("[RoxyScene:cleanup] Cleaning Up Scene: " .. self.name) --#DEBUG
   self._didCleanup = true
 
-  Log.debug("[RoxyScene:cleanup] Cleaning Up Scene: " .. self.name) --#DEBUG
-
+  resumeHandler(true)
   removeHandler(self)
 
   self:removeAllSprites()
