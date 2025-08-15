@@ -11,6 +11,8 @@ local Camera  <const> = r.Camera
 
 local min   <const> = math.min
 local max   <const> = math.max
+local floor <const> = math.floor
+local ceil  <const> = math.ceil
 local round <const> = r.Math.round
 
 local createTable <const> = table.create
@@ -211,9 +213,9 @@ local function createDefaultObjectSprite(obj, layerOpts)
     Log.warn("[createDefaultObjectSprite] Failed to load image at: " .. tostring(imagePath))
   end
 
-  -- Create parallax sprite if needed and RoxyParallaxSprite is available
+  -- Create parallax sprite if needed
   local sprite
-  if hasParallax and r.RoxyParallaxSprite then
+  if hasParallax then
     local spriteOpts = {
       view = image,
       worldX = obj.x or 0,
@@ -225,11 +227,8 @@ local function createDefaultObjectSprite(obj, layerOpts)
     }
     sprite = r.RoxyParallaxSprite(spriteOpts)
   else
-    -- Create regular sprite
     sprite = newSprite()
-    if image then
-      sprite:setImage(image)
-    end
+    if image then sprite:setImage(image) end
   end
 
   -- Fallback image creation for regular sprites
@@ -339,11 +338,17 @@ end
 -- Hoist and Cache sprite:update - Move parallax update function outside per-sprite loop
 -- Define the parallax update function once, outside the sprite creation loop
 -- This avoids creating new function instances for each sprite
-local function createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, parallaxX, parallaxY, rnd, camGetter)
+local function createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, rnd, camGetter, anchor, mapPixelWidth, mapPixelHeight)
   return function(self)
     local cameraX, cameraY = camGetter()
+
+    -- Apply parallax origin pivot (consistent with projection classes)
+    local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
+    local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+
     local screenX = rnd(worldX + pivotAdjustX - cameraX * parallaxX)
     local screenY = rnd(worldY + pivotAdjustY - cameraY * parallaxY)
+
     local currentX, currentY = self:getPosition()
     if screenX ~= currentX or screenY ~= currentY then
       self:moveTo(screenX, screenY)
@@ -352,10 +357,51 @@ local function createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, 
 end
 
 --------------------------------------------------------------------------------
--- ! Class Definition & Init
+-- ! Class Definition
 --------------------------------------------------------------------------------
 
 class("RoxyTilemap").extends(Object)
+
+--------------------------------------------------------------------------------
+-- Isometric helpers (shared by iso/staggered leaves)
+--------------------------------------------------------------------------------
+
+-- ! Isometric Draw Offsets
+-- Per-tile draw offsets so diamonds align with Tiled.
+function RoxyTilemap._isoDrawOffsets(tileWidth, tileHeight, img)
+  local imgWidth, imgHeight = img:getSize()
+  local offsetX = (tileWidth - imgWidth) * 0.5
+  local offsetY = (tileHeight - imgHeight)
+  return offsetX, offsetY
+end
+
+-- ! Begin Manual Draw
+-- Temporarily zero draw offset when doing manual placement.
+function RoxyTilemap._beginManualDraw()
+  local offsetX, offsetY = playdate.graphics.getDrawOffset()
+  if offsetX ~= 0 or offsetY ~= 0 then playdate.graphics.setDrawOffset(0, 0) end
+  return offsetX, offsetY
+end
+
+-- ! End Manual Draw
+-- Restore draw offset after manual placement.
+function RoxyTilemap._endManualDraw(offsetX, offsetY)
+  if offsetX ~= 0 or offsetY ~= 0 then playdate.graphics.setDrawOffset(offsetX, offsetY) end
+end
+
+-- ! Get Valid Layer
+function RoxyTilemap._getValidLayer(layerName)
+  if not layerName or not self.layers then return nil end
+  local layer = self.layers[layerName]
+  if not layer or not layer.tilemap or layer.visible == false then
+    return nil
+  end
+  return layer
+end
+
+--------------------------------------------------------------------------------
+-- ! Initialize
+--------------------------------------------------------------------------------
 
 --[[
   jsonPath: string - Path to Tiled JSON map
@@ -364,6 +410,8 @@ class("RoxyTilemap").extends(Object)
 ]]
 function RoxyTilemap:init(jsonPath, opts, scene)
   opts = validateOptions(opts)
+
+  self.scene = scene
 
   self._retainedPaths = {}
 
@@ -515,7 +563,9 @@ function RoxyTilemap:init(jsonPath, opts, scene)
         end
         tilemap:setTiles(indices, layer.width)
 
-        local tileWidth, tileHeight = tilemap:getTileSize()
+        -- Use logical map tile size (e.g., 64x32) for iso math/culling
+        -- Actual image size (e.g., 64x64) is handled via per-image offsets
+        local tileWidth, tileHeight = self.mapTileWidth, self.mapTileHeight
 
         -- Precompute map pixel size for direct draw
         local width, height = tilemap:getSize()
@@ -523,6 +573,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
         local mapPixelHeight = height * tileHeight
 
         local layerData = {
+          name = layer.name,
           tilemap = tilemap,
           anchor = opts.anchor,
           tileWidth = tileWidth,
@@ -575,11 +626,18 @@ function RoxyTilemap:init(jsonPath, opts, scene)
             sprite:setIgnoresDrawOffset(true)
             sprite:setUpdatesEnabled(true)
 
+            -- Use consistent pivot calculation like projection classes
             local pivotAdjustX = pox * (1 - parallaxX)
             local pivotAdjustY = poy * (1 - parallaxY)
             local worldX, worldY = originX, originY
 
-            sprite.update = createParallaxUpdate(worldX, worldY, pivotAdjustX, pivotAdjustY, parallaxX, parallaxY, rnd, camGetter)
+            sprite.update = createParallaxUpdate(
+              worldX, worldY,
+              parallaxX, parallaxY,
+              pox, poy,
+              rnd, camGetter,
+              opts.anchor, mapPixelWidth, mapPixelHeight
+            )
           else
             sprite:moveTo(originX, originY)
           end
@@ -652,7 +710,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 end
 
 --------------------------------------------------------------------------------
--- ! Public Methods
+-- Public Methods
 --------------------------------------------------------------------------------
 
 -- ! Get Tilemap
@@ -811,11 +869,10 @@ function RoxyTilemap:removeLayer(name)
   if layer.sprite then
     local sprite = layer.sprite
     if self.scene and self.scene.removeSprite then
-      self.scene:removeSprite(sprite) -- Removes from scene.sprites and display list
+      self.scene:removeSprite(sprite)
     else
       sprite:remove()
     end
-    -- Also prune our own bookkeeping list
     if self.sprites then
       for i = #self.sprites, 1, -1 do
         if self.sprites[i] == sprite then tableRemove(self.sprites, i) break end
@@ -832,8 +889,11 @@ function RoxyTilemap:removeLayer(name)
     layer.collisionSprites = nil
   end
 
+  -- Clear heavy references
   layer.tilemap = nil
   layer.imageTable = nil
+  layer._imgCache = nil
+
   self.layers[name] = nil
 end
 
@@ -904,6 +964,7 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remap)
   -- Swap imagetable
   layer.tilemap:setImageTable(newTable)
   layer.imageTable = newTable
+  layer._imgCache = {}
 
   -- Update asset retention (if a path swap)
   if newPath then
@@ -976,6 +1037,25 @@ function RoxyTilemap:rebuildLayerCollisions(name, emptyIDs, wallGroup, collidesW
 end
 
 --------------------------------------------------------------------------------
+-- Projection methods
+--------------------------------------------------------------------------------
+
+-- ! World to Screen (abstract method)
+function RoxyTilemap:worldToScreen(worldX, worldY, layer)
+  Log.error("[RoxyTilemap:worldToScreen] Abstract method - must be implemented by projection subclass")
+end
+
+-- ! Screen to World (abstract method)
+function RoxyTilemap:screenToWorld(screenX, screenY, layer)
+  Log.error("[RoxyTilemap:screenToWorld] Abstract method - must be implemented by projection subclass")
+end
+
+-- ! Set Tile At (abstract method)
+function RoxyTilemap:setTileAt(name, x, y, tileIndex, updateSprite)
+  Log.error("[RoxyTilemap:setTileAt] Abstract method - must be implemented by projection subclass")
+end
+
+--------------------------------------------------------------------------------
 -- Origin helpers
 --------------------------------------------------------------------------------
 
@@ -999,14 +1079,13 @@ function RoxyTilemap:setLayerOrigin(name, originX, originY)
 
     -- If this layer was using a parallax update closure, rebuild it with the new origin.
     if sprite.update and sprite.setUpdatesEnabled then
-      -- Recreate the cached updater using the shared helper
-      local pivotAdjustX = pox * (1 - parallaxX)
-      local pivotAdjustY = poy * (1 - parallaxY)
+      -- Recreate the cached updater using the helper
       sprite.update = createParallaxUpdate(
         layer.originX, layer.originY,
-        pivotAdjustX, pivotAdjustY,
         parallaxX, parallaxY,
-        round, getCameraPosition
+        pox, poy, -- Pass origins separately for consistency
+        round, getCameraPosition,
+        layer.anchor, layer.mapPixelWidth, layer.mapPixelHeight
       )
       -- Ensure we do not double-apply draw offset
       sprite:setIgnoresDrawOffset(true)
@@ -1027,6 +1106,77 @@ function RoxyTilemap:setOriginForAllLayers(originX, originY)
   for name, _ in pairs(self.layers) do
     self:setLayerOrigin(name, originX, originY)
   end
+end
+
+--------------------------------------------------------------------------------
+-- Culling Utilities
+--------------------------------------------------------------------------------
+
+-- ! Get Screen Bounds In World Space
+-- Returns the world coordinates of screen corners for a given layer
+function RoxyTilemap:getScreenBoundsInWorld(layer)
+  if not layer then return 0, 0, 0, 0 end
+
+  local topLeftX, topLeftY = self:screenToWorld(0, 0, layer)
+  local topRightX, topRightY = self:screenToWorld(DISPLAY_WIDTH, 0, layer)
+  local bottomLeftX, bottomLeftY = self:screenToWorld(0, DISPLAY_HEIGHT, layer)
+  local bottomRightX, bottomRightY = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
+
+  local minX = min(topLeftX, topRightX, bottomLeftX, bottomRightX)
+  local maxX = max(topLeftX, topRightX, bottomLeftX, bottomRightX)
+  local minY = min(topLeftY, topRightY, bottomLeftY, bottomRightY)
+  local maxY = max(topLeftY, topRightY, bottomLeftY, bottomRightY)
+
+  return minX, minY, maxX, maxY
+end
+
+-- ! Get Visible Tile Bounds
+-- Calculate which tiles are potentially visible with proper margin
+function RoxyTilemap:getVisibleTileBounds(layer, extraMargin)
+  if not layer then return 1, 1, 1, 1 end
+
+  local mapWidthTiles, mapHeightTiles = layer.tilemap:getSize()
+
+  -- Get world bounds of screen
+  local minWorldX, minWorldY, maxWorldX, maxWorldY = self:getScreenBoundsInWorld(layer)
+
+  -- Calculate margin based on image heights (if needed)
+  local margin = extraMargin or 0
+  if not extraMargin and layer.imageTable then
+    -- Calculate proper margin like the projection classes do
+    local tileHeight = layer.tileHeight or 0
+    local halfHeight = tileHeight * 0.5
+
+    -- Find max image height (similar to _getMaxImgH in projection classes)
+    local maxImgH = 0
+    local imageTable = layer.imageTable
+    local imageTableLength = imageTable and imageTable:getLength() or 0
+    for i = 1, imageTableLength do
+      local img = imageTable:getImage(i)
+      if img then
+        local _, height = img:getSize()
+        if height and height > maxImgH then
+          maxImgH = height
+        end
+      end
+    end
+
+    local overdraw = max(0, maxImgH - tileHeight)
+    margin = ceil(overdraw / max(1, halfHeight)) + 1
+  end
+
+  -- Apply margin and convert to tile coordinates
+  minWorldX = minWorldX - margin
+  maxWorldX = maxWorldX + margin
+  minWorldY = minWorldY - margin
+  maxWorldY = maxWorldY + margin
+
+  local minTileX = max(1, floor(minWorldX) + 1)
+  local maxTileX = min(mapWidthTiles, ceil(maxWorldX) + 1)
+  local minTileY = max(1, floor(minWorldY) + 1)
+  local maxTileY = min(mapHeightTiles, ceil(maxWorldY) + 1)
+
+  return minTileX, minTileY, maxTileX, maxTileY
 end
 
 --------------------------------------------------------------------------------
@@ -1063,12 +1213,15 @@ function RoxyTilemap:destroy()
     end
     if layer.collisionSprites then
       for _, sprite in ipairs(layer.collisionSprites) do
-        -- Collision sprites were not tracked by scene.sprites, so display remove is enough
         sprite:remove()
       end
       layer.collisionSprites = nil
     end
+
+    -- Clear heavy references
     layer.tilemap = nil
+    layer.imageTable = nil
+    layer._imgCache = nil
   end
 
   -- Remove object sprites (tracked by scene if added that way)
@@ -1106,9 +1259,55 @@ function RoxyTilemap:destroy()
   -- Detach from scene and let it drop us from its tilemaps list
   if self.scene then
     local scene = self.scene
-    self.scene = nil -- Break the back‑pointer to avoid recursive destroy loops
+    self.scene = nil
     if scene.removeTilemap then
-      scene:removeTilemap(self) -- RoxyScene will remove us from its tilemaps list
+      scene:removeTilemap(self)
     end
   end
 end
+
+--#DEBUG START
+--------------------------------------------------------------------------------
+-- Debugging
+-- Useful for troubleshooting the projection classes
+--------------------------------------------------------------------------------
+
+-- ! Debug Layer Info
+function RoxyTilemap:debugLayerInfo(layerName)
+  local layer = self.layers and self.layers[layerName]
+  if not layer then
+    Log.debug("Layer '" .. tostring(layerName) .. "' not found")
+    return
+  end
+
+  Log.debug("**Layer: " .. layerName .. "**")
+  Log.debug("Projection: " .. tostring(self._projection))
+  Log.debug("Origin: " .. tostring(layer.originX) .. ", " .. tostring(layer.originY))
+  Log.debug("Parallax: " .. tostring(layer.parallaxx) .. ", " .. tostring(layer.parallaxy))
+  Log.debug("Parallax Origin: " .. tostring(layer.parallaxoriginx) .. ", " .. tostring(layer.parallaxoriginy))
+  Log.debug("Tile Size: " .. tostring(layer.tileWidth) .. "x" .. tostring(layer.tileHeight))
+  Log.debug("Map Size: " .. tostring(layer.mapPixelWidth) .. "x" .. tostring(layer.mapPixelHeight))
+  Log.debug("Visible: " .. tostring(layer.visible))
+  Log.debug("Has Sprite: " .. tostring(layer.sprite ~= nil))
+  Log.debug("Has Collisions: " .. tostring(layer.collisionSprites ~= nil))
+end
+
+-- ! Debug Visible Bounds
+function RoxyTilemap:debugVisibleBounds(layerName)
+  local layer = self.layers and self.layers[layerName]
+  if not layer then
+    log.debug("Layer '" .. tostring(layerName) .. "' not found")
+    return
+  end
+
+  local minWorldX, minWorldY, maxWorldX, maxWorldY = self:getScreenBoundsInWorld(layer)
+  local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layer)
+
+  log.debug("**Visible Bounds for " .. layerName .. "**")
+  log.debug("World bounds: (" .. minWorldX .. ", " .. minWorldY .. ") to (" .. maxWorldX .. ", " .. maxWorldY .. ")")
+  log.debug("Tile bounds: (" .. minTileX .. ", " .. minTileY .. ") to (" .. maxTileX .. ", " .. maxTileY .. ")")
+
+  local cameraX, cameraY = getCameraPosition()
+  log.debug("Camera: (" .. cameraX .. ", " .. cameraY .. ")")
+end
+--#DEBUG END
