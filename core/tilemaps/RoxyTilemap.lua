@@ -562,6 +562,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           indices[i] = (gid ~= 0) and (gid - firstgid + 1) or 0
         end
         tilemap:setTiles(indices, layer.width)
+        local tiles, stride = tilemap:getTiles()
 
         -- Use logical map tile size (e.g., 64x32) for iso math/culling
         -- Actual image size (e.g., 64x64) is handled via per-image offsets
@@ -572,18 +573,37 @@ function RoxyTilemap:init(jsonPath, opts, scene)
         local mapPixelWidth  = width  * tileWidth
         local mapPixelHeight = height * tileHeight
 
+        local maxImgH = 0
+        do
+          local tbl = usedTileset.imageTable
+          local n = tbl and tbl:getLength() or 0
+          for i = 1, n do
+            local img = tbl:getImage(i)
+            if img then
+              local _, h = img:getSize()
+              if h and h > maxImgH then maxImgH = h end
+            end
+          end
+        end
+
         local layerData = {
           name = layer.name,
           tilemap = tilemap,
+          tiledId = layer.id,
           anchor = opts.anchor,
-          tileWidth = tileWidth,
-          tileHeight = tileHeight,
           imageTable = usedTileset.imageTable,
           imagePath = usedTileset.imagePath,
+          tileWidth = tileWidth,
+          tileHeight = tileHeight,
+          tilesFlat  = tiles,
+          tilesStride = stride or layer.width,
+          maxImgH = maxImgH,
           zIndex = (layerOptions.zIndex or opts.zIndices[layer.name] or 0),
           visible = (layerOptions.visible ~= false),
           mapPixelWidth = mapPixelWidth,
-          mapPixelHeight = mapPixelHeight
+          mapPixelHeight = mapPixelHeight,
+          _imgCache = {},
+          _offCache = {},
         }
 
         -- Compute origin/parallax regardless of wrapping in sprites
@@ -683,7 +703,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   end
   self.sprites = newSprites
 
-  -- Process object layers (NEW SECTION)
+  -- Process object layers
   local objectSprites = {}
   for _, layer in ipairs(mapData.layers or {}) do
     if layer.type == "objectgroup" and (processAll or opts.objectLayers[layer.name]) then
@@ -965,6 +985,22 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remap)
   layer.tilemap:setImageTable(newTable)
   layer.imageTable = newTable
   layer._imgCache = {}
+  layer._offCache = {}  -- reset offset cache
+
+  -- Recompute max image height (use newTable, not usedTileset)
+  local maxImgH = 0
+  do
+    local tbl = newTable
+    local n = tbl and tbl:getLength() or 0
+    for i = 1, n do
+      local img = tbl:getImage(i)
+      if img then
+        local _, h = img:getSize()
+        if h and h > maxImgH then maxImgH = h end
+      end
+    end
+  end
+  layer.maxImgH = maxImgH
 
   -- Update asset retention (if a path swap)
   if newPath then
