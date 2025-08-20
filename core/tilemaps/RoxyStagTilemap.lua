@@ -40,6 +40,7 @@ local evictAsset        <const> = Cache.evictAsset
 local clearCache        <const> = Cache.clearCache
 
 local getCameraPosition <const> = Camera.getPosition
+local setCameraBounds   <const> = Camera.setBounds
 
 local _isoDrawOffsets   <const> = RoxyTilemap._isoDrawOffsets
 local _beginManualDraw  <const> = RoxyTilemap._beginManualDraw
@@ -49,13 +50,14 @@ local _endManualDraw    <const> = RoxyTilemap._endManualDraw
 local newTileRenderer_C <const> = RoxyTileRendererC and RoxyTileRendererC.new or nil
 
 -- Default chunk settings
-local DEFAULT_CHUNK_SIZE    <const> = 256 -- Rule of thumb: tileWidth * 4
+local DEFAULT_CHUNK_SIZE    <const> = 256 -- tileWidth * 4
 local DEFAULT_CHUNK_CACHE   <const> = 200
 local DEFAULT_CHUNK_OVERLAP <const> = 32
-local DEFAULT_TILE_WIDTH    <const> = 64 -- Default tile width
 
--- Coarse safety margin (in tiles) for dynamic fallback culling
-local TILE_MARGIN <const> = 0.5
+-- Cull margins / epsilon
+local TILE_MARGIN          <const> = 0.5 -- Coarse safety margin for dynamic draw
+local VISIBLE_MARGIN_TILES <const> = 2
+local FLOAT_EPSILON        <const> = 0.000001
 
 local PREFETCH_RINGS  <const> = 1  -- 1 ring beyond visible
 local BUILD_BUDGET    <const> = 2  -- Build at most 2 chunks per frame
@@ -121,14 +123,14 @@ end
 local function _packTilesU16(tiles)
   if not tiles or #tiles == 0 then return nil end
   local n = #tiles
-  local fmt = stringRep("<I2", n)
-  local tmp = {}
+  local format = stringRep("<I2", n)
+  local temp = {}
   for i = 1, n do
     local v = tiles[i] or 0
     if v < 0 then v = 0 elseif v > 0xFFFF then v = 0xFFFF end
-    tmp[i] = v
+    temp[i] = v
   end
-  return stringPack(fmt, tableUnpack(tmp, 1, n))
+  return stringPack(format, tableUnpack(temp, 1, n))
 end
 
 -- ! Helper: Sanitize a single tile index
@@ -161,6 +163,37 @@ local function _syncNativeTiles(layerData)
   end
 end
 
+-- ! Helper: Warm Score
+-- Warm queue prioritization helper (closest chunk to visible center)
+local function _warmScore(self, job)
+  local layerConfig = job.layerConfig
+  local size = layerConfig.size
+  local visibleX, visibleY, visibleWidth, visibleHeight = _visibleLayerRect(self, layerConfig.layer)
+  local minX, maxX, minY, maxY = _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
+  local centerX = (minX + maxX) * 0.5
+  local centerY = (minY + maxY) * 0.5
+  local dx = abs(job.chunkX - centerX)
+  local dy = abs(job.chunkY - centerY)
+  return dx + dy -- Manhattan distance is cheap and good enough
+end
+
+-- ! Helper: Dequeue Best Warm Job
+local function _dequeueBestWarmJob(self)
+  local queue = self._warmQueue
+  local bestIndex, bestScore
+  for idx = 1, #queue do
+    local score = _warmScore(self, queue[idx])
+    if not bestScore or score < bestScore then
+      bestScore, bestIndex = score, idx
+    end
+  end
+  if not bestIndex then return nil end
+  local job = queue[bestIndex]
+  tableRemove(queue, bestIndex)
+  self._warmSet[job.key] = nil
+  return job
+end
+
 --------------------------------------------------------------------------------
 -- Class Definition / Initialize
 --------------------------------------------------------------------------------
@@ -172,6 +205,46 @@ function RoxyStagTilemap:init(jsonPath, opts, scene)
   opts.wrapInSprites = false
   opts.anchor = "topLeft"
   RoxyStagTilemap.super.init(self, jsonPath, opts, scene)
+
+  -- Override world size for staggered-y projection
+  local mapWidthTiles   = self.mapWidth  or 0
+  local mapHeightTiles  = self.mapHeight or 0
+  local tileWidth       = self.mapTileWidth or 0
+  local tileHeight      = self.mapTileHeight or 0
+
+  local halfWidthPx   = tileWidth * 0.5
+  local halfHeightPx  = tileHeight * 0.5
+
+  -- Horizontal span: columns plus stagger overhang
+  self.worldWidth = mapWidthTiles * tileWidth + halfWidthPx
+
+  -- Vertical span: rows spaced by halfHeight
+  local worldHeightBase = mapHeightTiles * halfHeightPx
+
+  -- Adjust for any tall tiles (maxImageHeight across layers)
+  local maxOverdrawPx = 0
+  for _, layer in pairs(self.layers or {}) do
+    if layer.tilemap then
+      local maxImageHeight = layer.maxImageHeight or 0
+      if maxImageHeight > tileHeight then
+        local over = max(0, (maxImageHeight - tileHeight) * 0.5)
+        if over > maxOverdrawPx then maxOverdrawPx = over end
+      end
+    end
+  end
+  self.worldHeight = worldHeightBase + maxOverdrawPx
+
+  -- Refresh camera bounds if requested
+  if opts and opts.cameraBounds then
+    local x2 = max(0, self.worldWidth - DISPLAY_WIDTH)
+    local y2 = max(0, self.worldHeight - DISPLAY_HEIGHT)
+
+    if type(self.setCameraBounds) == "function" then
+      pcall(function() self:setCameraBounds(0, 0, x2, y2) end)
+    elseif Camera and type(setCameraBounds) == "function" then
+      pcall(function() setCameraBounds({ x1 = 0, y1 = 0, x2 = x2, y2 = y2 }) end)
+    end
+  end
 
   self._projection = "staggered-y"
   self.staggerAxis = self.staggerAxis or "y"
@@ -185,7 +258,6 @@ function RoxyStagTilemap:init(jsonPath, opts, scene)
   self._warmSet   = {}  -- Tracks keys already queued
 
   self._didPrimeVisible = false -- One-time prime flag
-
   self._frameDirty = true -- Assume dirty until first frame settles
   self._lastCameraX, self._lastCameraY = nil, nil -- Camera stamp
 
@@ -203,9 +275,9 @@ function RoxyStagTilemap:init(jsonPath, opts, scene)
         -- Sanitize tiles once on load so the native blob never sees out-of-range values
         _sanitizeTilesInPlace(layerData.tilesFlat, layerData.imageCount)
 
-        local isIsometric              = 0
-        local staggerIndexOdd          = (self.staggerIndex == "odd") and 1 or 0
-        local staggerDirectionRight    = (self.staggerDirection == "right") and 1 or 0
+        local isIsometric = 0
+        local staggerIndexOdd = (self.staggerIndex == "odd") and 1 or 0
+        local staggerDirectionRight = (self.staggerDirection == "right") and 1 or 0
 
         --#DEBUG START
         if (layerData.tileWidth or 0) <= 0 or (layerData.tileHeight or 0) <= 0
@@ -220,10 +292,10 @@ function RoxyStagTilemap:init(jsonPath, opts, scene)
           staggerDirectionRight,
           layerData.mapWidth,       -- Tiles
           layerData.mapHeight,      -- Tiles
-          layerData.tileWidth,      -- Pixels
-          layerData.tileHeight,     -- Pixels
-          layerData.halfWidth,      -- Pixels
-          layerData.halfHeight,     -- Pixels
+          layerData.tileWidth,      -- px
+          layerData.tileHeight,     -- px
+          layerData.halfWidth,      -- px
+          layerData.halfHeight,     -- px
           layerData.maxImageHeight, -- Tall art overdraw
           layerData.imageTable,     -- LCDBitmapTable
           layerData.imageCount,     -- Frames in table
@@ -272,6 +344,7 @@ function RoxyStagTilemap:_initializeStaticLayers(opts)
         size      = max(1, layerOpts.chunkSizePx or DEFAULT_CHUNK_SIZE),
         overlap   = overlap,
         keyPrefix = "chunk:" .. (self._mapCacheId or "map") .. ":" .. tostring(layer.tiledId or layerName) .. ":",
+        _dirty    = true, -- Per-layer dirty bit
       }
     end
   end
@@ -281,28 +354,25 @@ end
 -- Build currently visible chunks once to avoid first-frame misses
 function RoxyStagTilemap:_primeVisibleChunks()
   if self._didPrimeVisible then return end
-
   for _, layerConfig in pairs(self._staticChunkLayers) do
     local layer = layerConfig.layer
     local size, overlap = layerConfig.size, layerConfig.overlap
 
-    local vx, vy, vw, vh = _visibleLayerRect(self, layer)
-    vx -= overlap; vy -= overlap; vw += 2 * overlap; vh += 2 * overlap
+    local visibleX, visibleY, visibleWidth, visibleHeight = _visibleLayerRect(self, layer)
+    visibleX -= overlap; visibleY -= overlap; visibleWidth += 2 * overlap; visibleHeight += 2 * overlap
 
-    local minChunkX, maxChunkX, minChunkY, maxChunkY = _chunkIndicesForRect(vx, vy, vw, vh, size)
-
-    for cy = minChunkY, maxChunkY do
-      for cx = minChunkX, maxChunkX do
-        local key = layerConfig.keyPrefix .. cx .. ":" .. cy
+    local minX, maxX, minY, maxY = _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
+    for chunkY = minY, maxY do
+      for chunkX = minX, maxX do
+        local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
         if not getIsAssetCached(self._globalChunkBucket, key) then
-          local img = self:_buildChunk(layerConfig, cx, cy)
-          if img then putAsset(self._globalChunkBucket, key, img) end
+          self:_enqueueWarm(layerConfig, chunkX, chunkY)
         end
       end
     end
   end
-
   self._didPrimeVisible = true
+  self._frameDirty = true
 end
 
 -- ! Rebuild Ordered Layers
@@ -321,27 +391,12 @@ end
 
 -- ! Preload Layer Caches
 function RoxyStagTilemap:_preloadLayerCaches(layerData)
-  if not layerData.imageTable or not layerData.tileWidth or not layerData.tileHeight then return end
-
-  local n = layerData.imageCount
-  layerData._imageCache = {}
-  layerData._offsetCache = {}
-
-  local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
-
-  for i = 1, n do
-    local img = layerData.imageTable:getImage(i)
-    if img then
-      layerData._imageCache[i] = img
-      local offsetX, offsetY = _isoDrawOffsets(tileWidth, tileHeight, img)
-      layerData._offsetCache[i] = offsetX
-      layerData._offsetCache[i + 0.5] = offsetY
-    end
-  end
+  layerData._imageCache  = layerData._imageCache  or {}
+  layerData._offsetCache = layerData._offsetCache or {}
 end
 
 --
--- Chunk building & drawing
+-- Chunk building & warming
 --
 
 -- ! Enqueue Warm
@@ -362,8 +417,8 @@ end
 function RoxyStagTilemap:_warmSomeChunks()
   local built = 0
   while built < BUILD_BUDGET and #self._warmQueue > 0 do
-    local job = tableRemove(self._warmQueue)
-    self._warmSet[job.key] = nil
+    local job = _dequeueBestWarmJob(self) -- Pick closest
+    if not job then break end
     if not getIsAssetCached(self._globalChunkBucket, job.key) then
       local img = self:_buildChunk(job.layerConfig, job.chunkX, job.chunkY)
       if img then
@@ -389,6 +444,11 @@ function RoxyStagTilemap:_buildChunk(layerConfig, chunkX, chunkY)
   local size, overlap = layerConfig.size, layerConfig.overlap
   local width, height = size + 2 * overlap, size + 2 * overlap
   local img = newImage(width, height)
+  if not img then
+    -- Low-memory guard
+    Log.warn("[RoxyStagTilemap] Failed to allocate chunk image (%dx%d)", width, height)
+    return nil
+  end
 
   local pixelX = chunkX * size - overlap
   local pixelY = chunkY * size - overlap
@@ -459,7 +519,7 @@ function RoxyStagTilemap:_renderLayerToBuffer(layerData, targetImage, offsetX, o
   local function rowShiftX(row0) return (row0 % 2 == 0) and 0 or halfWidth end
 
   local maxImageHeight = layerData.maxImageHeight or 0
-  local overdrawRows = ceil(max(0, maxImageHeight - tileHeight) / max(1, halfHeight)) + 1
+  local overdrawRows = ceil(max(0, maxImageHeight - tileHeight) / max(1, halfHeight)) + 1 -- Safety +1
 
   local minRow0 = floor((-offsetY - maxImageHeight) / halfHeight) - 1
   local maxRow0 = ceil ((bufferHeight - offsetY) / halfHeight) + 1
@@ -467,7 +527,7 @@ function RoxyStagTilemap:_renderLayerToBuffer(layerData, targetImage, offsetX, o
   maxRow0 = min(mapHeight - 1, maxRow0 + overdrawRows)
 
   local tiles  = layerData.tilesFlat
-  local stride = layerData.tilesStride or mapWidth
+  local stride = layerData.tilesStride or mapWidth  -- Restore fallback
 
   local offsetCache = layerData._offsetCache
   if not offsetCache then
@@ -519,6 +579,10 @@ function RoxyStagTilemap:_renderLayerToBuffer(layerData, targetImage, offsetX, o
   end
 end
 
+--
+-- Chunked draw (with single-pass fallback)
+--
+
 -- ! Draw Static Layer Chunked
 -- Render a chunked layer using prebuilt chunk images (row-clipped fallback)
 function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
@@ -528,40 +592,52 @@ function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
   local layer         = layerConfig.layer
   local size, overlap = layerConfig.size, layerConfig.overlap
 
+  -- Visible rect in layer coords, padded by overlap.
   local visibleX, visibleY, visibleWidth, visibleHeight = _visibleLayerRect(self, layer)
   visibleX -= overlap; visibleY -= overlap
-  visibleWidth  += 2 * overlap; visibleHeight += 2 * overlap
+  visibleWidth += 2 * overlap; visibleHeight += 2 * overlap
 
-  local minChunkX, maxChunkX, minChunkY, maxChunkY = _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
+  local minX, maxX, minY, maxY = _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
   local screenX, screenY = self:worldToScreen(0, 0, layer)
 
-  for chunkY = minChunkY, maxChunkY do
+  -- First pass — scan for any missing chunks and enqueue builds.
+  local anyMissing = false
+  local toDraw = {} -- {img, dx, dy, imageWidth, imageHeight}
+  local imageWidth, imageHeight = size + 2 * overlap, size + 2 * overlap
+
+  for chunkY = minY, maxY do
     local rowDeltaY = chunkY * size - overlap + screenY
-    for chunkX = minChunkX, maxChunkX do
+    for chunkX = minX, maxX do
       local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
-
-      local dx = chunkX * size - overlap + screenX
-      local dy = rowDeltaY
-      local imageWidth = size + 2 * overlap
-      local imageHeight = size + 2 * overlap
-
-      -- Try blitting the prebuilt chunk image
       local img = getCachedAsset(self._globalChunkBucket, key)
       if img then
-        img:draw(floor(dx), floor(dy))
-      else
-        -- Fallback: clip to chunk rect and render rows
-        local imageX, imageY = floor(dx), floor(dy)
-        local imageWidthFloored, imageHeightFloored = floor(imageWidth), floor(imageHeight)
-        if imageWidthFloored > 0 and imageHeightFloored > 0 then
-          setClipRect(imageX, imageY, imageWidthFloored, imageHeightFloored)
-            self:drawLayerRows(layerName, nil, nil, nil, nil)
-          clearClipRect()
+        local dx = chunkX * size - overlap + screenX
+        local dy = rowDeltaY
+        -- Offscreen culling
+        if dx < DISPLAY_WIDTH and dy < DISPLAY_HEIGHT and (dx + imageWidth) > 0 and (dy + imageHeight) > 0 then
+          toDraw[#toDraw + 1] = { img = img, dx = dx, dy = dy } -- ints already
         end
-        -- Queue this chunk to build for future frames
+      else
+        anyMissing = true
         self:_enqueueWarm(layerConfig, chunkX, chunkY)
       end
     end
+  end
+
+  if anyMissing then
+    -- Single-pass fallback — render the layer once (native rows or Lua), not per-miss.
+    -- Clip to screen to be safe.
+    setClipRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+      self:drawLayerRows(layerName, nil, nil, nil, nil)
+    clearClipRect()
+    return
+  end
+
+  -- All chunks available — draw them.
+  for index = 1, #toDraw do
+    local element = toDraw[index]
+    -- dx/dy are already integers; removed floor() for tiny win.
+    element.img:draw(element.dx, element.dy)
   end
 end
 
@@ -579,10 +655,9 @@ function RoxyStagTilemap:worldToScreen(worldX, worldY, layerData)
   local parallaxX, parallaxY = layerData.parallaxx or 1, layerData.parallaxy or 1
   local cameraX, cameraY = getCameraPosition()
 
-  local row0 = floor(worldY + 1e-6)
+  local row0 = floor(worldY + FLOAT_EPSILON)
   local shiftX = _rowShiftX_for_row0(self, row0, halfWidth)
 
-  -- Parallax-origin pivot to mirror sprite behavior.
   local parallaxOriginX = layerData.parallaxoriginx or 0
   local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
@@ -610,14 +685,14 @@ function RoxyStagTilemap:screenToWorld(screenX, screenY, layerData)
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
-  local dx = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
-  local dy = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
+  local deltaX = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
+  local deltaY = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
 
-  local worldY = dy / halfHeight
-  local row0 = floor(worldY + 1e-6)
+  local worldY = deltaY / halfHeight
+  local row0 = floor(worldY + FLOAT_EPSILON)
   local shiftX = _rowShiftX_for_row0(self, row0, halfWidth)
 
-  local worldX = (dx - shiftX) / tileWidth
+  local worldX = (deltaX - shiftX) / tileWidth
   return worldX, worldY
 end
 
@@ -625,37 +700,45 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
+-- ! Mark Dirty
+-- Public dirty marker for external animation/parallax/etc
+function RoxyStagTilemap:markDirty()
+  self._frameDirty = true
+end
+
 -- ! Set Tile At
 -- Override setTileAt to handle static layer updates
 function RoxyStagTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
   local layer = self.layers and self.layers[layerName]
   if not layer then return end
 
-  -- Sanitize incoming edit
+  -- CHANGE: explicit bounds check to avoid native issues
+  local mapWidth, mapHeight = layer.mapWidth or 0, layer.mapHeight or 0
+  if x < 1 or y < 1 or x > mapWidth or y > mapHeight then
+    Log.warn("[RoxyStagTilemap] setTileAt out of bounds (".. x .. ", ".. y .. ") not in [1..".. mapWidth .. ",1.." .. mapHeight .."]") --#DEBUG
+    return
+  end
+
   local cleanIndex = _sanitizeTileIndex(tileIndex, layer.imageCount)
 
-  -- Write to Tiled tilemap.
   layer.tilemap:setTileAtPosition(x, y, cleanIndex)
 
-  -- Update cached flat data used by dynamic paths
   local tiles = layer.tilesFlat
   if tiles then
     local stride = layer.tilesStride or layer.mapWidth
     if stride and stride > 0 then
-      local idx = (y - 1) * stride + x
-      if idx >= 1 and idx <= #tiles then
-        tiles[idx] = cleanIndex
+      local index = (y - 1) * stride + x
+      if index >= 1 and index <= #tiles then
+        tiles[index] = cleanIndex
       end
     end
   end
 
-  -- Mirror to native renderer for C-side fast paths
   local nativeRenderer = layer._nativeRenderer
   if nativeRenderer then
     nativeRenderer:setTileAt(x, y, cleanIndex)
   end
 
-  -- Evict overlapping chunks so they rebuild lazily
   if self._staticChunkLayers[layerName] then
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
@@ -665,6 +748,21 @@ function RoxyStagTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
     local screenX, screenY = self:worldToScreen(x - 1, y - 1, layer)
     addDirtyRect(screenX, screenY, tileWidth, tileHeight)
   end
+end
+
+-- ! Get Row From Screen
+function RoxyStagTilemap:getRowFromScreen(screenX, screenY, layerName)
+  local targetLayer = self.layers and self.layers[layerName]
+  if not targetLayer then
+    targetLayer = _findFirstAvailableLayer(self.layers)
+    if not targetLayer then return 1 end
+  end
+
+  local _, mapHeightTiles = targetLayer.tilemap:getSize()
+  local _, worldY = self:screenToWorld(screenX, screenY, targetLayer)
+  local row = floor(worldY + 1)
+  if row < 1 then row = 1 elseif row > mapHeightTiles then row = mapHeightTiles end
+  return row
 end
 
 -- ! Get Row From Screen
@@ -856,15 +954,15 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
   else
     local leftWorld, topWorld = self:screenToWorld(0, 0, layerData)
     local rightWorld, bottomWorld = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layerData)
-    local minWorldX = floor(min(leftWorld, rightWorld)) - 2
-    local maxWorldX = ceil(max(leftWorld, rightWorld)) + 2
+    local minWorldX = floor(min(leftWorld, rightWorld)) - VISIBLE_MARGIN_TILES
+    local maxWorldX = ceil (max(leftWorld, rightWorld)) + VISIBLE_MARGIN_TILES
     minX = max(1, minWorldX + 1)
     maxX = min(mapWidth, maxWorldX + 1)
   end
   if minX > maxX then _endManualDraw(restoreX, restoreY); return end
 
   local tiles = layerData.tilesFlat
-  local stride = layerData.tilesStride
+  local stride = layerData.tilesStride or mapWidth
 
   local originX, originY      = layerData.originX or 0, layerData.originY or 0
   local parallaxX, parallaxY  = layerData.parallaxx or 1, layerData.parallaxy or 1
