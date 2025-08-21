@@ -678,8 +678,17 @@ end
 
 -- ! Mark Dirty
 -- Public dirty marker for external animation/parallax/etc
-function RoxyIsoTilemap:markDirty()
+function RoxyIsoTilemap:markDirty(redrawBackground)
   self._frameDirty = true
+
+  if redrawBackground == nil then redrawBackground = true end
+  if redrawBackground then
+    if Sprite.redrawBackground then
+      Sprite.redrawBackground()
+    else
+      addDirtyRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    end
+  end
 end
 
 -- ! Set Tile At
@@ -796,7 +805,8 @@ function RoxyIsoTilemap:drawVisible()
   local cameraUnchanged = (self._lastCameraX == cameraX) and (self._lastCameraY == cameraY)
   local hasWarmWork = self:_hasWarmWork()
 
-  if cameraUnchanged and not self._frameDirty and not hasWarmWork then
+  -- Do not early-out if this call was explicitly forced by drawVisibleInRect.
+  if (not self._forceDraw) and cameraUnchanged and not self._frameDirty and not hasWarmWork then
     return -- Nothing to do this frame.
   end
 
@@ -822,7 +832,10 @@ end
 -- ! Draw Visible in Rectangle
 function RoxyIsoTilemap:drawVisibleInRect(x, y, width, height)
   setClipRect(x, y, width, height)
+    -- Force this particular draw to paint even if the camera did not move.
+    self._forceDraw = true
     self:drawVisible()
+    self._forceDraw = false
   clearClipRect()
 end
 
