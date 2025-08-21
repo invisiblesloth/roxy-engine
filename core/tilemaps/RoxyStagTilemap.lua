@@ -195,7 +195,7 @@ local function _dequeueBestWarmJob(self)
 end
 
 --------------------------------------------------------------------------------
--- Class Definition / Initialize
+-- ! Class Definition / Initialize
 --------------------------------------------------------------------------------
 
 class("RoxyStagTilemap").extends(RoxyTilemap)
@@ -259,6 +259,7 @@ function RoxyStagTilemap:init(jsonPath, opts, scene)
 
   self._didPrimeVisible = false -- One-time prime flag
   self._frameDirty = true -- Assume dirty until first frame settles
+  self._forceDrawFrames = 0 -- Track a small "force draw" window for explicit repaints
   self._lastCameraX, self._lastCameraY = nil, nil -- Camera stamp
 
   -- Map-scoped cache key namespace
@@ -859,14 +860,18 @@ function RoxyStagTilemap:drawVisible()
   local cameraUnchanged = (self._lastCameraX == cameraX) and (self._lastCameraY == cameraY)
   local hasWarmWork = self:_hasWarmWork()
 
-  -- Respect an explicit "force" from drawVisibleInRect to always paint when asked.
-  -- This prevents blank frames after transitions/wake that cleared the buffer.
-  if (not self._forceDraw) and cameraUnchanged and not self._frameDirty and not hasWarmWork then
-    return
+  -- Do not early-out if we are within a forced-draw window
+  if (self._forceDrawFrames or 0) == 0 and cameraUnchanged and not self._frameDirty and not hasWarmWork then
+    return -- Nothing to do this frame.
   end
 
   self._lastCameraX, self._lastCameraY = cameraX, cameraY
-  self._frameDirty = false
+  self._frameDirty = false -- We will render now; clear until something changes again
+
+  -- Consume one forced frame if active
+  if self._forceDrawFrames and self._forceDrawFrames > 0 then
+    self._forceDrawFrames -= 1
+  end
 
   self:_primeVisibleChunks()
 
@@ -887,11 +892,24 @@ end
 -- ! Draw Visible in Rectangle
 function RoxyStagTilemap:drawVisibleInRect(x, y, width, height)
   setClipRect(x, y, width, height)
-    -- Force this draw call to paint regardless of internal 'clean' state.
-    self._forceDraw = true
+    -- Force this paint to occur at least this frame
+    -- This does not make the renderer "always repaint"
+    -- It is one-shot unless bumped again
+    local n = (self._forceDrawFrames or 0)
+    if n < 1 then self._forceDrawFrames = 1 end
+
     self:drawVisible()
-    self._forceDraw = false
   clearClipRect()
+end
+
+-- ! Force Redraw
+-- Request forced redraws for N frames (e.g., 1–2 frames around transition end)
+function RoxyStagTilemap:forceRedraw(frames)
+  -- Keep the largest pending window; do not shrink an existing request
+  local n = max(0, frames or 1)
+  if (self._forceDrawFrames or 0) < n then
+    self._forceDrawFrames = n
+  end
 end
 
 -- ! Draw Layer Rows
