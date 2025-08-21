@@ -11,7 +11,7 @@ local Transition  <const> = r.Transition
 -- Config
 local getTransitionConfig <const> = Config.getTransitionConfig
 
--- Expose stack-op constants so children don’t need to re-require them
+-- Expose stack-op constants so children don't need to re-require them
 local STACK_OP_REPLACE <const> = Transition.STACK_OP_REPLACE
 local STACK_OP_PUSH    <const> = Transition.STACK_OP_PUSH
 local STACK_OP_POP     <const> = Transition.STACK_OP_POP

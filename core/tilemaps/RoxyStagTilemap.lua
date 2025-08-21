@@ -476,7 +476,7 @@ function RoxyStagTilemap:_enqueueRing(layerData, layerConfig)
   local minChunkX, maxChunkX, minChunkY, maxChunkY =
     _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
 
-  -- Skip if ring bounds didn’t change
+  -- Skip if ring bounds didn't change
   local last = layerConfig._lastRingBounds
   if last
     and last.minX == minChunkX and last.maxX == maxChunkX

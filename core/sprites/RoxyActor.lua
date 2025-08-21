@@ -243,7 +243,7 @@ function RoxyActor:addPhysics(body)
   -- Capture the original update method once
   local originalUpdate = self.update
 
-  -- Override only this instance’s update(dt)
+  -- Override only this instance's update(dt)
   function self:update(dt)
     dt = dt or r.deltaTime or 0
 

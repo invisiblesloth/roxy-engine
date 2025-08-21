@@ -171,7 +171,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       sprite.animation:draw(x, y, flip)
     end
   elseif type(view) == "userdata" then
-    -- If it’s an ImageTable (has drawImage), treat as a simpleAnim
+    -- If it's an ImageTable (has drawImage), treat as a simpleAnim
     if view.drawImage then
       local length = view:getLength()
       self.simpleAnim = {

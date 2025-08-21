@@ -101,7 +101,7 @@ function Transition.init()
   -- Clear out any previously loaded classes
   transitions = {}
 
-  -- Merge in user’s customTransitions if present
+  -- Merge in user's customTransitions if present
   local config          = getConfig("transitions") or EMPTY_TABLE
   local userTransitions = config.customTransitions
   local allTransitions  = DEFAULT_TRANSITIONS

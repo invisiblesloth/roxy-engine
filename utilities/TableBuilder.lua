@@ -12,7 +12,7 @@ class("TableBuilder").extends(Object)
 -- Constructor: start with one base layer (or empty table)
 -- @param base table?
 function TableBuilder:init(base)
-  -- Layers is an array of tables we’ll merge in order
+  -- Layers is an array of tables we'll merge in order
   self.layers = { base or {} }
 end
 
