@@ -175,7 +175,7 @@ local function _validateOptions(opts)
 
   -- Only create layerOptions table if it doesn't exist
   if not opts.layerOptions then
-    opts.layerOptions = EMPTY_TABLE
+    opts.layerOptions = {}
   end
 
   local layerOptions = opts.layerOptions
@@ -185,7 +185,7 @@ local function _validateOptions(opts)
     if layerConfig.emptyIDs ~= nil then
       if type(layerConfig.emptyIDs) ~= "table" then
         Log.warn("[_validateOptions] layerOptions['" .. layerName .. "'].emptyIDs must be a table") --#DEBUG
-        layerConfig.emptyIDs = EMPTY_TABLE
+        layerConfig.emptyIDs = {}
       else
         for index, identifier in ipairs(layerConfig.emptyIDs) do
           if type(identifier) ~= "number" then
@@ -198,14 +198,14 @@ local function _validateOptions(opts)
   end
 
   -- Set defaults directly on options
-  if opts.layers == nil then opts.layers = EMPTY_TABLE end
+  if opts.layers == nil then opts.layers = {} end
   if opts.wrapInSprites == nil then opts.wrapInSprites = true end
-  if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = EMPTY_TABLE end
+  if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = {} end
   if opts.cameraBounds == nil then opts.cameraBounds = false end
   if opts.anchor == nil or opts.anchor ~= "topLeft" then opts.anchor = "center" end
   if opts.collisionResponse == nil then opts.collisionResponse = "overlap" end
-  if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = EMPTY_TABLE end
-  if opts.objectLayers == nil then opts.objectLayers = EMPTY_TABLE end
+  if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = {} end
+  if opts.objectLayers == nil then opts.objectLayers = {} end
 
   -- Return the mutated options instead of a new table
   return opts
@@ -257,16 +257,10 @@ local function _createDefaultObjectSprite(object, layerOptions)
   end
 
   -- Try to load the image
-  local img = nil
-  local success, errorMsg = pcall(function()
-    img = _getImageCached(imagePath)
-  end)
-
-  --#DEBUG START
-  if not success or not img then
-    Log.warn("[_createDefaultObjectSprite] Failed to load image at: " .. tostring(imagePath))
+  local img = _getImageCached(imagePath)
+  if not img then
+    Log.warn("[_createDefaultObjectSprite] Failed to load image at: " .. tostring(imagePath)) --#DEBUG
   end
-  --#DEBUG END
 
   -- Retain image if successfully loaded
   if img then
@@ -404,7 +398,7 @@ end
 
 -- ! Helper: Create Parallax Update Function
 -- Creates an update function for parallax sprites (hoisted to avoid per-sprite function creation)
-local function _createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, roundFn, cameraGetter, anchor, mapPixelWidth, mapPixelHeight)
+local function _createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, roundFn, cameraGetter)
   return function(self)
     local cameraX, cameraY = cameraGetter()
 
@@ -451,9 +445,9 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   --#DEBUG END
 
   -- Load the map JSON
-  local mapData, error = loadJSON(jsonPath)
+  local mapData, err = loadJSON(jsonPath)
   if not mapData then
-    Log.error("[RoxyTilemap:init] " .. (error or "unknown error")) --#DEBUG
+    Log.error("[RoxyTilemap:init] " .. (err or "unknown error")) --#DEBUG
     self.layers, self.sprites, self.tilesets, self.objectLayers, self.objectSprites = {}, {}, nil, nil, {}
     self.worldWidth, self.worldHeight = 0, 0
     return
@@ -721,8 +715,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
               worldX, worldY,
               parallaxX, parallaxY,
               parallaxOriginX, parallaxOriginY,
-              roundFn, cameraGetter,
-              opts.anchor, mapPixelWidth, mapPixelHeight
+              roundFn, cameraGetter
             )
           else
             sprite:moveTo(originX, originY)
@@ -779,7 +772,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   local objectSprites = {}
   for _, layer in ipairs(mapData.layers or {}) do
     if layer.type == "objectgroup" and (processAllLayers or opts.objectLayers[layer.name]) then
-      local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or {}
+      local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or EMPTY_TABLE
 
       -- Pass newSprites to _processObjectLayer for direct insertion
       local sprites = _processObjectLayer(self, layer, opts, layerOptions, autoAdd, scene, sceneHasAdd, newSprites)
@@ -928,6 +921,10 @@ end
 function RoxyTilemap:removeObjectLayer(layerName)
   local sprites = self:getObjectSprites(layerName)
   for _, sprite in ipairs(sprites) do
+    if sprite._retainedImagePath then
+      _release(sprite._retainedImagePath)
+      sprite._retainedImagePath = nil
+    end
     if self.scene and self.scene.removeSprite then
       self.scene:removeSprite(sprite)
     else
@@ -1266,8 +1263,7 @@ function RoxyTilemap:setLayerOrigin(name, originX, originY)
         layerData.originX, layerData.originY,
         parallaxX, parallaxY,
         parallaxOriginX, parallaxOriginY,
-        round, getCameraPosition,
-        layerData.anchor, layerData.mapPixelWidth, layerData.mapPixelHeight
+        round, getCameraPosition
       )
       -- Ensure we do not double-apply draw offset
       sprite:setIgnoresDrawOffset(true)
@@ -1454,6 +1450,10 @@ function RoxyTilemap:destroy()
   -- Remove object sprites
   for _, sprites in pairs(self.objectSprites or {}) do
     for _, sprite in ipairs(sprites) do
+      if sprite._retainedImagePath then
+        _release(sprite._retainedImagePath)
+        sprite._retainedImagePath = nil
+      end
       if self.scene and self.scene.removeSprite then
         self.scene:removeSprite(sprite)
       else
