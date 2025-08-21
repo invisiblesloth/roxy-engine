@@ -175,7 +175,7 @@ local function _dequeueBestWarmJob(self)
 end
 
 --------------------------------------------------------------------------------
--- Class Definition / Initialize
+-- ! Class Definition / Initialize
 --------------------------------------------------------------------------------
 
 class("RoxyIsoTilemap").extends(RoxyTilemap)
@@ -237,6 +237,7 @@ function RoxyIsoTilemap:init(jsonPath, opts, scene)
 
   self._didPrimeVisible = false -- One-time prime flag
   self._frameDirty = true -- Assume dirty until first frame settles
+  self._forceDrawFrames = 0 -- Track a small "force draw" window for explicit repaints
   self._lastCameraX, self._lastCameraY = nil, nil -- Camera stamp
 
   -- Map-scoped cache key namespace
@@ -453,7 +454,7 @@ function RoxyIsoTilemap:_enqueueRing(layerData, layerConfig)
   local minChunkX, maxChunkX, minChunkY, maxChunkY =
     _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
 
-  -- Skip if ring bounds didn’t change
+  -- Skip if ring bounds didn't change
   local last = layerConfig._lastRingBounds
   if last
     and last.minX == minChunkX and last.maxX == maxChunkX
@@ -805,13 +806,18 @@ function RoxyIsoTilemap:drawVisible()
   local cameraUnchanged = (self._lastCameraX == cameraX) and (self._lastCameraY == cameraY)
   local hasWarmWork = self:_hasWarmWork()
 
-  -- Do not early-out if this call was explicitly forced by drawVisibleInRect.
-  if (not self._forceDraw) and cameraUnchanged and not self._frameDirty and not hasWarmWork then
+  -- Do not early-out if we are within a forced-draw window
+  if (self._forceDrawFrames or 0) == 0 and cameraUnchanged and not self._frameDirty and not hasWarmWork then
     return -- Nothing to do this frame.
   end
 
   self._lastCameraX, self._lastCameraY = cameraX, cameraY
   self._frameDirty = false -- We will render now; clear until something changes again
+
+  -- Consume one forced frame if active
+  if self._forceDrawFrames and self._forceDrawFrames > 0 then
+    self._forceDrawFrames -= 1
+  end
 
   self:_primeVisibleChunks()
 
@@ -832,11 +838,24 @@ end
 -- ! Draw Visible in Rectangle
 function RoxyIsoTilemap:drawVisibleInRect(x, y, width, height)
   setClipRect(x, y, width, height)
-    -- Force this particular draw to paint even if the camera did not move.
-    self._forceDraw = true
+    -- Force this paint to occur at least this frame
+    -- This does not make the renderer "always repaint"
+    -- It is one-shot unless bumped again
+    local n = (self._forceDrawFrames or 0)
+    if n < 1 then self._forceDrawFrames = 1 end
+
     self:drawVisible()
-    self._forceDraw = false
   clearClipRect()
+end
+
+-- ! Force Redraw
+-- Request forced redraws for N frames (e.g., 1–2 frames around transition end)
+function RoxyIsoTilemap:forceRedraw(frames)
+  -- Keep the largest pending window; do not shrink an existing request
+  local n = max(0, frames or 1)
+  if (self._forceDrawFrames or 0) < n then
+    self._forceDrawFrames = n
+  end
 end
 
 -- ! Draw Layer Rows
