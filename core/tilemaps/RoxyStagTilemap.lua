@@ -702,8 +702,17 @@ end
 
 -- ! Mark Dirty
 -- Public dirty marker for external animation/parallax/etc
-function RoxyStagTilemap:markDirty()
+function RoxyStagTilemap:markDirty(redrawBackground)
   self._frameDirty = true
+
+  if redrawBackground == nil then redrawBackground = true end
+  if redrawBackground then
+    if Sprite.redrawBackground then
+      Sprite.redrawBackground()
+    else
+      addDirtyRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    end
+  end
 end
 
 -- ! Set Tile At
@@ -850,12 +859,14 @@ function RoxyStagTilemap:drawVisible()
   local cameraUnchanged = (self._lastCameraX == cameraX) and (self._lastCameraY == cameraY)
   local hasWarmWork = self:_hasWarmWork()
 
-  if cameraUnchanged and not self._frameDirty and not hasWarmWork then
-    return -- Nothing to do this frame.
+  -- Respect an explicit "force" from drawVisibleInRect to always paint when asked.
+  -- This prevents blank frames after transitions/wake that cleared the buffer.
+  if (not self._forceDraw) and cameraUnchanged and not self._frameDirty and not hasWarmWork then
+    return
   end
 
   self._lastCameraX, self._lastCameraY = cameraX, cameraY
-  self._frameDirty = false -- We will render now; clear until something changes again
+  self._frameDirty = false
 
   self:_primeVisibleChunks()
 
@@ -876,7 +887,10 @@ end
 -- ! Draw Visible in Rectangle
 function RoxyStagTilemap:drawVisibleInRect(x, y, width, height)
   setClipRect(x, y, width, height)
+    -- Force this draw call to paint regardless of internal 'clean' state.
+    self._forceDraw = true
     self:drawVisible()
+    self._forceDraw = false
   clearClipRect()
 end
 
