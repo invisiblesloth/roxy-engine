@@ -71,7 +71,7 @@ int roxy_animation_update_l(lua_State* L) {
     accumulator = 0.0f;
     isFirstCycle = 0;
   } else {
-    // Calculate how much progress we’ve made in terms of frames.
+    // Calculate how much progress we've made in terms of frames.
     // (dt * speed) gives the time-adjusted speed,
     // Dividing by frameDuration converts that into "frame units".
     float frameDelta = (dt * speed) / frameDuration;

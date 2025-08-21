@@ -263,7 +263,7 @@ function RoxyAnimation:stepFrame(direction)
   local startFrame = currentAnimation.startFrame
   local endFrame = currentAnimation.endFrame
   -- Guard against zero-length animations
-  -- (Shouldn’t happen under normal addAnimation, but protects against division by zero)
+  -- (Shouldn't happen under normal addAnimation, but protects against division by zero)
   local range = endFrame - startFrame + 1
   if range <= 0 then return self end
 

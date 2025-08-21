@@ -8,13 +8,13 @@ local getConfig <const> = roxy.Config.get
 
 local MAX_CACHE_SIZE_DEFAULT <const> = 50
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Internal Functions
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! New Entry
 -- Creates a new cache entry for the given key and asset.
-local function newEntry(key, asset)
+local function _newEntry(key, asset)
   return {
     key = key,
     asset = asset,
@@ -25,7 +25,7 @@ end
 
 -- ! Move to Head
 -- Moves an entry to the head, marking it as most recently used.
-local function moveToHead(bucket, entry)
+local function _moveToHead(bucket, entry)
   if bucket.head == entry then return end
 
   if entry.prev then
@@ -53,7 +53,7 @@ end
 
 -- ! Add to Head
 -- Adds a new entry to the head of the linked list.
-local function addToHead(bucket, entry)
+local function _addToHead(bucket, entry)
   entry.next = bucket.head
   entry.prev = nil
   if bucket.head then
@@ -69,7 +69,7 @@ end
 
 -- ! Remove Tail
 -- Removes the least recently used entry from the tail.
-local function removeTail(bucket)
+local function _removeTail(bucket)
   local tail = bucket.tail
   if not tail then return end -- Nothing to remove
   bucket.cache[tail.key] = nil
@@ -83,9 +83,9 @@ local function removeTail(bucket)
   bucket.currentSize -= 1
 end
 
--- ----------------------------------
--- ! Bucket Constructor
--- ----------------------------------
+--------------------------------------------------------------------------------
+-- Bucket Constructor
+--------------------------------------------------------------------------------
 
 -- ! New Bucket
 -- Creates a new cache bucket with specified max size.
@@ -111,9 +111,9 @@ local function resolveBucket(firstArg, ...)
   return defaultBucket, firstArg, ...
 end
 
--- ----------------------------------
+--------------------------------------------------------------------------------
 -- Public API
--- ----------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Initialize Cache module
 function Cache.init()
@@ -146,7 +146,7 @@ function Cache.setMaxCacheSize(bucketOrSize, maybeSize)
     bucket.currentSize = 0
   else
     while bucket.currentSize > bucket.maxCacheSize do
-      removeTail(bucket)
+      _removeTail(bucket)
     end
   end
 
@@ -180,12 +180,12 @@ function Cache.cacheAsset(bucketOrKey, keyOrLoader, maybeLoader)
     return false
   end
 
-  local entry = newEntry(key, asset)
+  local entry = _newEntry(key, asset)
   bucket.cache[key] = entry
-  addToHead(bucket, entry)
+  _addToHead(bucket, entry)
 
   if bucket.currentSize > bucket.maxCacheSize then
-    removeTail(bucket)
+    _removeTail(bucket)
   end
 
   return true
@@ -205,12 +205,19 @@ function Cache.getCachedAsset(bucketOrKey, maybeKey)
 
   local entry = bucket.cache[key]
   if not entry then
-    Log.warn("[Cache.getCachedAsset] Asset with key '" .. tostring(key) .. "' not cached.") --#DEBUG
+    -- Log.debug("[Cache.getCachedAsset] Asset with key '" .. tostring(key) .. "' not cached.") --#DEBUG
     return nil
   end
 
-  moveToHead(bucket, entry)
+  _moveToHead(bucket, entry)
   return entry.asset
+end
+
+-- ! Get Is Asset Cached
+-- Checks if an asset is cached for the given key.
+function Cache.getIsAssetCached(bucketOrKey, maybeKey)
+  local bucket, key = resolveBucket(bucketOrKey, maybeKey)
+  return bucket.cache[key] ~= nil
 end
 
 -- ! Get or Load Asset
@@ -227,7 +234,7 @@ function Cache.getOrLoadAsset(bucketOrKey, keyOrLoader, maybeLoader)
 
   local entry = bucket.cache[key]
   if entry then
-    moveToHead(bucket, entry)
+    _moveToHead(bucket, entry)
     return entry.asset
   else
     if type(loaderFn) ~= "function" then
@@ -240,22 +247,47 @@ function Cache.getOrLoadAsset(bucketOrKey, keyOrLoader, maybeLoader)
       return nil
     end
 
-    local entry = newEntry(key, asset)
+    local entry = _newEntry(key, asset)
     bucket.cache[key] = entry
-    addToHead(bucket, entry)
+    _addToHead(bucket, entry)
     if bucket.currentSize > bucket.maxCacheSize then
-      removeTail(bucket)
+      _removeTail(bucket)
     end
 
     return asset
   end
 end
 
--- ! Get Is Asset Cached
--- Checks if an asset is cached for the given key.
-function Cache.getIsAssetCached(bucketOrKey, maybeKey)
-  local bucket, key = resolveBucket(bucketOrKey, maybeKey)
-  return bucket.cache[key] ~= nil
+-- ! Put Asset
+-- Inserts or replaces an asset for a key and marks it MRU.
+function Cache.putAsset(bucketOrKey, keyOrAsset, maybeAsset)
+  local bucket, key, asset = resolveBucket(bucketOrKey, keyOrAsset, maybeAsset)
+
+  --#DEBUG START
+  if (type(key) ~= "string" and type(key) ~= "number") then
+    Log.warn("[Cache.putAsset] Expected string/number for key, got " .. type(key))
+    return false
+  end
+  if asset == nil then
+    Log.warn("[Cache.putAsset] Nil asset for key '" .. tostring(key) .. "'.")
+    return false
+  end
+  --#DEBUG END
+
+  local entry = bucket.cache[key]
+  if entry then
+    -- Replace the asset and bump to MRU
+    entry.asset = asset
+    _moveToHead(bucket, entry)
+  else
+    entry = _newEntry(key, asset)
+    bucket.cache[key] = entry
+    _addToHead(bucket, entry)
+    if bucket.currentSize > bucket.maxCacheSize then
+      _removeTail(bucket)
+    end
+  end
+  return true
 end
 
 -- ! Evict Asset

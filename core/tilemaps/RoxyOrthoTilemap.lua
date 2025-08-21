@@ -6,65 +6,93 @@ local Sprite    <const> = Graphics.sprite
 
 local r       <const> = roxy
 local Camera  <const> = r.Camera
+local Cache   <const> = r.Cache
 
 local min   <const> = math.min
 local max   <const> = math.max
+local floor <const> = math.floor
+local ceil  <const> = math.ceil
 local round <const> = r.Math.round
 
 local tableInsert <const> = table.insert
 local tableSort   <const> = table.sort
 
-local getCameraPosition <const> = Camera.getPosition
+local pushContext   <const> = Graphics.pushContext
+local popContext    <const> = Graphics.popContext
+local setClipRect   <const> = Graphics.setClipRect
+local clearClipRect <const> = Graphics.clearClipRect
+local newImage      <const> = Graphics.image.new
+local clear         <const> = Graphics.clear
+
 local addDirtyRect      <const> = Sprite.addDirtyRect
+local getCameraPosition <const> = Camera.getPosition
+
+local newCacheBucket  <const> = Cache.newBucket
+local getOrLoadAsset  <const> = Cache.getOrLoadAsset
+local evictAsset      <const> = Cache.evictAsset
+local clearCache      <const> = Cache.clearCache
+
+-- Default chunk settings
+local DEFAULT_CHUNK_SIZE    <const> = 320
+local DEFAULT_CHUNK_CACHE   <const> = 200
+local DEFAULT_CHUNK_OVERLAP <const> = 32
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+
+local COLOR_CLEAR <const> = Graphics.kColorClear
 
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
 
--- ! Compute Draw Parameters
--- Compute draw parameters for orthographic projection.
--- Returns: screenX, screenY, sourceX, sourceY, sourceWidth, sourceHeight, culled
-local function _computeDrawParams(layer)
-  local cameraX, cameraY = getCameraPosition()
-  local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
-  local originX, originY = layer.originX or 0, layer.originY or 0
-  local mapPixelWidth, mapPixelHeight = layer.mapPixelWidth or 0, layer.mapPixelHeight or 0
+-- ! Helper: Visible Layer Rectangle
+-- Compute visible layer-space rectangle (pixels), factoring parallax/camera.
+local function _visibleLayerRect(self, layerData)
+  local screenX, screenY = self:worldToScreen(0, 0, layerData)
+  return floor(-screenX), floor(-screenY), DISPLAY_WIDTH, DISPLAY_HEIGHT
+end
 
-  -- Respect parallax origin
-  local parallaxOriginX = layer.parallaxoriginx or 0
-  local parallaxOriginY = layer.parallaxoriginy or 0
-  local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
-  local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+-- ! Helper: Chunk Indices For Rect
+-- Which chunk indices intersect a pixel rect?
+local function _chunkIndicesForRect(x, y, width, height, size)
+  local minChunkX = floor(x / size)
+  local maxChunkX = floor((x + width  - 1) / size)
+  local minChunkY = floor(y / size)
+  local maxChunkY = floor((y + height - 1) / size)
+  return minChunkX, maxChunkX, minChunkY, maxChunkY
+end
 
-  local screenX, screenY
-  if layer.anchor == "topLeft" then
-    -- Include pivot adjust so sprites vs direct draw match.
-    screenX = round(originX + pivotAdjustX - cameraX * parallaxX)
-    screenY = round(originY + pivotAdjustY - cameraY * parallaxY)
-  else
-    screenX = round(originX - (mapPixelWidth  * 0.5) + pivotAdjustX - cameraX * parallaxX)
-    screenY = round(originY - (mapPixelHeight * 0.5) + pivotAdjustY - cameraY * parallaxY)
+-- ! Helper: Find First Available Layer
+local function _findFirstAvailableLayer(layers)
+  for _, layerData in pairs(layers or {}) do
+    if layerData.tilemap then return layerData end
+  end
+  return nil
+end
+
+-- ! Helper: Render Layer Region To Buffer
+-- Render a rectangular region of the layer directly into the given buffer.
+-- For orthographic, we can draw the exact source rect from the tilemap.
+local function _drawLayerRegionToBuffer(layerData, destinationX, destinationY, sourceX, sourceY, width, height)
+  -- Clamp source rect to layer bounds to avoid asking tilemap for out-of-range pixels.
+  local mapPixelWidth, mapPixelHeight = layerData.mapPixelWidth or 0, layerData.mapPixelHeight or 0
+  if sourceX >= mapPixelWidth or sourceY >= mapPixelHeight then return end
+
+  if sourceX < 0 then
+    local delta = -sourceX
+    sourceX += delta; width -= delta; destinationX += delta
+  end
+  if sourceY < 0 then
+    local delta = -sourceY
+    sourceY += delta; height -= delta; destinationY += delta
   end
 
-  local sourceX, sourceY = 0, 0
-  local sourceWidth, sourceHeight = mapPixelWidth, mapPixelHeight
+  width  = min(width,  mapPixelWidth  - sourceX)
+  height = min(height, mapPixelHeight - sourceY)
+  if width <= 0 or height <= 0 then return end
 
-  if screenX < 0 then sourceX = -screenX end
-  if screenY < 0 then sourceY = -screenY end
-
-  local maxW = DISPLAY_WIDTH - max(0, screenX)
-  local maxH = DISPLAY_HEIGHT - max(0, screenY)
-  sourceWidth  = min(sourceWidth - sourceX, max(0, maxW))
-  sourceHeight = min(sourceHeight - sourceY, max(0, maxH))
-
-  if sourceWidth <= 0 or sourceHeight <= 0 then
-    return screenX, screenY, nil, true
-  end
-
-  return screenX, screenY, sourceX, sourceY, sourceWidth, sourceHeight, false
+  layerData.tilemap:drawIgnoringOffset(destinationX, destinationY, sourceX, sourceY, width, height)
 end
 
 --------------------------------------------------------------------------------
@@ -74,8 +102,128 @@ end
 class("RoxyOrthoTilemap").extends(RoxyTilemap)
 
 function RoxyOrthoTilemap:init(jsonPath, opts, scene)
+  opts = opts or {}
   RoxyOrthoTilemap.super.init(self, jsonPath, opts, scene)
   self._projection = "orthogonal"
+
+  -- Static / chunk config and ordered layers
+  self._staticChunkLayers = {}
+  self._orderedLayers = {}
+
+  -- Map-scoped cache key namespace
+  self._mapCacheId = jsonPath or tostring(self)
+
+  self:_initializeStaticLayers(opts)
+  self:_rebuildOrderedLayers()
+end
+
+--------------------------------------------------------------------------------
+-- Static Layer Configuration
+--------------------------------------------------------------------------------
+
+-- ! Utility: Initialize Static Layers
+-- Build chunk/static configuration per layer
+function RoxyOrthoTilemap:_initializeStaticLayers(opts)
+  local layerOptions = (opts and opts.layerOptions) or {}
+  local totalChunkCache = opts.totalChunkCache or DEFAULT_CHUNK_CACHE
+
+  -- One shared bucket for all chunk images on this map
+  self._globalChunkBucket = newCacheBucket(totalChunkCache)
+
+  for layerName, layerData in pairs(self.layers) do
+    local lopts = layerOptions[layerName] or {}
+    if lopts.preRenderChunked then
+      self._staticChunkLayers[layerName] = {
+        name      = layerName,
+        layer     = layerData,
+        size      = max(1, lopts.chunkSizePx or DEFAULT_CHUNK_SIZE),
+        overlap   = lopts.overlapPx  or DEFAULT_CHUNK_OVERLAP,
+        keyPrefix = "chunk:" .. (self._mapCacheId or "map") .. ":" ..
+                    tostring(layerData.tiledId or layerName) .. ":",
+      }
+    end
+  end
+end
+
+-- ! Utility: Rebuild Ordered Layers
+-- Build a stable, z-sorted draw list once (rarely changes)
+function RoxyOrthoTilemap:_rebuildOrderedLayers()
+  local items = {}
+  for name, layerData in pairs(self.layers) do
+    if layerData.tilemap and layerData.visible ~= false then
+      local renderType = self._staticChunkLayers[name] and "chunked" or "dynamic"
+      tableInsert(items, { layer = layerData, name = name, type = renderType, z = layerData.zIndex or 0 })
+    end
+  end
+  tableSort(items, function(a, b) return a.z < b.z end)
+  self._orderedLayers = items
+end
+
+--------------------------------------------------------------------------------
+-- Chunk building & drawing
+--------------------------------------------------------------------------------
+
+-- ! Utility: Get or Build Chunk
+-- Build or fetch a prerendered chunk image from the cache
+function RoxyOrthoTilemap:_getOrBuildChunk(layerCfg, chunkX, chunkY)
+  local key = layerCfg.keyPrefix .. chunkX .. ":" .. chunkY
+  return getOrLoadAsset(self._globalChunkBucket, key, function()
+    local size, overlap = layerCfg.size, layerCfg.overlap
+    local width, height = size + 2 * overlap, size + 2 * overlap
+    local img = newImage(width, height)
+
+    -- Convert chunk indices to layer pixel origin for this chunk
+    local pixelX = chunkX * size - overlap
+    local pixelY = chunkY * size - overlap
+
+    pushContext(img)
+      setClipRect(0, 0, width, height)
+      clear(COLOR_CLEAR)
+      -- Draw the corresponding source rect from the tilemap into the buffer
+      _drawLayerRegionToBuffer(layerCfg.layer, 0, 0, pixelX, pixelY, width, height)
+      clearClipRect()
+    popContext()
+
+    return img
+  end)
+end
+
+-- ! Utility: Draw Static Layer Chunked
+-- Render a chunked layer using prebuilt chunk images
+function RoxyOrthoTilemap:_drawStaticLayerChunked(layerName)
+  local cfg = self._staticChunkLayers[layerName]
+  if not cfg then return end
+
+  local layerData = cfg.layer
+  local size, overlap = cfg.size, cfg.overlap
+
+  -- Visible rect in layer coordinates (inflate by overlap)
+  local visibleX, visibleY, visibleWidth, visibleHeight = _visibleLayerRect(self, layerData)
+  visibleX -= overlap; visibleY -= overlap
+  visibleWidth += 2 * overlap; visibleHeight += 2 * overlap
+
+  local minChunkX, maxChunkX, minChunkY, maxChunkY =
+    _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
+
+  -- Top-left screen position of layer pixel (0,0)
+  local screenX, screenY = self:worldToScreen(0, 0, layerData)
+
+  for chunkY = minChunkY, maxChunkY do
+    local rowDestY = chunkY * size - overlap + screenY
+    for chunkX = minChunkX, maxChunkX do
+      local img = self:_getOrBuildChunk(cfg, chunkX, chunkY)
+      if img then
+        local destX = chunkX * size - overlap + screenX
+        local destY = rowDestY
+
+        local imageWidth, imageHeight = img:getSize()
+        if not (destX >= DISPLAY_WIDTH or destY >= DISPLAY_HEIGHT
+             or destX + imageWidth <= 0 or destY + imageHeight <= 0) then
+          img:draw(destX, destY)
+        end
+      end
+    end
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -83,72 +231,119 @@ end
 --------------------------------------------------------------------------------
 
 -- ! World to Screen (orthogonal)
-function RoxyOrthoTilemap:worldToScreen(worldX, worldY, layer)
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-  local originX, originY = layer.originX or 0, layer.originY or 0
-  local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
+function RoxyOrthoTilemap:worldToScreen(worldX, worldY, layerData)
+  local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
+  local originX, originY = layerData.originX or 0, layerData.originY or 0
+  local parallaxX, parallaxY = layerData.parallaxx or 1, layerData.parallaxy or 1
   local cameraX, cameraY = getCameraPosition()
 
   -- Parallax-origin pivot to match sprite behavior (like other tilemap classes)
-  local parallaxOriginX = layer.parallaxoriginx or 0
-  local parallaxOriginY = layer.parallaxoriginy or 0
+  local parallaxOriginX = layerData.parallaxoriginx or 0
+  local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
   local orthoX = originX + worldX * tileWidth
   local orthoY = originY + worldY * tileHeight
 
-  -- Include pivotAdjust* before subtracting camera (consistent with other classes)
   return round(orthoX + pivotAdjustX - cameraX * parallaxX),
          round(orthoY + pivotAdjustY - cameraY * parallaxY)
 end
 
 -- ! Screen to World (orthogonal)
-function RoxyOrthoTilemap:screenToWorld(screenX, screenY, layer)
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-  local originX, originY = layer.originX or 0, layer.originY or 0
-  local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
+function RoxyOrthoTilemap:screenToWorld(screenX, screenY, layerData)
+  local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
+  local originX, originY = layerData.originX or 0, layerData.originY or 0
+  local parallaxX, parallaxY = layerData.parallaxx or 1, layerData.parallaxy or 1
   local cameraX, cameraY = getCameraPosition()
 
-  -- Parallax-origin pivot to match sprite behavior
-  local parallaxOriginX = layer.parallaxoriginx or 0
-  local parallaxOriginY = layer.parallaxoriginy or 0
+  local parallaxOriginX = layerData.parallaxoriginx or 0
+  local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
-  -- Undo camera and pivot before converting to world
-  local dx = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
-  local dy = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
+  local deltaX = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX) -- (CHANGE) Naming for clarity
+  local deltaY = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
 
-  local worldX = dx / tileWidth
-  local worldY = dy / tileHeight
+  local worldX = deltaX / tileWidth
+  local worldY = deltaY / tileHeight
   return worldX, worldY
 end
 
 --------------------------------------------------------------------------------
--- Public API preserved from original class
+-- Public API
 --------------------------------------------------------------------------------
 
 -- ! Set Tile At
 -- Sets the tile at the given tile coordinates (x, y) on the specified layer.
--- Note: Coordinates are in tile units, not pixels.
-function RoxyOrthoTilemap:setTileAt(name, x, y, tileIndex, updateSprite)
-  local layer = self.layers and self.layers[name]
-  if not layer then return end
+function RoxyOrthoTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
+  local layerData = self.layers and self.layers[layerName]
+  if not layerData then return end
 
-  layer.tilemap:setTileAtPosition(x, y, tileIndex)
+  layerData.tilemap:setTileAtPosition(x, y, tileIndex)
+
+  -- Keep tilesFlat in sync so dynamic path sees edits immediately
+  local tiles = layerData.tilesFlat
+  if tiles then
+    local stride = layerData.tilesStride or layerData.mapWidth
+    if stride and stride > 0 then
+      local idx = (y - 1) * stride + x
+      if idx >= 1 and idx <= #tiles then
+        tiles[idx] = tileIndex
+      end
+    end
+  end
+
+  -- If chunked, evict overlapping chunks so they rebuild lazily
+  if self._staticChunkLayers[layerName] then
+    self:markTilesDirty(layerName, x, y, 1, 1)
+  end
 
   if updateSprite then
-    local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
-    -- Use consistent world-to-screen conversion
-    local screenX, screenY = self:worldToScreen(x - 1, y - 1, layer)
+    local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
+    local screenX, screenY = self:worldToScreen(x - 1, y - 1, layerData)
+    addDirtyRect(screenX, screenY, tileWidth, tileHeight)
+  end
+end
 
-    -- Support both sprite-based and direct drawing approaches
-    if layer.sprite then
-      addDirtyRect(screenX, screenY, tileWidth, tileHeight)
-    else
-      -- For direct drawing, mark the area as needing refresh
-      addDirtyRect(screenX, screenY, tileWidth, tileHeight)
+-- ! Get Row From Screen
+function RoxyOrthoTilemap:getRowFromScreen(screenX, screenY, layerName)
+  local targetLayer = self.layers and self.layers[layerName]
+  if not targetLayer then
+    targetLayer = _findFirstAvailableLayer(self.layers)
+    if not targetLayer then return 1 end
+  end
+
+  local _, mapHeightTiles = targetLayer.tilemap:getSize()
+  local _, worldY = self:screenToWorld(screenX, screenY, targetLayer)
+  local row = floor(worldY + 1)
+  if row < 1 then row = 1 elseif row > mapHeightTiles then row = mapHeightTiles end
+  return row
+end
+
+-- ! Resort Layers
+function RoxyOrthoTilemap:resortLayers()
+  self:_rebuildOrderedLayers()
+end
+
+-- ! Mark Tiles Dirty
+-- Evict any chunks overlapped by the edited tile region
+function RoxyOrthoTilemap:markTilesDirty(layerName, tileX, tileY, tileCountWidth, tileCountHeight)
+  local config = self._staticChunkLayers[layerName]
+  if not config then return end
+
+  local tileWidth, tileHeight = config.layer.tileWidth, config.layer.tileHeight
+  local pixelX = (tileX - 1) * tileWidth
+  local pixelY = (tileY - 1) * tileHeight
+  local pixelWidth = (tileCountWidth  or 1) * tileWidth
+  local pixelHeight = (tileCountHeight or 1) * tileHeight
+
+  local minChunkX, maxChunkX, minChunkY, maxChunkY =
+    _chunkIndicesForRect(pixelX, pixelY, pixelWidth, pixelHeight, config.size)
+
+  for chunkY = minChunkY, maxChunkY do
+    for chunkX = minChunkX, maxChunkX do
+      evictAsset(self._globalChunkBucket, config.keyPrefix .. chunkX .. ":" .. chunkY)
     end
   end
 end
@@ -159,113 +354,100 @@ end
 
 -- ! Draw
 -- Draw a single tile layer directly (no sprite required)
-function RoxyOrthoTilemap:draw(name)
-  local layer = self.layers and self.layers[name]
-  if not layer or not layer.tilemap or layer.visible == false then return end
-
-  local screenX, screenY, sourceX, sourceY, sourceWidth, sourceHeight, culled = _computeDrawParams(layer)
-  if culled then return end
-
-  -- Use drawIgnoringOffset because we already applied camera/offset logic
-  local drawIgnoring = layer.tilemap.drawIgnoringOffset
-  if sourceX then
-    drawIgnoring(layer.tilemap, screenX, screenY, sourceX, sourceY, sourceWidth, sourceHeight)
-  else
-    drawIgnoring(layer.tilemap, screenX, screenY)
+function RoxyOrthoTilemap:draw(layerName)
+  if self._staticChunkLayers[layerName] then
+    self:_drawStaticLayerChunked(layerName); return
   end
+
+  local layerData = self.layers and self.layers[layerName]
+  if not layerData or not layerData.tilemap or layerData.visible == false then return end
+
+  -- Use base helper so tall tiles near edges are included
+  local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
+  self:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
 end
 
 -- ! Draw Visible
 -- Draw all visible tile layers by zIndex (ascending)
 function RoxyOrthoTilemap:drawVisible()
-  if not self.layers then return end
-
-  -- Collect visible layers
-  local list = {}
-  for name, layer in pairs(self.layers) do
-    if layer.tilemap and layer.visible ~= false then
-      tableInsert(list, layer)
-    end
-  end
-
-  -- Sort by zIndex to match sprite render order
-  tableSort(list, function(a, b)
-    return (a.zIndex or 0) < (b.zIndex or 0)
-  end)
-
-  -- Draw in order
-  for i = 1, #list do
-    local layer = list[i]
-    local screenX, screenY, sourceX, sourceY, sourceWidth, sourceHeight, culled = _computeDrawParams(layer)
-    if not culled then
-      local drawIgnoring = layer.tilemap.drawIgnoringOffset
-      if sourceX then
-        drawIgnoring(layer.tilemap, screenX, screenY, sourceX, sourceY, sourceWidth, sourceHeight)
-      else
-        drawIgnoring(layer.tilemap, screenX, screenY)
+  local ordered = self._orderedLayers
+  for i = 1, #ordered do
+    local item = ordered[i]
+    if item.type == "chunked" then
+      self:_drawStaticLayerChunked(item.name)
+    else
+      local layerData = item.layer
+      if layerData.tilemap and layerData.visible ~= false then
+        local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
+        self:drawLayerRegion(item.name, minTileX, maxTileX, minTileY, maxTileY)
       end
     end
   end
 end
 
--- ! Draw Layer Region (for consistency with other tilemap classes)
-function RoxyOrthoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
-  local layer = self.layers and self.layers[layerName]
-  if not layer or not layer.tilemap or layer.visible == false then return end
+-- ! Draw Visible In Rectangle
+function RoxyOrthoTilemap:drawVisibleInRect(x, y, width, height)
+  setClipRect(x, y, width, height)
+    self:drawVisible()
+  clearClipRect()
+end
 
-  local mapWidthTiles, mapHeightTiles = layer.tilemap:getSize()
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
+-- ! Draw Layer Region
+-- Region-based renderer that batches via tilemap:drawIgnoringOffset.
+function RoxyOrthoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
+  local layerData = self.layers and self.layers[layerName]
+  if not layerData or not layerData.tilemap or layerData.visible == false then return end
+
+  local mapWidthTiles, mapHeightTiles = layerData.tilemap:getSize()
+  local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
 
   -- Clamp bounds
   minTileX = max(1, minTileX)
   maxTileX = min(mapWidthTiles, maxTileX)
   minTileY = max(1, minTileY)
   maxTileY = min(mapHeightTiles, maxTileY)
-
   if minTileX > maxTileX or minTileY > maxTileY then return end
 
-  -- Calculate screen rectangle for the tile region
-  local topLeftX, topLeftY = self:worldToScreen(minTileX - 1, minTileY - 1, layer)
+  -- Convert tiles to pixels
+  local sourceX = (minTileX - 1) * tileWidth
+  local sourceY = (minTileY - 1) * tileHeight
   local regionWidth = (maxTileX - minTileX + 1) * tileWidth
   local regionHeight = (maxTileY - minTileY + 1) * tileHeight
 
-  -- Convert to source rectangle (pixels within the tilemap image)
-  local sourceX = (minTileX - 1) * tileWidth
-  local sourceY = (minTileY - 1) * tileHeight
+  -- Screen position for top-left of region
+  local screenX, screenY = self:worldToScreen(minTileX - 1, minTileY - 1, layerData)
 
-  -- Clamp to screen bounds
-  local screenX, screenY = max(0, topLeftX), max(0, topLeftY)
-  local sourceOffsetX = screenX - topLeftX
-  local sourceOffsetY = screenY - topLeftY
+  -- Clip against the display to avoid overdraw
+  local clippedScreenX = max(0, screenX)
+  local clippedScreenY = max(0, screenY)
+  local sourceOffsetX = clippedScreenX - screenX
+  local sourceOffsetY = clippedScreenY - screenY
 
-  local visibleWidth = min(regionWidth - sourceOffsetX, DISPLAY_WIDTH - screenX)
-  local visibleHeight = min(regionHeight - sourceOffsetY, DISPLAY_HEIGHT - screenY)
+  local visibleWidth = min(regionWidth - sourceOffsetX, DISPLAY_WIDTH - clippedScreenX)
+  local visibleHeight = min(regionHeight - sourceOffsetY, DISPLAY_HEIGHT - clippedScreenY)
+  if visibleWidth <= 0 or visibleHeight <= 0 then return end
 
-  if visibleWidth > 0 and visibleHeight > 0 then
-    layer.tilemap:drawIgnoringOffset(
-      screenX, screenY,
-      sourceX + sourceOffsetX, sourceY + sourceOffsetY,
-      visibleWidth, visibleHeight
-    )
-  end
+  layerData.tilemap:drawIgnoringOffset(
+    clippedScreenX, clippedScreenY,
+    sourceX + sourceOffsetX, sourceY + sourceOffsetY,
+    visibleWidth, visibleHeight
+  )
 end
 
--- ! Draw with Region-Based Culling (optional alternative to current draw method)
-function RoxyOrthoTilemap:drawWithTileCulling(name)
-  local layer = self.layers and self.layers[name]
-  if not layer or not layer.tilemap or layer.visible == false then return end
+--------------------------------------------------------------------------------
+-- Cleanup
+--------------------------------------------------------------------------------
 
-  local mapWidthTiles, mapHeightTiles = layer.tilemap:getSize()
-  local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
+-- ! Destroy
+-- Clean up static layer resources and defer remainder to base class.
+function RoxyOrthoTilemap:destroy()
+  -- Clear pre-rendered chunk cache for this map
+  if self._globalChunkBucket then
+    clearCache(self._globalChunkBucket)
+    self._globalChunkBucket = nil
+  end
+  self._staticChunkLayers = {}
+  self._orderedLayers = {}
 
-  -- Calculate visible tile bounds
-  local topLeftX, topLeftY = self:screenToWorld(0, 0, layer)
-  local bottomRightX, bottomRightY = self:screenToWorld(DISPLAY_WIDTH, DISPLAY_HEIGHT, layer)
-
-  local minTileX = max(1, math.floor(topLeftX) + 1)
-  local maxTileX = min(mapWidthTiles, math.ceil(bottomRightX) + 1)
-  local minTileY = max(1, math.floor(topLeftY) + 1)
-  local maxTileY = min(mapHeightTiles, math.ceil(bottomRightY) + 1)
-
-  self:drawLayerRegion(name, minTileX, maxTileX, minTileY, maxTileY)
+  RoxyOrthoTilemap.super.destroy(self)
 end

@@ -7,6 +7,7 @@
 #include "core/sequences/roxy_sequence.h"
 #include "core/animations/roxy_animation.h"
 #include "core/sprites/roxy_particles.h"
+#include "core/tilemaps/roxy_tileRenderer.h"
 
 static PlaydateAPI* pd = NULL;
 static uint32_t previousTime = 0;
@@ -217,6 +218,9 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
 
     // ! Register RoxyParticlesC Class
     registerRoxyParticlesC(pd);
+
+    // ! Register RoxyTileRendererC Class
+    registerRoxyTileRendererC(pd);
 
     return 0;
 }

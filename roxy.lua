@@ -254,13 +254,14 @@ function pd.update()
   handleInput()
   updateSequences(dt)
 
-  -- Cache list once and length once.
+  -- Active scenes
   local updateList = getUpdateList()
   local updateCount = #updateList
   for i = 1, updateCount do
     updateList[i]:update(dt)
   end
 
+  -- Background scenes
   local bgList = getBackgroundList()
   local bgCount = #bgList
   for i = 1, bgCount do
@@ -278,6 +279,7 @@ function pd.update()
 
   spriteUpdate()
 
+  -- Scene draw methods (run after sprites)
   local list = getDrawList()
   local drawCount = #list
   for i = 1, drawCount do

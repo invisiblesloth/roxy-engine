@@ -60,7 +60,7 @@ Camera._deadZoneHeight  = 0     -- Dead zone height (pixels, 0 = disabled)
 Camera.friction         = FRICTION_DEFAULT
 
 -- Indicates whether the camera needs an update this frame.
--- Remains true while there’s an active target, any velocity, or an ongoing shake.
+-- Remains true while there's an active target, any velocity, or an ongoing shake.
 Camera._isActive = true -- Ensure initial update
 
 -- Default to static mode (must be set after all Camera functions exist!)

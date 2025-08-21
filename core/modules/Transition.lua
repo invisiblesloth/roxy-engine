@@ -22,15 +22,16 @@ local mergeImmutable <const> = r.Table.mergeImmutable
 local getConfig           <const> = Config.get
 local getTransitionConfig <const> = Config.getTransitionConfig
 
-local getDrawOffset <const> = Graphics.getDrawOffset
-local setDrawOffset <const> = Graphics.setDrawOffset
-local pushContext   <const> = Graphics.pushContext
-local popContext    <const> = Graphics.popContext
-local setColor      <const> = Graphics.setColor
-local fillRect      <const> = Graphics.fillRect
-local newImage      <const> = Graphics.image.new
-local getDrawMode   <const> = Graphics.getImageDrawMode
-local setDrawMode   <const> = Graphics.setImageDrawMode
+local getDrawOffset     <const> = Graphics.getDrawOffset
+local setDrawOffset     <const> = Graphics.setDrawOffset
+local pushContext       <const> = Graphics.pushContext
+local popContext        <const> = Graphics.popContext
+local setColor          <const> = Graphics.setColor
+local fillRect          <const> = Graphics.fillRect
+local newImage          <const> = Graphics.image.new
+local getDrawMode       <const> = Graphics.getImageDrawMode
+local setDrawMode       <const> = Graphics.setImageDrawMode
+local redrawBackground  <const> = Graphics.sprite.redrawBackground
 
 local EMPTY_TABLE   <const> = {}
 
@@ -66,9 +67,30 @@ Transition.STACK_OP_POP       = STACK_OP_POP
 -- Local
 local transitions = {}
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+-- ! Helper: Foce Scene Tilemaps Redraw
+-- Nudge all tilemaps in a scene to repaint for a few frames
+local function _forceSceneTilemapsRedraw(scene, frames)
+  if not scene then return end
+  local n = frames or 2
+
+  -- Iterate table-based tilemaps if provided
+  local tilemaps = scene.tilemaps
+  if type(tilemaps) == "table" then
+    for _, tilemap in pairs(tilemaps) do
+      if tilemap and tilemap.forceRedraw then
+        tilemap:forceRedraw(n)
+      end
+    end
+  end
+end
+
+--------------------------------------------------------------------------------
 -- ! Initialize Transition module
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 function Transition.init()
   -- Reset transient state
@@ -79,7 +101,7 @@ function Transition.init()
   -- Clear out any previously loaded classes
   transitions = {}
 
-  -- Merge in user’s customTransitions if present
+  -- Merge in user's customTransitions if present
   local config          = getConfig("transitions") or EMPTY_TABLE
   local userTransitions = config.customTransitions
   local allTransitions  = DEFAULT_TRANSITIONS
@@ -95,9 +117,9 @@ function Transition.init()
   Transition.reloadTransitionsWithNewConfig()
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Scene Management
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Load Transitions
 -- Loads a table of transition classes into the transition module.
@@ -214,11 +236,18 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   local transitionInstance = transitionClass(transitionOpts)
   Transition.currentTransition = transitionInstance
   transitionInstance:execute(newScene, scene)
+
+  redrawBackground()
+
+  -- Force 2 frames of redraw on any tilemaps present in the target scene
+  -- For replace/push this is 'newScene'; for pop we fall back to currentScene.
+  local targetScene = newScene or Scene.currentScene
+  _forceSceneTilemapsRedraw(targetScene, 2)
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Rendering
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Prepare Transition Screenshot
 -- Prepares a screenshot for transitions if needed.

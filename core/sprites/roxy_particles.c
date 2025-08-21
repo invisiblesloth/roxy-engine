@@ -259,7 +259,7 @@ int roxy_particles_setImageTable_l(lua_State* L)
         // frameMode (already validated in Lua)
         ps->frameMode   = (FrameMode)pd->lua->getArgInt(3);
 
-        // staticFrame: convert from Lua’s 1-based to C’s 0-based
+        // staticFrame: convert from Lua's 1-based to C's 0-based
         ps->staticFrame = pd->lua->getArgInt(4) - 1;
 
         // loop flag
@@ -609,7 +609,7 @@ int roxy_particles_draw_l(lua_State* L)
                 pd->graphics->fillEllipse(x - size/2, y - size/2, size, size, 0, 360, (LCDColor)fillColorPtr);
                 break;
             case 1: // Outlined circle
-                // outlines don’t support patterns—always solid
+                // outlines don't support patterns—always solid
                 pd->graphics->drawEllipse(x - size/2, y - size/2, size, size, 1, 0, 360, (LCDColor)(intptr_t)color);
                 break;
             case 2: // Filled square

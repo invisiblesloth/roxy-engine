@@ -64,7 +64,7 @@ local function getPlayer(name)
   end
 
   -- If we get here, either the player is missing or its cache record
-  -- was evicted by the LRU. Clear the stale pointer so we don’t use it.
+  -- was evicted by the LRU. Clear the stale pointer so we don't use it.
   players[name] = nil
 
   -- Slow path: load (or re‑load) from disk
