@@ -30,8 +30,12 @@ typedef struct {
     int      tilesCountBytes; // Original byte size, for sanity/debug
 
     // Lifetime guard
-    int alive;
+    uint32_t magic; // Magic cookie used to validate the instance
+    int alive;      // Alive flag to prevent use after destroy
 } RoxyTileRendererC;
+
+// Expose the API setter so users of the header can call it
+void roxy_tileRenderer_setPlaydateAPI(PlaydateAPI* playdate);
 
 void registerRoxyTileRendererC(PlaydateAPI* playdate);
 
