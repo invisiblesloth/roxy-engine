@@ -5,9 +5,10 @@ local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r       <const> = roxy
-local Cache   <const> = r.Cache
-local Camera  <const> = r.Camera
+local r           <const> = roxy
+local AssetStore  <const> = r.AssetStore
+local Cache       <const> = r.Cache
+local Camera      <const> = r.Camera
 
 local min   <const> = math.min
 local max   <const> = math.max
@@ -35,6 +36,11 @@ local addWallSprites  <const> = Graphics.sprite.addWallSprites
 local newSprite       <const> = Graphics.sprite.new
 
 local addDirtyRect <const> = Sprite.addDirtyRect
+
+local retain          <const> = AssetStore.retain
+local release         <const> = AssetStore.release
+local getImagetable   <const> = AssetStore.getImagetable
+local getImageCached  <const> = AssetStore.getImageCached
 
 local getCachedAsset    <const> = Cache.getCachedAsset
 local cacheAsset        <const> = Cache.cacheAsset
@@ -71,30 +77,6 @@ local referenceCount = {}
 -- Asset Management Helpers
 --
 
--- ! Helper: Retain Asset
--- Note on "thunk" caching.
--- We store either the asset or a thunk (a function returning the asset).
--- Thunks defer allocation until first use, which keeps memory lower when an
--- imagetable/image is referenced but never actually drawn.
-local function _retain(path, tbl)
-  referenceCount[path] = (referenceCount[path] or 0) + 1
-  if not getIsAssetCached(path) then
-    cacheAsset(path, function() return tbl end) -- Thunk
-  end
-end
-
--- ! Helper: Release Asset
-local function _release(path)
-  local count = referenceCount[path]
-  if not count then return end
-  if count <= 1 then
-    evictAsset(path)
-    referenceCount[path] = nil
-  else
-    referenceCount[path] = count - 1
-  end
-end
-
 -- ! Helper: Normalize Image Path
 -- Converts Tiled-exported image paths to Roxy's expected format
 local function _normalizeImagePath(tiledImagePath)
@@ -112,55 +94,6 @@ local function _normalizeImagePath(tiledImagePath)
   end
 
   return IMAGE_PATH_PREFIX .. base
-end
-
--- ! Helper: Get Imagetable
--- Loads or retrieves cached imagetable from path
-local function _getImagetable(path)
-  if type(path) ~= "string" or path == "" then
-    Log.warn("[_getImagetable] Invalid or missing path: " .. tostring(path))
-    return nil
-  end
-
-  local cached = getCachedAsset(path)
-  if cached then
-    local imagetable = (type(cached) == "function") and cached() or cached
-    return imagetable
-  end
-
-  local loaded = newImagetable(path)
-  if loaded then
-    cacheAsset(path, function() return loaded end)
-  else --#DEBUG
-    Log.warn("[_getImagetable] Failed to load imagetable at path: " .. path) --#DEBUG
-  end
-
-  return loaded
-end
-
--- ! Helper: Get Image (cached)
--- Loads or retrieves a cached image from a path
-local function _getImageCached(path)
-  if type(path) ~= "string" or path == "" then
-    Log.warn("[_getImageCached] Invalid or missing path: " .. tostring(path)) --#DEBUG
-    return nil
-  end
-
-  local cached = getCachedAsset(path)
-  if cached then
-    -- Realize thunk if needed
-    local img = (type(cached) == "function") and cached() or cached
-    return img
-  end
-
-  local loaded = newImage(path)
-  if loaded then
-    cacheAsset(path, function() return loaded end)
-  else --#DEBUG
-    Log.warn("[_getImageCached] Failed to load image at path: " .. path) --#DEBUG
-  end
-
-  return loaded
 end
 
 --
@@ -257,14 +190,14 @@ local function _createDefaultObjectSprite(object, layerOptions)
   end
 
   -- Try to load the image
-  local img = _getImageCached(imagePath)
+  local img = getImageCached(imagePath)
   if not img then
     Log.warn("[_createDefaultObjectSprite] Failed to load image at: " .. tostring(imagePath)) --#DEBUG
   end
 
   -- Retain image if successfully loaded
   if img then
-    _retain(imagePath, img)
+    retain(imagePath, img)
   end
 
   -- Create appropriate sprite type
@@ -524,8 +457,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     end
 
     tileset.imagePath  = normalizedPath
-    tileset.imageTable = _getImagetable(normalizedPath)
-    _retain(normalizedPath, tileset.imageTable)
+    tileset.imageTable = getImagetable(normalizedPath)
+    retain(normalizedPath, tileset.imageTable)
 
     -- Precompute once per tileset
     local maxImageHeight = 0
@@ -922,7 +855,7 @@ function RoxyTilemap:removeObjectLayer(layerName)
   local sprites = self:getObjectSprites(layerName)
   for _, sprite in ipairs(sprites) do
     if sprite._retainedImagePath then
-      _release(sprite._retainedImagePath)
+      release(sprite._retainedImagePath)
       sprite._retainedImagePath = nil
     end
     if self.scene and self.scene.removeSprite then
@@ -1007,7 +940,7 @@ function RoxyTilemap:removeLayer(name)
 
   -- Release assets that this instance retained
   if layerData.imagePath and self._retainedPaths and self._retainedPaths[layerData.imagePath] then
-    _release(layerData.imagePath)
+    release(layerData.imagePath)
     self._retainedPaths[layerData.imagePath] = nil
   end
 
@@ -1071,7 +1004,7 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remapFn)
   if type(newImageTableOrPath) == "string" then
     -- Normalize path like tileset loader does
     newPath = _normalizeImagePath(newImageTableOrPath) or newImageTableOrPath
-    newTable = _getImagetable(newPath)
+    newTable = getImagetable(newPath)
     if not newTable then
       Log.warn("[RoxyTilemap:setLayerImageTable] Failed to load imagetable: " .. tostring(newPath)) --#DEBUG
       return false
@@ -1143,13 +1076,13 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remapFn)
   -- Update asset retention (if this was a path swap)
   if newPath then
     if not self._retainedPaths[newPath] then
-      _retain(newPath, newTable) -- Retain the newly used imagetable path
-      self._retainedPaths[newPath] = true -- Track so we can _release on destroy
+      retain(newPath, newTable) -- Retain the newly used imagetable path
+      self._retainedPaths[newPath] = true -- Track so we can release on destroy
     end
 
     local oldPath = layerData.imagePath
     if oldPath and oldPath ~= newPath and self._retainedPaths[oldPath] then
-      _release(oldPath) -- Only _release paths this instance retained
+      release(oldPath) -- Only release paths this instance retained
       self._retainedPaths[oldPath] = nil
     end
     layerData.imagePath = newPath
@@ -1451,7 +1384,7 @@ function RoxyTilemap:destroy()
   for _, sprites in pairs(self.objectSprites or {}) do
     for _, sprite in ipairs(sprites) do
       if sprite._retainedImagePath then
-        _release(sprite._retainedImagePath)
+        release(sprite._retainedImagePath)
         sprite._retainedImagePath = nil
       end
       if self.scene and self.scene.removeSprite then
@@ -1465,14 +1398,14 @@ function RoxyTilemap:destroy()
   -- Clean up tilesets retained at initialization
   for _, tileset in pairs(self.tilesets or {}) do
     if tileset.imagePath then
-      _release(tileset.imagePath)
+      release(tileset.imagePath)
     end
   end
 
   -- Release any imagetable paths retained via swaps
   if self._retainedPaths then
     for path, _ in pairs(self._retainedPaths) do
-      _release(path)
+      release(path)
     end
     self._retainedPaths = nil
   end
