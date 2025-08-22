@@ -21,6 +21,9 @@ local pi    <const> = math.pi
 local lerp  <const> = roxy.Math.lerp
 local round <const> = roxy.Math.roundInt
 
+local tableRemove <const> = table.remove
+local tableInsert <const> = table.insert
+
 local setDrawOffset <const> = Graphics.setDrawOffset
 
 local redrawBackground <const> = Sprite.redrawBackground
@@ -40,8 +43,22 @@ Camera._velocityX       = 0     -- velocity in x direction
 Camera._velocityY       = 0     -- velocity in y direction
 Camera._lastX           = 0     -- last x position for dirty rect
 Camera._lastY           = 0     -- last y position for dirty rect
+Camera._screenLeft      = 0     -- cached screen left boundary
+Camera._screenTop       = 0     -- cached screen top boundary
+Camera._screenRight     = DISPLAY_WIDTH   -- cached screen right boundary
+Camera._screenBottom    = DISPLAY_HEIGHT  -- cached screen bottom boundary
 Camera._targetX         = 0     -- target x position
 Camera._targetY         = 0     -- target y position
+
+-- Conversion cache for worldToScreen/screenToWorld performance
+-- Added: Small offset-scoped caches with simple FIFO eviction.
+Camera._conversionCache = {
+  -- Each cache keeps entries (map), keys (insertion order), count, and last seen offset.
+  w2s = { lastOffsetX = nil, lastOffsetY = nil, entries = {}, keys = {}, count = 0 }, -- world-to-screen cache
+  s2w = { lastOffsetX = nil, lastOffsetY = nil, entries = {}, keys = {}, count = 0 }  -- screen-to-world cache
+}
+local CONVERSION_CACHE_SIZE <const> = 8  -- Small cache to avoid memory overhead
+
 Camera.target           = nil   -- sprite to follow
 Camera._bounds          = nil   -- { x1, y1, x2, y2 }
 Camera._boundsCache     = nil
@@ -54,9 +71,12 @@ Camera.smoothing        = 0     -- smoothing rate in 1/seconds (0 = instant)
 Camera._shakeAmplitude  = 0     -- Shake intensity (pixels)
 Camera.shakeDuration    = 0     -- Remaining shake time (seconds)
 Camera._shakeFrequency  = 0     -- Shake oscillations per second
+Camera._shakeAngularFreq = 0    -- Cached angular frequency (frequency * 2π)
 Camera._shakeTimer      = 0     -- Tracks elapsed shake time
 Camera._deadZoneWidth   = 0     -- Dead zone width (pixels, 0 = disabled)
 Camera._deadZoneHeight  = 0     -- Dead zone height (pixels, 0 = disabled)
+Camera._deadZoneHalfW   = 0     -- Cached half width for performance
+Camera._deadZoneHalfH   = 0     -- Cached half height for performance
 Camera.friction         = FRICTION_DEFAULT
 
 -- Indicates whether the camera needs an update this frame.
@@ -82,7 +102,7 @@ local function _applyShake(dt)
     Camera._shakeTimer = 0
     return 0, 0
   end
-  local t = Camera._shakeTimer * Camera._shakeFrequency * 2 * pi
+  local t = Camera._shakeTimer * Camera._shakeAngularFreq
   local amplitude = Camera._shakeAmplitude * (1 - Camera._shakeTimer / Camera.shakeDuration) -- Linear decay
   return round(amplitude * sin(t)), round(amplitude * cos(t))
 end
@@ -98,6 +118,17 @@ local function _commitOffset(dt)
     setDrawOffset(-totalOffsetX, -totalOffsetY)
     redrawBackground()
     Camera._lastX, Camera._lastY = totalOffsetX, totalOffsetY
+    -- Update cached screen bounds for isOnScreen performance
+    Camera._screenLeft = totalOffsetX
+    Camera._screenTop = totalOffsetY
+    Camera._screenRight = totalOffsetX + DISPLAY_WIDTH
+    Camera._screenBottom = totalOffsetY + DISPLAY_HEIGHT
+    -- Invalidate conversion caches when offset changes
+    -- Updated: Just bump last offsets; converters will reinit their caches lazily on next call.
+    Camera._conversionCache.w2s.lastOffsetX = nil
+    Camera._conversionCache.w2s.lastOffsetY = nil
+    Camera._conversionCache.s2w.lastOffsetX = nil
+    Camera._conversionCache.s2w.lastOffsetY = nil
     Camera._isActive = true
   else
     Camera._isActive = Camera.shakeDuration > 0 or Camera._velocityX ~= 0 or Camera._velocityY ~= 0 or Camera.target ~= nil
@@ -155,7 +186,7 @@ end
 -- Follows a sprite (or nil to stop).
 -- Optional smoothing rate controls interpolation speed:
 --   0 = Snap instantly to target each frame
---  >0 = Rate in “per second” at which camera moves toward target.
+--  >0 = Rate in "per second" at which camera moves toward target.
 --       Actual lerp factor per frame is t = min(rate * dt, 1).
 function Camera.setTarget(sprite, smoothing)
   --#DEBUG START
@@ -203,6 +234,8 @@ function Camera.shake(amplitude, duration, frequency)
   Camera._shakeAmplitude = max(amplitude, 0)
   Camera.shakeDuration = max(duration, 0)
   Camera._shakeFrequency = max(frequency, 0)
+  -- Pre-compute angular frequency to avoid multiplication each frame
+  Camera._shakeAngularFreq = Camera._shakeFrequency * 2 * pi
   Camera._shakeTimer = 0
   Camera._isActive = true -- Ensure updates run during shake
 end
@@ -219,6 +252,9 @@ function Camera.setDeadZone(width, height)
   --#DEBUG END
   Camera._deadZoneWidth = max(width, 0)
   Camera._deadZoneHeight = max(height, 0)
+  -- Cache half sizes to avoid division in update loop
+  Camera._deadZoneHalfW = Camera._deadZoneWidth / 2
+  Camera._deadZoneHalfH = Camera._deadZoneHeight / 2
 end
 
 -- ! Set Friction
@@ -281,6 +317,10 @@ function Camera.reset()
   Camera._velocityY       = 0
   Camera._lastX           = 0
   Camera._lastY           = 0
+  Camera._screenLeft      = 0
+  Camera._screenTop       = 0
+  Camera._screenRight     = DISPLAY_WIDTH
+  Camera._screenBottom    = DISPLAY_HEIGHT
   Camera._targetX         = 0
   Camera._targetY         = 0
   Camera.target           = nil
@@ -295,11 +335,27 @@ function Camera.reset()
   Camera._shakeAmplitude  = 0
   Camera.shakeDuration    = 0
   Camera._shakeFrequency  = 0
+  Camera._shakeAngularFreq = 0
   Camera._shakeTimer      = 0
   Camera._deadZoneWidth   = 0
   Camera._deadZoneHeight  = 0
+  Camera._deadZoneHalfW   = 0
+  Camera._deadZoneHalfH   = 0
   Camera.friction         = FRICTION_DEFAULT
   Camera._updateFunc      = Camera.updateStatic
+
+  -- Clear conversion caches
+  -- Updated: Clear entries, keys, counts to fully reset caches.
+  Camera._conversionCache.w2s.lastOffsetX = nil
+  Camera._conversionCache.w2s.lastOffsetY = nil
+  Camera._conversionCache.w2s.entries = {}
+  Camera._conversionCache.w2s.keys = {}
+  Camera._conversionCache.w2s.count = 0
+  Camera._conversionCache.s2w.lastOffsetX = nil
+  Camera._conversionCache.s2w.lastOffsetY = nil
+  Camera._conversionCache.s2w.entries = {}
+  Camera._conversionCache.s2w.keys = {}
+  Camera._conversionCache.s2w.count = 0
 
   -- Immediate screen‑space reset
   setDrawOffset(0, 0)
@@ -343,15 +399,13 @@ function Camera.updateFollow(dt)
   if Camera._deadZoneWidth > 0 and Camera._deadZoneHeight > 0 then
     local dx = desiredX - Camera._targetX
     local dy = desiredY - Camera._targetY
-    local halfW = Camera._deadZoneWidth / 2
-    local halfH = Camera._deadZoneHeight / 2
-    if abs(dx) > halfW then
-      desiredX = desiredX - (dx - (dx > 0 and halfW or -halfW))
+    if abs(dx) > Camera._deadZoneHalfW then
+      desiredX = desiredX - (dx - (dx > 0 and Camera._deadZoneHalfW or -Camera._deadZoneHalfW))
     else
       -- desiredX = Camera._targetX
     end
-    if abs(dy) > halfH then
-      desiredY = desiredY - (dy - (dy > 0 and halfH or -halfH))
+    if abs(dy) > Camera._deadZoneHalfH then
+      desiredY = desiredY - (dy - (dy > 0 and Camera._deadZoneHalfH or -Camera._deadZoneHalfH))
     else
       -- desiredY = Camera._targetY
     end
@@ -371,10 +425,6 @@ function Camera.updateFollow(dt)
     local t = min(Camera.smoothing * dt, 1)
     Camera.x = lerp(Camera.x, Camera._targetX, t)
     Camera.y = lerp(Camera.y, Camera._targetY, t)
-
-    -- Snap to nearest pixel
-    Camera.x = round(Camera.x)
-    Camera.y = round(Camera.y)
   else
     Camera.x, Camera.y = Camera._targetX, Camera._targetY
   end
@@ -383,10 +433,6 @@ function Camera.updateFollow(dt)
   if Camera._hasBounds then
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
-
-    -- Snap to nearest pixel
-    Camera.x = round(Camera.x)
-    Camera.y = round(Camera.y)
   end
 
   if Camera.smoothing > 0
@@ -395,13 +441,11 @@ function Camera.updateFollow(dt)
     and abs(Camera._velocityX or 0) < 0.01
     and abs(Camera._velocityY or 0) < 0.01
   then
-    Camera.x = round(Camera.x)
-    Camera.y = round(Camera.y)
     Camera._targetX = Camera.x
     Camera._targetY = Camera.y
   end
 
-  -- Apply shake and update draw offset
+  -- Apply shake and update draw offset (handles rounding)
   _commitOffset(dt)
 end
 
@@ -434,10 +478,6 @@ function Camera.updateManualPan(dt)
     local t = min(Camera.smoothing * dt, 1)
     Camera.x = lerp(Camera.x, Camera._targetX, t)
     Camera.y = lerp(Camera.y, Camera._targetY, t)
-
-    -- Snap to nearest pixel
-    Camera.x = round(Camera.x)
-    Camera.y = round(Camera.y)
   else
     Camera.x, Camera.y = Camera._targetX, Camera._targetY
   end
@@ -446,13 +486,9 @@ function Camera.updateManualPan(dt)
   if Camera._hasBounds then
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
-
-    -- Snap to nearest pixel
-    Camera.x = round(Camera.x)
-    Camera.y = round(Camera.y)
   end
 
-  -- Apply shake and update draw offset
+  -- Apply shake and update draw offset (handles rounding)
   _commitOffset(dt)
 end
 
@@ -530,8 +566,46 @@ function Camera.worldToScreen(worldX, worldY)
     Log.warn("worldToScreen received nil coordinate(s)") --#DEBUG
   end
 
-  local screenX = worldX ~= nil and (worldX - Camera._lastX) or 0
-  local screenY = worldY ~= nil and (worldY - Camera._lastY) or 0
+  -- Handle nil coordinates
+  if worldX == nil then worldX = 0 end
+  if worldY == nil then worldY = 0 end
+
+  local cache = Camera._conversionCache.w2s
+  local offsetX, offsetY = Camera._lastX, Camera._lastY
+
+  -- Check if cache is valid for current offset
+  if cache.lastOffsetX ~= offsetX or cache.lastOffsetY ~= offsetY then
+    -- Camera moved, invalidate cache
+    cache.entries = {}
+    cache.keys = {}
+    cache.count = 0
+    cache.lastOffsetX = offsetX
+    cache.lastOffsetY = offsetY
+  end
+
+  -- Create cache key (combine coordinates into single string)
+  local key = worldX .. "," .. worldY
+  local cached = cache.entries[key]
+  if cached then
+    return cached[1], cached[2]
+  end
+
+  -- Compute conversion
+  local screenX = worldX - offsetX
+  local screenY = worldY - offsetY
+
+  -- Store in cache with simple FIFO eviction
+  if cache.count >= CONVERSION_CACHE_SIZE then
+    local oldKey = tableRemove(cache.keys, 1)
+    if oldKey ~= nil then
+      cache.entries[oldKey] = nil
+      cache.count -= 1 -- Uses Playdate SDK augmented assignment
+    end
+  end
+  tableInsert(cache.keys, key)
+  cache.entries[key] = { screenX, screenY }
+  cache.count += 1 -- Uses Playdate SDK augmented assignment
+
   return screenX, screenY
 end
 
@@ -542,18 +616,56 @@ function Camera.screenToWorld(screenX, screenY)
     Log.warn("screenToWorld received nil coordinate(s)") --#DEBUG
   end
 
-  local worldX = screenX ~= nil and (screenX + Camera._lastX) or 0
-  local worldY = screenY ~= nil and (screenY + Camera._lastY) or 0
+  -- Handle nil coordinates
+  if screenX == nil then screenX = 0 end
+  if screenY == nil then screenY = 0 end
+
+  local cache = Camera._conversionCache.s2w
+  local offsetX, offsetY = Camera._lastX, Camera._lastY
+
+  -- Check if cache is valid for current offset
+  if cache.lastOffsetX ~= offsetX or cache.lastOffsetY ~= offsetY then
+    -- Camera moved, invalidate cache
+    cache.entries = {}
+    cache.keys = {}
+    cache.count = 0
+    cache.lastOffsetX = offsetX
+    cache.lastOffsetY = offsetY
+  end
+
+  -- Create cache key (combine coordinates into single string)
+  local key = screenX .. "," .. screenY
+  local cached = cache.entries[key]
+  if cached then
+    return cached[1], cached[2]
+  end
+
+  -- Compute conversion
+  local worldX = screenX + offsetX
+  local worldY = screenY + offsetY
+
+  -- Store in cache with simple FIFO eviction
+  if cache.count >= CONVERSION_CACHE_SIZE then
+    local oldKey = tableRemove(cache.keys, 1)
+    if oldKey ~= nil then
+      cache.entries[oldKey] = nil
+      cache.count -= 1 -- Uses Playdate SDK augmented assignment
+    end
+  end
+  tableInsert(cache.keys, key)
+  cache.entries[key] = { worldX, worldY }
+  cache.count += 1 -- Uses Playdate SDK augmented assignment
+
   return worldX, worldY
 end
 
 -- ! Is On Screen
 -- Returns true if the point (x, y) is within the current screen bounds
 function Camera.isOnScreen(x, y)
-  return x >= Camera._lastX
-     and x <  Camera._lastX + DISPLAY_WIDTH
-     and y >= Camera._lastY
-     and y <  Camera._lastY + DISPLAY_HEIGHT
+  return x >= Camera._screenLeft
+     and x <  Camera._screenRight
+     and y >= Camera._screenTop
+     and y <  Camera._screenBottom
 end
 
 -- Default to static mode
