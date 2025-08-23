@@ -54,10 +54,7 @@ local DEFAULT_CHUNK_SIZE    <const> = 320 -- Adjusted for iso diamond (e.g., til
 local DEFAULT_CHUNK_CACHE   <const> = 200
 local DEFAULT_CHUNK_OVERLAP <const> = 32
 
--- Cull margins / epsilon
-local TILE_MARGIN          <const> = 1 -- Coarse safety margin for dynamic draw
 local VISIBLE_MARGIN_TILES <const> = 2
-local FLOAT_EPSILON        <const> = 0.000001
 
 local PREFETCH_RINGS  <const> = 1  -- 1 ring beyond visible
 local BUILD_BUDGET    <const> = 2  -- Build at most 2 chunks per frame

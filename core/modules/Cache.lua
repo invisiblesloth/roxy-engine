@@ -339,3 +339,6 @@ function Cache.clearCache(bucket)
   bucket.currentSize = 0
   return true
 end
+
+-- Load the Asset Store helper
+import "libraries/roxy/core/modules/AssetStore"
