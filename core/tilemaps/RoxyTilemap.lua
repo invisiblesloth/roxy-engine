@@ -120,6 +120,7 @@ local function _validateOptions(opts)
   if opts.wrapInSprites == nil then opts.wrapInSprites = true end
   if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = {} end
   if opts.cameraBounds == nil then opts.cameraBounds = false end
+  if opts.deferCameraBounds == nil then opts.deferCameraBounds = false end
   if opts.anchor == nil or opts.anchor ~= "topLeft" then opts.anchor = "center" end
   if opts.collisionResponse == nil then opts.collisionResponse = "overlap" end
   if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = {} end
@@ -236,14 +237,23 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     return nil
   end
 
-  -- Apply camera bounds if requested
+  -- Apply (or defer) camera bounds
   if opts.cameraBounds then
-    setCameraBounds({
+    local bounds = {
       x1 = 0,
       y1 = 0,
-      x2 = max(0, self.worldWidth - DISPLAY_WIDTH),
-      y2 = max(0, self.worldHeight - DISPLAY_HEIGHT)
-    })
+      x2 = max(0, self.worldWidth  - DISPLAY_WIDTH),
+      y2 = max(0, self.worldHeight - DISPLAY_HEIGHT),
+    }
+
+    if opts.deferCameraBounds == true then
+      -- store for later, do NOT apply now (Loader scene)
+      self._pendingCameraBounds = bounds
+    else
+      -- apply immediately
+      setCameraBounds(bounds)
+      self._pendingCameraBounds = nil
+    end
   end
 
   -- Get map-level parallax origins
@@ -495,6 +505,39 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   -- Attach to a scene immediately if it supports tilemaps
   if scene and scene.addTilemap then
     scene:addTilemap(self)
+  end
+end
+
+--------------------------------------------------------------------------------
+--  Camera Controls
+--------------------------------------------------------------------------------
+
+-- ! Apply Camera Bounds
+-- Apply the precomputed bounds now (e.g., when a scene enters)
+function RoxyTilemap:applyCameraBounds()
+  local pending = self._pendingCameraBounds
+  if pending then
+    setCameraBounds(pending)
+    self._pendingCameraBounds = nil
+    return true
+  end
+  return false
+end
+
+-- ! Update Camera Bounds
+-- Recompute (in case the display size or map changed) and optionally apply or defer
+function RoxyTilemap:updateCameraBounds(shouldApply)
+  local bounds = {
+    x1 = 0,
+    y1 = 0,
+    x2 = max(0, self.worldWidth  - DISPLAY_WIDTH),
+    y2 = max(0, self.worldHeight - DISPLAY_HEIGHT),
+  }
+  if shouldApply then
+    setCameraBounds(bounds)
+    self._pendingCameraBounds = nil
+  else
+    self._pendingCameraBounds = bounds
   end
 end
 
@@ -950,6 +993,17 @@ end
 --------------------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------------------
+
+-- ! Detach Sprites
+function RoxyTilemap:detachSprites()
+  if self.layerManager then self.layerManager:detach() end
+  for _, sprites in pairs(self.objectSprites or {}) do
+    for _, sprite in ipairs(sprites) do
+      if self.scene and self.scene.removeSprite then self.scene:removeSprite(sprite) else sprite:remove() end
+    end
+  end
+  self.objectSprites = {}
+end
 
 -- ! Destroy
 -- Cleans up all resources and removes sprites from display

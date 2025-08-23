@@ -31,10 +31,10 @@ local function _createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, paral
     local cameraX, cameraY = Camera.getPosition()
     local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
     local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
-  
+
     local screenX = round(worldX + pivotAdjustX - cameraX * parallaxX)
     local screenY = round(worldY + pivotAdjustY - cameraY * parallaxY)
-  
+
     local currentX, currentY = sprite:getPosition()
     if screenX ~= currentX or screenY ~= currentY then
       sprite:moveTo(screenX, screenY)
@@ -61,6 +61,12 @@ end
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
+
+-- ! Set Scene
+function LayerManager:setScene(scene)
+  self.scene = scene
+  self._sceneHasAdd = scene and type(scene.addSprite) == "function" or false
+end
 
 -- ! Add Layer
 -- Register/replace layer data. Does NOT create a sprite yet.
@@ -140,7 +146,7 @@ end
 function LayerManager:hide(name)
   local layer = self.layers[name]
   if not layer then return end
-  
+
   layer.visible = false
   if layer.sprite then layer.sprite:setVisible(false) end
 end
@@ -149,7 +155,7 @@ end
 function LayerManager:show(name)
   local layer = self.layers[name]
   if not layer then return end
-  
+
   layer.visible = true
   local sprite = self:ensureSprite(name)
   if sprite then sprite:setVisible(true) end
@@ -217,7 +223,7 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
             end
           end
         end
-    
+
       elseif type(remapFn) == "table" then
         for index = 1, #tiles do
           local tileIndex = tiles[index]
@@ -229,7 +235,7 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
           end
         end
       end
-    
+
       layer.tilemap:setTiles(tiles, width)
     end
   end
@@ -267,17 +273,17 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
   local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
   local mapWidthTiles, mapHeightTiles = layer.tilemap:getSize()
   local mapPixelWidth, mapPixelHeight = mapWidthTiles * tileWidth, mapHeightTiles * tileHeight
-  
+
   local cameraX, cameraY = Camera.getPosition()
   local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
   local originX, originY = layer.originX or 0, layer.originY or 0
-  
+
   local anchorOffsetX = (layer.anchor == "topLeft") and 0 or 0.5
   local anchorOffsetY = (layer.anchor == "topLeft") and 0 or 0.5
-  
+
   local screenX = round(originX - mapPixelWidth * anchorOffsetX - cameraX * parallaxX)
   local screenY = round(originY - mapPixelHeight * anchorOffsetY - cameraY * parallaxY)
-  
+
   Sprite.addDirtyRect(screenX, screenY, mapPixelWidth, mapPixelHeight)
 
   return true
@@ -288,7 +294,7 @@ end
 function LayerManager:setOrigin(name, x, y)
   local layer = self.layers[name]
   if not layer then return false end
-  
+
   layer.originX, layer.originY = x or 0, y or 0
   local sprite = layer.sprite
   if sprite then
@@ -312,6 +318,24 @@ end
 --------------------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------------------
+
+-- ! Detach
+function LayerManager:detach()
+  for _, layer in pairs(self.layers) do
+    if layer.sprite then
+      if self.scene and self.scene.removeSprite then
+        self.scene:removeSprite(layer.sprite)
+      else
+        layer.sprite:remove()
+      end
+      layer.sprite = nil
+    end
+    if layer.collisionSprites then
+      for _, sprite in ipairs(layer.collisionSprites) do sprite:remove() end
+      layer.collisionSprites = nil
+    end
+  end
+end
 
 -- ! Destroy
 -- Cleanly remove all layer sprites + collisions and release swap-retained paths
