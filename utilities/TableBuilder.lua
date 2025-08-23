@@ -67,9 +67,10 @@ end
 -- Merge all layers in sequence and return the result
 -- @return table
 function TableBuilder:build()
+  local merge = self._merge or mergeImmutable
   local result = self.layers[1]
   for i = 2, #self.layers do
-    result = mergeImmutable(result, self.layers[i])
+    result = merge(result, self.layers[i])
   end
   return result
 end
