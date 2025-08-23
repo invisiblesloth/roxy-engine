@@ -11,7 +11,6 @@ local Cache   <const> = r.Cache
 local min   <const> = math.min
 local max   <const> = math.max
 local floor <const> = math.floor
-local ceil  <const> = math.ceil
 local round <const> = r.Math.round
 
 local tableInsert <const> = table.insert
