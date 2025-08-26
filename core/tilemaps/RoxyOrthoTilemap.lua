@@ -31,6 +31,11 @@ local getOrLoadAsset  <const> = Cache.getOrLoadAsset
 local evictAsset      <const> = Cache.evictAsset
 local clearCache      <const> = Cache.clearCache
 
+local TilemapHelpers          <const> = r.TilemapHelpers
+local visibleLayerRect        <const> = TilemapHelpers.visibleLayerRect
+local chunkIndicesForRect     <const> = TilemapHelpers.chunkIndicesForRect
+local findFirstAvailableLayer <const> = TilemapHelpers.findFirstAvailableLayer
+
 -- Default chunk settings
 local DEFAULT_CHUNK_SIZE    <const> = 320
 local DEFAULT_CHUNK_CACHE   <const> = 200
@@ -44,31 +49,6 @@ local COLOR_CLEAR <const> = Graphics.kColorClear
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
-
--- ! Helper: Visible Layer Rectangle
--- Compute visible layer-space rectangle (pixels), factoring parallax/camera.
-local function _visibleLayerRect(self, layerData)
-  local screenX, screenY = self:worldToScreen(0, 0, layerData)
-  return floor(-screenX), floor(-screenY), DISPLAY_WIDTH, DISPLAY_HEIGHT
-end
-
--- ! Helper: Chunk Indices For Rect
--- Which chunk indices intersect a pixel rect?
-local function _chunkIndicesForRect(x, y, width, height, size)
-  local minChunkX = floor(x / size)
-  local maxChunkX = floor((x + width  - 1) / size)
-  local minChunkY = floor(y / size)
-  local maxChunkY = floor((y + height - 1) / size)
-  return minChunkX, maxChunkX, minChunkY, maxChunkY
-end
-
--- ! Helper: Find First Available Layer
-local function _findFirstAvailableLayer(layers)
-  for _, layerData in pairs(layers or {}) do
-    if layerData.tilemap then return layerData end
-  end
-  return nil
-end
 
 -- ! Helper: Render Layer Region To Buffer
 -- Render a rectangular region of the layer directly into the given buffer.
@@ -197,12 +177,12 @@ function RoxyOrthoTilemap:_drawStaticLayerChunked(layerName)
   local size, overlap = cfg.size, cfg.overlap
 
   -- Visible rect in layer coordinates (inflate by overlap)
-  local visibleX, visibleY, visibleWidth, visibleHeight = _visibleLayerRect(self, layerData)
+  local visibleX, visibleY, visibleWidth, visibleHeight = visibleLayerRect(self, layerData)
   visibleX -= overlap; visibleY -= overlap
   visibleWidth += 2 * overlap; visibleHeight += 2 * overlap
 
   local minChunkX, maxChunkX, minChunkY, maxChunkY =
-    _chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
+    chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
 
   -- Top-left screen position of layer pixel (0,0)
   local screenX, screenY = self:worldToScreen(0, 0, layerData)
@@ -309,7 +289,7 @@ end
 function RoxyOrthoTilemap:getRowFromScreen(screenX, screenY, layerName)
   local targetLayer = self.layers and self.layers[layerName]
   if not targetLayer then
-    targetLayer = _findFirstAvailableLayer(self.layers)
+    targetLayer = findFirstAvailableLayer(self.layers)
     if not targetLayer then return 1 end
   end
 
@@ -338,7 +318,7 @@ function RoxyOrthoTilemap:markTilesDirty(layerName, tileX, tileY, tileCountWidth
   local pixelHeight = (tileCountHeight or 1) * tileHeight
 
   local minChunkX, maxChunkX, minChunkY, maxChunkY =
-    _chunkIndicesForRect(pixelX, pixelY, pixelWidth, pixelHeight, config.size)
+    chunkIndicesForRect(pixelX, pixelY, pixelWidth, pixelHeight, config.size)
 
   for chunkY = minChunkY, maxChunkY do
     for chunkX = minChunkX, maxChunkX do
