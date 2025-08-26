@@ -146,6 +146,23 @@ static void pingPongLoop(EasingArray* ea, float* newTime, float step)
 // ! Loop Handler
 static const LoopHandler handlers[] = { noLoop, normalLoop, pingPongLoop };
 
+// ! Duplicate String
+// Safe String Duplication Helper
+static char* duplicateString(const char* source)
+{
+    if (!source) return NULL;
+
+    size_t len = strlen(source);
+    char* copy = sys->realloc(NULL, len + 1);
+    if (!copy) {
+        sys->logToConsole("Roxy ERROR: [duplicateString] Memory allocation failed for string copy.");
+        return NULL;
+    }
+
+    memcpy(copy, source, len + 1); // Copy including null terminator
+    return copy;
+}
+
 // ----------------------------------------
 //  Object Lifecycle
 // ----------------------------------------
@@ -169,6 +186,7 @@ static int easingArray_newobject(lua_State* L)
         return 0;
     }
 
+    ea->name                = NULL; // Initialize to NULL
     ea->currentTime         = 0.0f;
     ea->completed           = 0;
     ea->totalDuration       = 0.0f;
@@ -187,8 +205,15 @@ static int easingArray_gc(lua_State* L)
 {
     EasingArray* ea = lua->getArgObject(1, "RoxySequenceC", NULL);
     if (ea) {
+        // Free segments array
         if (ea->segments)
             sys->realloc(ea->segments, 0);
+
+        // Free name string
+        if (ea->name)
+            sys->realloc((void*)ea->name, 0);
+
+        // Free the EasingArray itself
         sys->realloc(ea, 0);
     }
     return 0;
@@ -263,9 +288,38 @@ static int easingArray_setName(lua_State* L)
         return 1;
     }
 
-    ea->name = lua->getArgString(2);
+    const char* newName = lua->getArgString(2);
+
+    // Free existing name if it exists
+    if (ea->name) {
+        sys->realloc((void*)ea->name, 0);
+        ea->name = NULL;
+    }
+
+    // Duplicate the new name
+    if (newName) {
+        ea->name = duplicateString(newName);
+        if (!ea->name) {
+            sys->logToConsole("Roxy ERROR: [easingArray_setName] Failed to duplicate name string.");
+            lua->pushBool(0);
+            return 1;
+        }
+    }
 
     lua->pushBool(1);
+    return 1;
+}
+
+// ! Get Name
+static int easingArray_getName(lua_State* L)
+{
+    EasingArray* ea = lua->getArgObject(1, "RoxySequenceC", NULL);
+    if (!ea || !ea->name) {
+        lua->pushNil();
+        return 1;
+    }
+
+    lua->pushString(ea->name);
     return 1;
 }
 
@@ -728,6 +782,7 @@ static const lua_reg easingArrayLib[] =
     { "__newindex",         easingArray_newindex          },
     { "__len",              easingArray_len               },
     { "setName",            easingArray_setName           },
+    { "getName",            easingArray_getName           },
     { "addEasing",          easingArray_addEasing         },
     { "from",               easingArray_from              },
     { "to",                 easingArray_to                },
