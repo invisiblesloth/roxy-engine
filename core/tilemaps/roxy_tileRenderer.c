@@ -174,8 +174,14 @@ static int roxy_tileRenderer_newobject(lua_State* L)
     tileRenderer->offsetX[0] = tileRenderer->offsetY[0] = 0;
 
     for (int i = 1; i <= tileRenderer->imageCount; ++i) {
-        LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, i - 1);
-        if (!cell) { tileRenderer->offsetX[i] = 0; tileRenderer->offsetY[i] = 0; continue; }
+        // Convert 1-based tile index to 0-based bitmap table index
+        const int bitmapIndex = i - 1;
+        LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, bitmapIndex);
+        if (!cell) {
+            tileRenderer->offsetX[i] = 0;
+            tileRenderer->offsetY[i] = 0;
+            continue;
+        }
         int imageWidth = 0, imageHeight = 0;
         pd->graphics->getBitmapData(cell, &imageWidth, &imageHeight, NULL, NULL, NULL);
         const int16_t offsetX = (int16_t)((tileRenderer->tileWidth  - imageWidth) / 2);
@@ -307,12 +313,14 @@ static int roxy_tileRenderer_setTileAt(lua_State* L)
 // core draw for a single tile (shared)
 static inline void drawCell(const RoxyTileRendererC* tileRenderer, int tileIndex, int sx, int sy)
 {
-    // Guard tileRenderer
+    // Guard tileRenderer and validate tileIndex range
     if (!tileRenderer || tileIndex <= 0 || tileIndex > tileRenderer->imageCount) return;
     // Extra safety
     if (!pd || !pd->graphics || !tileRenderer->imageTable) return;
 
-    LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, tileIndex - 1);
+    // Convert 1-based tile index to 0-based bitmap table index
+    const int bitmapIndex = tileIndex - 1;
+    LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, bitmapIndex);
     if (!cell) return;
 
     const int dx = sx + safeOffsetX(tileRenderer, tileIndex);
@@ -460,7 +468,9 @@ static int roxy_tileRenderer_renderToBuffer(lua_State* L)
                         const int dx = drawX + safeOffsetX(tileRenderer, currentTileIndex);
                         const int dy = baseY + safeOffsetY(tileRenderer, currentTileIndex);
                         if (dx < bufferWidth && dy < bufferHeight && dx > -tileRenderer->tileWidth && dy > -tileRenderer->tileHeight) {
-                            LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, currentTileIndex - 1);
+                            // Convert 1-based tile index to 0-based bitmap table index
+                            const int bitmapIndex = currentTileIndex - 1;
+                            LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, bitmapIndex);
                             if (cell) pd->graphics->drawBitmap(cell, dx, dy, kBitmapUnflipped);
                         }
                     }
@@ -491,7 +501,9 @@ static int roxy_tileRenderer_renderToBuffer(lua_State* L)
                     const int drawX = screenX + safeOffsetX(tileRenderer, currentTileIndex);
                     const int drawY = screenY + safeOffsetY(tileRenderer, currentTileIndex);
                     if (drawX < bufferWidth && drawY < bufferHeight && drawX > -tileRenderer->tileWidth && drawY > -tileRenderer->tileHeight) {
-                        LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, currentTileIndex - 1);
+                        // Convert 1-based tile index to 0-based bitmap table index
+                        const int bitmapIndex = currentTileIndex - 1;
+                        LCDBitmap* cell = pd->graphics->getTableBitmap(tileRenderer->imageTable, bitmapIndex);
                         if (cell) pd->graphics->drawBitmap(cell, drawX, drawY, kBitmapUnflipped);
                     }
                 }
