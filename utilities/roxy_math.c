@@ -99,13 +99,17 @@ float roxy_math_lerp(float min, float max, float t)
 // ! Map
 // Maps a value from one range to another
 float roxy_math_map(float value, float fromLow, float fromHigh, float toLow, float toHigh) {
+    if (fromHigh == fromLow) {
+        /* Guard against division by zero: when the source range is empty,
+           we map everything to the start of the target range. */
+        return toLow;
+    }
     return (value - fromLow) / (fromHigh - fromLow) * (toHigh - toLow) + toLow;
 }
 
 // ----------------------------------------
 // ! Lua-Exposed Functions
 // ----------------------------------------
-
 
 int roxy_math_truncateDecimal_l(lua_State* L)
 {
