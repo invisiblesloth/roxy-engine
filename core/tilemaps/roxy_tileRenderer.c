@@ -141,6 +141,16 @@ static int roxy_tileRenderer_newobject(lua_State* L)
         return 0;
     }
 
+    // Validate tile dimensions to prevent division-by-zero
+    if (tileRenderer->tileWidth <= 0 || tileRenderer->tileHeight <= 0 ||
+        tileRenderer->halfTileWidth <= 0 || tileRenderer->halfTileHeight <= 0) {
+        pd->system->logToConsole("RoxyTileRendererC.new: invalid tile dimensions (tileWidth=%d, tileHeight=%d, halfTileWidth=%d, halfTileHeight=%d)",
+                                 tileRenderer->tileWidth, tileRenderer->tileHeight,
+                                 tileRenderer->halfTileWidth, tileRenderer->halfTileHeight);
+        pd_free(tileRenderer);
+        return 0;
+    }
+
     // Imagetable
     LuaUDObject* userDataObject = NULL;
     tileRenderer->imageTable = pd->lua->getArgObject(11, "playdate.graphics.imagetable", &userDataObject);
@@ -403,6 +413,13 @@ static int roxy_tileRenderer_renderToBuffer(lua_State* L)
     const int offsetY = pd->lua->getArgInt(4);
     const int bufferWidth = pd->lua->getArgInt(5);
     const int bufferHeight = pd->lua->getArgInt(6);
+
+    // Defensive check to prevent division-by-zero
+    if (tileRenderer->tileWidth <= 0 || tileRenderer->halfTileHeight <= 0 ||
+        tileRenderer->halfTileWidth <= 0) {
+        pd->system->logToConsole("renderToBuffer: invalid tile dimensions, cannot render");
+        return 0;
+    }
 
     int contextPushed = 0;
     if (targetBitmap) {
