@@ -1,6 +1,7 @@
 -- core/tilemaps/RoxyTilemap.lua
 
 import "libraries/roxy/core/tilemaps/ObjectLayerProcessor"
+import "libraries/roxy/core/tilemaps/TilemapHelpers"
 import "libraries/roxy/core/tilemaps/LayerManager"
 
 local pd        <const> = playdate
@@ -34,6 +35,8 @@ local getImagetable   <const> = AssetStore.getImagetable
 local setCameraBounds   <const> = Camera.setBounds
 
 local ObjectLayerProcessor  <const> = r.ObjectLayerProcessor
+local processObjectLayer    <const> = ObjectLayerProcessor.processObjectLayer
+local processObjectLayers   <const> = ObjectLayerProcessor.processObjectLayers
 
 local IMAGE_PATH_PREFIX <const> = "assets/images/"
 
@@ -481,7 +484,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
     for _, layer in ipairs(mapData.layers or {}) do
       if layer.type == "objectgroup" and (processAllLayers or opts.objectLayers[layer.name]) then
         local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or EMPTY_TABLE
-        local sprites = ObjectLayerProcessor.processObjectLayer(layer, opts, layerOptions, autoAdd, scene, sceneHasAdd, newSprites)
+        local sprites = processObjectLayer(layer, opts, layerOptions, autoAdd, scene, sceneHasAdd, newSprites)
         objectSprites[layer.name] = sprites
       end
     end
@@ -625,7 +628,7 @@ function RoxyTilemap:processObjectLayers(layersToProcess, autoAdd, scene)
   local outSprites = self.sprites or {}
 
   -- Correct argument order: self first, then mapLike, then opts, etc.
-  local processed = ObjectLayerProcessor.processObjectLayers(self, mapLike, opts, layersToProcess, useAutoAdd, scene, sceneHasAdd, outSprites)
+  local processed = processObjectLayers(self, mapLike, opts, layersToProcess, useAutoAdd, scene, sceneHasAdd, outSprites)
 
   self.sprites = outSprites
   return processed

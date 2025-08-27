@@ -42,6 +42,12 @@
 
 static PlaydateAPI* pd = NULL;
 
+// Zero-duration early-out macro
+// Returns the start value at t <= 0, else the end value (b + c).
+// This avoids division by zero without mutating 'd' or changing behavior when d>0.
+#define ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d) \
+do { if (__builtin_expect((d) <= 0.0f, 0)) return ((t) <= 0.0f ? (b) : ((b) + (c))); } while (0)
+
 static EaseFunction s_easingFunctions[] = {
     roxy_ease_flat,                 //  0
     roxy_ease_linear,               //  1
@@ -116,22 +122,26 @@ float roxy_ease_evaluate(
     float paramA,
     float paramB
 ){
-    // (1) total counts
-    int normalCount   = sizeof(s_easingFunctions) / sizeof(s_easingFunctions[0]); // e.g. 34
-    int elasticCount  = sizeof(s_elasticFunctions) / sizeof(s_elasticFunctions[0]); // 4
-    int backCount     = sizeof(s_backFunctions) / sizeof(s_backFunctions[0]);       // 4
-    int maxIndex      = normalCount + elasticCount + backCount - 1; // e.g. 41
+    // Early-out for zero/negative duration
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
 
-    // (2) clamp index
+    // Total counts
+    int normalCount = sizeof(s_easingFunctions) / sizeof(s_easingFunctions[0]); // e.g. 34
+    int elasticCount = sizeof(s_elasticFunctions) / sizeof(s_elasticFunctions[0]); // 4
+    int backCount = sizeof(s_backFunctions) / sizeof(s_backFunctions[0]); // 4
+    int maxIndex = normalCount + elasticCount + backCount - 1; // e.g. 41
+
+    // Clamp index
     if (index < 0 || index > maxIndex) {
         index = 1; // default to linear
     }
 
-    // (3) pick which array
-    // normal range e.g. 0..29 and 38..41
+    // Pick which array
+    // Normal range e.g. 0..29 and 38..41
     if ((index < 30) || (index >= 38 && index <= 41)) {
-        // Normal
-        EaseFunction fn = s_easingFunctions[index];
+        // Map bounce 38..41 to physical 30..33
+        int idx = (index >= 38) ? (index - 8) : index; // Fix for bounce indices
+        EaseFunction fn = s_easingFunctions[idx];
         return fn(t, b, c, d);
     }
     else if (index >= 30 && index <= 33) {
@@ -153,18 +163,21 @@ float roxy_ease_evaluate(
 // ! Flat
 float roxy_ease_flat(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     return b;
 }
 
 // ! Linear
 float roxy_ease_linear(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     return c * t / d + b;
 }
 
 // ! InQuad
 float roxy_ease_in_quad(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     return c * t * t + b;
 }
@@ -172,6 +185,7 @@ float roxy_ease_in_quad(float t, float b, float c, float d)
 // ! OutQuad
 float roxy_ease_out_quad(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     return -c * t * (t - 2) + b;
 }
@@ -179,6 +193,7 @@ float roxy_ease_out_quad(float t, float b, float c, float d)
 // ! InOutQuad
 float roxy_ease_in_out_quad(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d * 2;
     if (t < 1) {
         return c / 2 * t * t + b;
@@ -191,6 +206,7 @@ float roxy_ease_in_out_quad(float t, float b, float c, float d)
 // ! OutInQuad
 float roxy_ease_out_in_quad(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_quad(t * 2, b, c / 2, d);
     } else {
@@ -201,6 +217,7 @@ float roxy_ease_out_in_quad(float t, float b, float c, float d)
 // ! InCubic
 float roxy_ease_in_cubic(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     return c * t * t * t + b;
 }
@@ -208,6 +225,7 @@ float roxy_ease_in_cubic(float t, float b, float c, float d)
 // ! OutCubic
 float roxy_ease_out_cubic(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d - 1;
     return c * (t * t * t + 1) + b;
 }
@@ -215,6 +233,7 @@ float roxy_ease_out_cubic(float t, float b, float c, float d)
 // ! InOutCubic
 float roxy_ease_in_out_cubic(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d * 2;
     if (t < 1) {
         return c / 2 * t * t * t + b;
@@ -227,6 +246,7 @@ float roxy_ease_in_out_cubic(float t, float b, float c, float d)
 // ! OutInCubic
 float roxy_ease_out_in_cubic(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_cubic(t * 2, b, c / 2, d);
     } else {
@@ -237,6 +257,7 @@ float roxy_ease_out_in_cubic(float t, float b, float c, float d)
 // ! InQuart
 float roxy_ease_in_quart(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     return c * t * t * t * t + b;
 }
@@ -244,6 +265,7 @@ float roxy_ease_in_quart(float t, float b, float c, float d)
 // ! OutQuart
 float roxy_ease_out_quart(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d - 1;
     return -c * (t * t * t * t - 1) + b;
 }
@@ -251,6 +273,7 @@ float roxy_ease_out_quart(float t, float b, float c, float d)
 // ! InOutQuart
 float roxy_ease_in_out_quart(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d * 2;
     if (t < 1) {
         return c / 2 * t * t * t * t + b;
@@ -263,6 +286,7 @@ float roxy_ease_in_out_quart(float t, float b, float c, float d)
 // ! OutInQuart
 float roxy_ease_out_in_quart(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_quart(t * 2, b, c / 2, d);
     } else {
@@ -273,6 +297,7 @@ float roxy_ease_out_in_quart(float t, float b, float c, float d)
 // ! InQuint
 float roxy_ease_in_quint(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     return c * t * t * t * t * t + b;
 }
@@ -280,6 +305,7 @@ float roxy_ease_in_quint(float t, float b, float c, float d)
 // ! OutQuint
 float roxy_ease_out_quint(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d - 1;
     return c * (t * t * t * t * t + 1) + b;
 }
@@ -287,6 +313,7 @@ float roxy_ease_out_quint(float t, float b, float c, float d)
 // ! InOutQuint
 float roxy_ease_in_out_quint(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d * 2;
     if (t < 1) {
         return c / 2 * t * t * t * t * t + b;
@@ -299,6 +326,7 @@ float roxy_ease_in_out_quint(float t, float b, float c, float d)
 // ! OutInQuint
 float roxy_ease_out_in_quint(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_quint(t * 2, b, c / 2, d);
     } else {
@@ -309,24 +337,28 @@ float roxy_ease_out_in_quint(float t, float b, float c, float d)
 // ! InSine
 float roxy_ease_in_sine(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     return -c * cosf(t / d * ((float)M_PI / 2)) + c + b;
 }
 
 // ! OutSine
 float roxy_ease_out_sine(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     return c * sinf(t / d * ((float)M_PI / 2)) + b;
 }
 
 // ! InOutSine
 float roxy_ease_in_out_sine(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     return -c / 2 * (cosf((float)M_PI * t / d) - 1) + b;
 }
 
 // ! OutInSine
 float roxy_ease_out_in_sine(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_sine(t * 2, b, c / 2, d);
     } else {
@@ -337,6 +369,7 @@ float roxy_ease_out_in_sine(float t, float b, float c, float d)
 // ! InExpo
 float roxy_ease_in_expo(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t == 0) return b;
     return c * powf(2, 10 * (t / d - 1)) + b - c * 0.001f;
 }
@@ -344,6 +377,7 @@ float roxy_ease_in_expo(float t, float b, float c, float d)
 // ! OutExpo
 float roxy_ease_out_expo(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t == d) return b + c;
     return c * 1.001f * (1 - powf(2, -10 * t / d)) + b;
 }
@@ -351,6 +385,7 @@ float roxy_ease_out_expo(float t, float b, float c, float d)
 // ! InOutExpo
 float roxy_ease_in_out_expo(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t == 0) return b;
     if (t == d) return b + c;
     t = t / d * 2;
@@ -365,6 +400,7 @@ float roxy_ease_in_out_expo(float t, float b, float c, float d)
 // ! OutInExpo
 float roxy_ease_out_in_expo(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_expo(t * 2, b, c / 2, d);
     } else {
@@ -375,6 +411,7 @@ float roxy_ease_out_in_expo(float t, float b, float c, float d)
 // ! InCirc
 float roxy_ease_in_circ(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     return -c * (sqrtf(1 - t * t) - 1) + b;
 }
@@ -382,6 +419,7 @@ float roxy_ease_in_circ(float t, float b, float c, float d)
 // ! OutCirc
 float roxy_ease_out_circ(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d - 1;
     return c * sqrtf(1 - t * t) + b;
 }
@@ -389,6 +427,7 @@ float roxy_ease_out_circ(float t, float b, float c, float d)
 // ! InOutCirc
 float roxy_ease_in_out_circ(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d * 2;
     if (t < 1) {
         return -c / 2 * (sqrtf(1 - t * t) - 1) + b;
@@ -401,6 +440,7 @@ float roxy_ease_in_out_circ(float t, float b, float c, float d)
 // ! OutInCirc
 float roxy_ease_out_in_circ(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_circ(t * 2, b, c / 2, d);
     } else {
@@ -411,6 +451,7 @@ float roxy_ease_out_in_circ(float t, float b, float c, float d)
 // ! InElastic
 float roxy_ease_in_elastic(float t, float b, float c, float d, float a, float p)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t == 0) return b;
     t = t / d;
     if (t == 1) return b + c;
@@ -429,6 +470,7 @@ float roxy_ease_in_elastic(float t, float b, float c, float d, float a, float p)
 // ! OutElastic
 float roxy_ease_out_elastic(float t, float b, float c, float d, float a, float p)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t == 0) return b;
     t = t / d;
     if (t == 1) return b + c;
@@ -446,6 +488,7 @@ float roxy_ease_out_elastic(float t, float b, float c, float d, float a, float p
 // ! InOutElastic
 float roxy_ease_in_out_elastic(float t, float b, float c, float d, float a, float p)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t == 0) return b;
     t = t / d * 2;
     if (t == 2) return b + c;
@@ -470,6 +513,7 @@ float roxy_ease_in_out_elastic(float t, float b, float c, float d, float a, floa
 // ! OutInElastic
 float roxy_ease_out_in_elastic(float t, float b, float c, float d, float a, float p)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_elastic(t * 2, b, c / 2, d, a, p);
     } else {
@@ -480,6 +524,7 @@ float roxy_ease_out_in_elastic(float t, float b, float c, float d, float a, floa
 // ! InBack
 float roxy_ease_in_back(float t, float b, float c, float d, float s)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (!s) s = 1.70158f;
     t = t / d;
     return c * t * t * ((s + 1) * t - s) + b;
@@ -488,6 +533,7 @@ float roxy_ease_in_back(float t, float b, float c, float d, float s)
 // ! OutBack
 float roxy_ease_out_back(float t, float b, float c, float d, float s)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (!s) s = 1.70158f;
     t = t / d - 1;
     return c * (t * t * ((s + 1) * t + s) + 1) + b;
@@ -496,6 +542,7 @@ float roxy_ease_out_back(float t, float b, float c, float d, float s)
 // ! InOutBack
 float roxy_ease_in_out_back(float t, float b, float c, float d, float s)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (!s) s = 1.70158f;
     s = s * 1.525f;
     t = t / d * 2;
@@ -510,6 +557,7 @@ float roxy_ease_in_out_back(float t, float b, float c, float d, float s)
 // ! OutInBack
 float roxy_ease_out_in_back(float t, float b, float c, float d, float s)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_back(t * 2, b, c / 2, d, s);
     } else {
@@ -520,6 +568,7 @@ float roxy_ease_out_in_back(float t, float b, float c, float d, float s)
 // ! OutBounce
 float roxy_ease_out_bounce(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     t = t / d;
     if (t < 1 / 2.75f) {
         return c * (7.5625f * t * t) + b;
@@ -538,12 +587,14 @@ float roxy_ease_out_bounce(float t, float b, float c, float d)
 // ! InBounce
 float roxy_ease_in_bounce(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     return c - roxy_ease_out_bounce(d - t, 0, c, d) + b;
 }
 
 // ! InOutBounce
 float roxy_ease_in_out_bounce(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_in_bounce(t * 2, 0, c, d) * 0.5f + b;
     } else {
@@ -554,6 +605,7 @@ float roxy_ease_in_out_bounce(float t, float b, float c, float d)
 // ! OutInBounce
 float roxy_ease_out_in_bounce(float t, float b, float c, float d)
 {
+    ROXY_EASE_EARLY_OUT_ZERO_DUR(t, b, c, d);
     if (t < d / 2) {
         return roxy_ease_out_bounce(t * 2, b, c / 2, d);
     } else {

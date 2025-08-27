@@ -282,6 +282,7 @@ end
 function RoxySprite:play()
   if self.animation or self.simpleAnim then
     self.isPaused = false
+    self:setUpdatesEnabled(true)  -- Enable engine updates
   end
   return self
 end
@@ -303,6 +304,7 @@ end
 function RoxySprite:pause()
   if self.animation or self.simpleAnim then
     self.isPaused = true
+    self:setUpdatesEnabled(false)  -- Disable engine updates
   end
   return self
 end
@@ -321,6 +323,7 @@ function RoxySprite:replay()
     self.simpleAnim.accumulator  = 0
   end
   self.isPaused = false
+  self:setUpdatesEnabled(true)  -- Enable engine updates
   return self
 end
 
@@ -329,6 +332,7 @@ end
 function RoxySprite:stop()
   if self.animation or self.simpleAnim then
     self.isPaused = true
+    self:setUpdatesEnabled(false)  -- Disable engine updates
     if self.animation then
       self.animation:resetAnimationStart()
     elseif self.simpleAnim then
@@ -436,8 +440,14 @@ end
 function RoxySprite:update()
   if self.isPaused then return end
 
+  -- Cache camera position once for all sprites that need it
+  local camX, camY
+  if not self._ignoresDrawOffset then
+    camX, camY = getPosition()
+  end
+
   -- Skip all animations if sprite is off-screen
-  if not self:isOnScreen() then return end
+  if not self:isOnScreenCached(camX, camY) then return end
 
   local dt = r.deltaTime or 0
 
@@ -541,25 +551,61 @@ end
 
 -- ! Is on Screen
 function RoxySprite:isOnScreen()
+  -- Direct property access instead of method calls
+  local spriteX = self.x
+  local spriteY = self.y
+  local spriteWidth = self.width
+  local spriteHeight = self.height
+
   if self._ignoresDrawOffset then
-    local x, y = self:getPosition()
-    local width, height = self:getSize()
+    -- Screen-space check (simpler case)
     return not (
-      x + width < 0 or x > DISPLAY_WIDTH or
-      y + height < 0 or y > DISPLAY_HEIGHT
+      spriteX + spriteWidth < 0 or spriteX > DISPLAY_WIDTH or
+      spriteY + spriteHeight < 0 or spriteY > DISPLAY_HEIGHT
     )
   else
-    -- Original world-space check
-    local spriteX, spriteY = self:getPosition()
-    local spriteWidth, spriteHeight = self:getSize()
-    local centerX, centerY = self:getCenter()
+    -- World-space check with camera
+    local centerX = self.centerX
+    local centerY = self.centerY
     local left = spriteX - spriteWidth * centerX
     local top = spriteY - spriteHeight * centerY
     local right = left + spriteWidth
     local bottom = top + spriteHeight
 
-    -- Get camera position (top-left corner)
+    -- Cache camera position once
     local camX, camY = getPosition()
+    return not (
+      right < camX or
+      left > camX + DISPLAY_WIDTH or
+      bottom < camY or
+      top > camY + DISPLAY_HEIGHT
+    )
+  end
+end
+
+-- ! Is on Screen (with cached camera)
+function RoxySprite:isOnScreenCached(camX, camY)
+  -- Direct property access instead of method calls
+  local spriteX = self.x
+  local spriteY = self.y
+  local spriteWidth = self.width
+  local spriteHeight = self.height
+
+  if self._ignoresDrawOffset then
+    -- Screen-space check (simpler case) - camera position irrelevant
+    return not (
+      spriteX + spriteWidth < 0 or spriteX > DISPLAY_WIDTH or
+      spriteY + spriteHeight < 0 or spriteY > DISPLAY_HEIGHT
+    )
+  else
+    -- World-space check with provided camera coordinates
+    local centerX = self.centerX
+    local centerY = self.centerY
+    local left = spriteX - spriteWidth * centerX
+    local top = spriteY - spriteHeight * centerY
+    local right = left + spriteWidth
+    local bottom = top + spriteHeight
+
     return not (
       right < camX or
       left > camX + DISPLAY_WIDTH or

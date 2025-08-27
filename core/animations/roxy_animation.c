@@ -57,6 +57,11 @@ int roxy_animation_update_l(lua_State* L) {
     dt = 0.001f;
   }
 
+  // Ensure frameDuration is not zero or negative to avoid division by zero
+  if (frameDuration <= 0.0f) {
+    frameDuration = 0.001f;  // Clamp to small positive value
+  }
+
   // If the speed is zero, we return without changing the frame.
   if (speed <= 0.0f) {
     pd->lua->pushInt(currentFrame);
