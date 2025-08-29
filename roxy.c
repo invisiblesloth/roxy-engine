@@ -1,4 +1,4 @@
-// source/libraries/roxy/roxy.c
+// roxy.c
 
 #include "pd_api.h"
 #include "utilities/roxy_math.h"
@@ -8,6 +8,7 @@
 #include "core/animations/roxy_animation.h"
 #include "core/sprites/roxy_particles.h"
 #include "core/tilemaps/roxy_tileRenderer.h"
+#include "utilities/roxy_heapguard.h"
 
 static PlaydateAPI* pd = NULL;
 static uint32_t previousTime = 0;
@@ -19,15 +20,14 @@ static uint32_t previousTime = 0;
 static int getDeltaTime_l(lua_State* L);
 static float clampDeltaTime(float deltaTime, float min, float max);
 
-// ----------------------------------------
-// Public API
-// ----------------------------------------
+/*******************************************//**
+ *  Public API
+ ***********************************************/
 
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
-int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
-{
+int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg) {
     (void)arg;
 
     if (event != kEventInitLua) {
@@ -222,12 +222,20 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
     // ! Register RoxyTileRendererC Class
     registerRoxyTileRendererC(pd);
 
+    // ! Heap Guard
+    // Debug only; registrar is a no-op in release
+    roxy_heapguard_init(pd);
+    if (roxy_heapguard_register_lua(pd) < 0) {
+        pd->system->logToConsole("roxy: heapguard lua registration failed");
+        return -1;
+    }
+
     return 0;
 }
 
-// ----------------------------------------
-// Lua-Exposed Functions
-// ----------------------------------------
+/*******************************************//**
+ *  Lua-Exposed Functions
+ ***********************************************/
 
 //
 // ! Get Delta Time
@@ -239,8 +247,9 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
 //   local dt = roxy.getDeltaTime()
 //   player.x = player.x + (player.speed * dt)
 //
-static int getDeltaTime_l(lua_State* L)
-{
+static int getDeltaTime_l(lua_State* L) {
+    (void)L;
+
     if (pd == NULL) {
         return 0;
     }

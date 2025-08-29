@@ -166,7 +166,6 @@ function RoxyParticles:init(x, y, opts)
   self.cpool = new_C(
     opts.maxCount,
     opts.imageTable or nil,
-    self.frameCount or 1,
     self.frameMode,
     self.staticFrame,
     self.opts.loop,

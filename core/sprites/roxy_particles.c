@@ -2,7 +2,9 @@
 
 #include "roxy_particles.h"
 #include "../../utilities/roxy_math.h"
+#include "../../utilities/roxy_heapguard.h"
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 
@@ -10,16 +12,21 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+// Absolute hard ceiling, engine will never exceed this
+#ifndef ROXY_PARTICLES_MAX_COUNT
+#define ROXY_PARTICLES_MAX_COUNT 4096
+#endif
+
+// Recommended safe budget; allocations above this are warned
+#ifndef ROXY_PARTICLES_SAFE_MAX
+#define ROXY_PARTICLES_SAFE_MAX 2048
+#endif
+
 static PlaydateAPI* pd = NULL;
 
-void roxy_particles_setPlaydateAPI(PlaydateAPI* playdate)
-{
-    pd = playdate;
-}
-
-// ----------------------------------------
-// Helpers
-// ----------------------------------------
+/*******************************************//**
+ *  Helpers
+ ***********************************************/
 
 static inline float rnd01(void)
 {
@@ -36,18 +43,10 @@ static inline float deg_to_rad(float d)
     return d * (float)M_PI / 180.0f;
 }
 
-static void* pd_alloc(size_t sz)
-{
-    return pd->system->realloc(NULL, sz);
-}
-
-static void pd_free(void* ptr)
-{
-    pd->system->realloc(ptr, 0);
-}
-
 // ! Normalize Range
 // Normalizes an angle range to determine min, max, and if it spans a full circle
+// Note: Angular ranges are directed - order matters for determining long vs short arcs
+// For example: (350, 10) creates a 20° arc crossing 0°, while (10, 350) creates a 340° arc
 static void normalizeRange(float a, float b, float* outA, float* outB, int* fullCircle)
 {
     // Normalize angles to [0, 360)
@@ -56,7 +55,7 @@ static void normalizeRange(float a, float b, float* outA, float* outB, int* full
     b = fmodf(b, 360.0f);
     if (b < 0) b += 360.0f;
 
-    // Calculate the clockwise span from a to b
+    // Calculate the directed angular span from a to b
     float span;
     if (b >= a) {
         span = b - a;
@@ -65,7 +64,7 @@ static void normalizeRange(float a, float b, float* outA, float* outB, int* full
     }
 
     // Check if this represents a full circle (or nearly full circle)
-    if (span >= 359.0f || fabsf(span - 360.0f) < 0.001f) {
+    if (span >= 359.0f || fabsf(span - 360.0f) < 0.05f) {
         *outA = 0.0f;
         *outB = 360.0f;
         *fullCircle = 1;
@@ -99,43 +98,123 @@ static int angle_in_sweep(float deg, float angMin, float angMax, int fullCircle)
     }
 }
 
-// ----------------------------------------
-//  Object Lifecycle
-// ----------------------------------------
+// ! Initialize Particle Frame
+// Helper to set up frame-related properties for a new particle
+static void init_particle_frame(RoxyParticle* p, const RoxyParticlesC* ps)
+{
+    if (ps->imageTable && ps->frameCount > 0) {
+        p->frameRate = ps->frameRate;
+        p->frameTimer = 0.0f;
+
+        switch (ps->frameMode) {
+            case FRAME_STATIC:
+                p->frame = ps->staticFrame;
+                break;
+            case FRAME_REVERSE:
+                p->frame = ps->frameCount - 1;
+                break;
+            case FRAME_RANDOM:
+                if (ps->frameCount > 0) {
+                    p->frame = rand() % ps->frameCount;
+                } else {
+                    p->frame = 0;
+                }
+                break;
+            case FRAME_SEQUENTIAL:
+            default:
+                p->frame = 0;
+                break;
+        }
+    } else {
+        p->frame = 0;
+        p->frameRate = 0.0f;
+        p->frameTimer = 0.0f;
+    }
+}
+
+/*******************************************//**
+ *  Object Lifecycle
+ ***********************************************/
 
 // ! New Particles Pool
 // Creates a new particle system with a specified maximum particle count
-RoxyParticlesC* roxy_particles_new(int maxCount, LCDBitmapTable* tbl, int frameCount, FrameMode frameMode, int staticFrame, int shouldLoop, float initFrameRate)
-
+RoxyParticlesC* roxy_particles_new(int maxCount, LCDBitmapTable* tbl, FrameMode frameMode, int staticFrameLua, int shouldLoop, float initFrameRate)
 {
-    if (!pd) return NULL;
-    if (maxCount <= 0) maxCount = 1;
-
-    RoxyParticlesC* ps = (RoxyParticlesC*)pd_alloc(sizeof(RoxyParticlesC));
-    if (!ps) return NULL;
-    memset(ps, 0, sizeof(RoxyParticlesC));
-
-    ps->maxCount = maxCount;
-    ps->pool = (RoxyParticle*)pd_alloc(sizeof(RoxyParticle) * (size_t)maxCount);
-    if (!ps->pool) {
-        pd_free(ps);
+    if (!pd) {
         return NULL;
     }
-    memset(ps->pool, 0, sizeof(RoxyParticle) * (size_t)maxCount);
+
+    if (maxCount <= 0) maxCount = 1;
+    if (maxCount > ROXY_PARTICLES_SAFE_MAX) {
+        pd->system->logToConsole("roxy_particles_new: maxCount %d exceeds safe limit %d", maxCount, ROXY_PARTICLES_SAFE_MAX);
+        maxCount = ROXY_PARTICLES_SAFE_MAX;
+    }
+
+    RoxyParticlesC* ps = (RoxyParticlesC*)roxy_malloc(sizeof(RoxyParticlesC));
+    if (!ps) {
+        pd->system->logToConsole("roxy_particles_new: Failed to allocate particle system");
+        return NULL;
+    }
+    ROXY_LABEL(ps, "RoxyParticlesC");
+    roxy_memset(ps, 0, sizeof(RoxyParticlesC));
+
+    ps->maxCount = maxCount;
+    ps->activeCount = 0;
+    ps->pool = (RoxyParticle*)roxy_malloc(sizeof(RoxyParticle) * (size_t)maxCount);
+    if (!ps->pool) {
+        pd->system->logToConsole("roxy_particles_new: Failed to allocate particle pool for %d particles", maxCount);
+        roxy_free(ps);
+        return NULL;
+    }
+    ROXY_LABEL(ps->pool, "RoxyParticlesC.pool");
+    roxy_memset(ps->pool, 0, sizeof(RoxyParticle) * (size_t)maxCount);
+
+    ps->frameRate = initFrameRate;
+
+    // Cache bitmap dimensions for performance
+    ps->cachedFrameW = 0;
+    ps->cachedFrameH = 0;
+
     if (tbl) {
-        ps->imageTable  = tbl;
-        ps->frameCount  = frameCount;
-        ps->frameMode   = frameMode;
-        ps->staticFrame = staticFrame;
-        ps->shouldLoop  = shouldLoop;
-        ps->frameRate   = initFrameRate;
+        ps->imageTable = tbl;
+
+        // Authoritative, dynamic frame count
+        int actualCount = 0;
+        while (pd->graphics->getTableBitmap(tbl, actualCount)) {
+            actualCount++;
+        }
+
+        if (actualCount > 0) {
+            ps->frameCount = actualCount;
+            ps->frameMode  = frameMode;
+
+            // Convert & clamp static frame (Lua 1-based -> C 0-based)
+            int luaStatic = staticFrameLua;
+            if (luaStatic < 1) luaStatic = 1;
+            luaStatic -= 1; // now 0-based
+            if (luaStatic >= ps->frameCount) luaStatic = ps->frameCount - 1;
+            ps->staticFrame = luaStatic;
+            ps->shouldLoop  = shouldLoop;
+
+            LCDBitmap* first = pd->graphics->getTableBitmap(tbl, 0);
+            if (first) {
+                pd->graphics->getBitmapData(first, &ps->cachedFrameW, &ps->cachedFrameH, NULL, NULL, NULL);
+            }
+        } else {
+            // Empty table: treat as no imagetable
+            ps->imageTable  = NULL;
+            ps->frameCount  = 0;
+            ps->frameMode   = FRAME_SEQUENTIAL;
+            ps->staticFrame = 0;
+            ps->shouldLoop  = 0;
+        }
     } else {
+        // No imagetable
         ps->imageTable  = NULL;
-        ps->frameCount  = 1;
+        ps->frameCount  = 0;
         ps->frameMode   = FRAME_SEQUENTIAL;
         ps->staticFrame = 0;
         ps->shouldLoop  = 0;
-        ps->frameRate   = initFrameRate;
     }
 
     return ps;
@@ -143,20 +222,20 @@ RoxyParticlesC* roxy_particles_new(int maxCount, LCDBitmapTable* tbl, int frameC
 
 // ! Free Pool
 // Frees the particle pool and sets the pointer to NULL to prevent double-free
-static void roxy_particles_free_pool(RoxyParticlesC* ps)
+void roxy_particles_free_pool(RoxyParticlesC* ps)
 {
-    if (ps == NULL || ps->pool == NULL) // Already freed --> nothing to do
+    if (ps == NULL || ps->pool == NULL)
         return;
 
     void *pool = ps->pool;
     ps->pool = NULL; // Mark as gone
 
-    pd_free(pool);
+    roxy_free(pool);
 }
 
-// ----------------------------------------
-// Lua Class Methods
-// ----------------------------------------
+/*******************************************//**
+ *  Lua Class Methods
+ ***********************************************/
 
 // ! New Object
 // Lua constructor: Creates a new particle system object
@@ -164,19 +243,16 @@ int roxy_particles_newobject(lua_State* L)
 {
     int maxCount        = pd->lua->getArgInt(1);
     LCDBitmapTable* tbl = pd->lua->getArgObject(2, "playdate.graphics.imagetable", NULL);
-    int frameCount      = pd->lua->getArgInt(3);
-    FrameMode frameMode = pd->lua->getArgInt(4);
-    int staticFrame     = pd->lua->getArgInt(5);
-    int shouldLoop      = pd->lua->getArgInt(6);
-    float initFrameRate = pd->lua->getArgFloat(7);
+    FrameMode frameMode = (FrameMode)pd->lua->getArgInt(3);
+    int staticFrameLua  = pd->lua->getArgInt(4);  // 1-based from Lua
+    int shouldLoop      = pd->lua->getArgInt(5);
+    float initFrameRate = pd->lua->getArgFloat(6);
 
-    // Pass all six into roxy_particles_new
     RoxyParticlesC* ps = roxy_particles_new(
         maxCount,
         tbl,
-        frameCount,
         frameMode,
-        staticFrame,
+        staticFrameLua,   // pass 1-based; clamp/convert inside roxy_particles_new
         shouldLoop,
         initFrameRate
     );
@@ -196,14 +272,14 @@ int roxy_particles_gc(lua_State* L)
     RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
     if (ps) {
         roxy_particles_free_pool(ps);
-        pd_free(ps);
+        roxy_free(ps);
     }
     return 0;
 }
 
-// ----------------------------------------
-// Lua-Exposed Methods
-// ----------------------------------------
+/*******************************************//**
+ *  Lua-Exposed Methods
+ ***********************************************/
 
 // ! Set Pattern
 // Args: 1 = ps, 2 = Lua string of length 8 or 16 (raw bytes)
@@ -220,10 +296,10 @@ int roxy_particles_setPattern_l(lua_State* L)
     }
 
     // Copy fill & mask (mask defaults to opaque if only 8 bytes)
-    memcpy(ps->pattern, bytes, len);
-    if (len == 8) {
-        memset(ps->pattern + 8, 0xFF, 8);
-    }
+    if (len > sizeof(ps->pattern)) len = sizeof(ps->pattern);
+    roxy_memcpy(ps->pattern, bytes, len);
+    if (len == 8) roxy_memset(ps->pattern + 8, 0xFF, 8);
+    if (len < 16) roxy_memset(ps->pattern + len, 0, 16 - len);
 
     ps->hasPattern = true;
     return 0;
@@ -232,11 +308,11 @@ int roxy_particles_setPattern_l(lua_State* L)
 // ! Set Frame Rate
 int roxy_particles_setFrameRate_l(lua_State* L)
 {
-  RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
-  if (!ps) return 0;
+    RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
+    if (!ps) return 0;
 
-  ps->frameRate = fmaxf(0.0f, pd->lua->getArgFloat(2));
-  return 0;
+    ps->frameRate = fmaxf(0.0f, pd->lua->getArgFloat(2));
+    return 0;
 }
 
 // ! Set Image Table
@@ -258,6 +334,14 @@ int roxy_particles_setImageTable_l(lua_State* L)
         }
         ps->frameCount = count;
 
+        LCDBitmap* first = pd->graphics->getTableBitmap(tbl, 0);
+        if (first) {
+            pd->graphics->getBitmapData(first, &ps->cachedFrameW, &ps->cachedFrameH, NULL, NULL, NULL);
+        } else {
+            ps->cachedFrameW = 0;
+            ps->cachedFrameH = 0;
+        }
+
         // Validate frameCount to prevent division by zero
         if (ps->frameCount <= 0) {
             ps->imageTable = NULL;
@@ -265,6 +349,8 @@ int roxy_particles_setImageTable_l(lua_State* L)
             ps->frameMode = FRAME_SEQUENTIAL;
             ps->staticFrame = 0;
             ps->shouldLoop = false;
+            ps->cachedFrameW = 0;
+            ps->cachedFrameH = 0;
             return 0;
         }
 
@@ -285,6 +371,8 @@ int roxy_particles_setImageTable_l(lua_State* L)
         ps->frameMode = FRAME_SEQUENTIAL;
         ps->staticFrame = 0;
         ps->shouldLoop = false;
+        ps->cachedFrameW = 0;
+        ps->cachedFrameH = 0;
     }
 
     return 0;
@@ -300,7 +388,6 @@ int roxy_particles_spawn_l(lua_State* L)
         return 1;
     }
 
-    // [Parameter reading code remains the same...]
     float lifeMin = fmaxf(0.0f, pd->lua->getArgFloat(2));
     float lifeMax = fmaxf(0.0f, pd->lua->getArgFloat(3));
     float speedMin = pd->lua->getArgFloat(4);
@@ -321,58 +408,33 @@ int roxy_particles_spawn_l(lua_State* L)
         return 1;
     }
 
-    // Find free slot
-    int slot = -1;
-    for (int i = 0; i < ps->maxCount; ++i) {
-        if (!ps->pool[i].alive) {
-            slot = i;
-            break;
-        }
-    }
-    if (slot < 0) {
+    // O(1) slot allocation: check if we have space
+    if (ps->activeCount >= ps->maxCount) {
         pd->lua->pushBool(0);
         return 1;
     }
 
+    // Use the next available slot at activeCount
+    int slot = ps->activeCount;
+    ps->activeCount++;
+
+    // Initialize particle (only set necessary fields)
     RoxyParticle* p = &ps->pool[slot];
-    memset(p, 0, sizeof(RoxyParticle));
     p->alive = 1;
     p->age = 0.0f;
     p->lifetime = rand_range(lifeMin, lifeMax);
 
-    if (ps->imageTable && ps->frameCount > 0) { // FrameCount validation
-        p->frameRate = ps->frameRate;
-        p->frameTimer = 0.0f;
+    // Frame initialization
+    init_particle_frame(p, ps);
 
-        // Pick the starting frame based on mode
-        switch (ps->frameMode) {
-          case FRAME_STATIC:
-            p->frame = ps->staticFrame;
-            break;
-          case FRAME_REVERSE:
-            p->frame = ps->frameCount - 1;
-            break;
-          case FRAME_RANDOM:
-            p->frame = rand() % ps->frameCount;
-            break;
-          case FRAME_SEQUENTIAL:
-          default:
-            p->frame = 0;
-            break;
-        }
+    // Angle and velocity calculation
+    float span = fullCircle ? 360.0f : (nAngMax - nAngMin);
+    if (!fullCircle && nAngMax < nAngMin) {
+        span += 360.0f;
     }
-    else {
-        p->frame = 0;
-        p->frameRate = 0.0f;
-        p->frameTimer = 0.0f;
-    }
-
-    float theta;
-    if (fullCircle) {
-        theta = deg_to_rad(rnd01() * 360.0f);
-    } else {
-        theta = deg_to_rad(rand_range(nAngMin, nAngMax));
-    }
+    float angle = nAngMin + rnd01() * span;
+    angle = fmodf(angle, 360.0f);
+    float theta = deg_to_rad(angle);
     float speed = rand_range(speedMin, speedMax);
 
     p->vx   = speed * cosf(theta);
@@ -421,67 +483,43 @@ int roxy_particles_spawnMultiple_l(lua_State* L)
         return 1;
     }
 
+    // Calculate how many we can actually spawn (O(1) check)
+    int availableSlots = ps->maxCount - ps->activeCount;
+    int actualCount = (count < availableSlots) ? count : availableSlots;
+
+    if (actualCount <= 0) {
+        pd->lua->pushInt(0);
+        return 1;
+    }
+
     // Pre-calculate ranges for efficiency
     float lifeRange = lifeMax - lifeMin;
     float speedRange = speedMax - speedMin;
     float sizeRange = sizeMax - sizeMin;
-    float angleRange = nAngMax - nAngMin;
 
-    int spawned = 0;
+    // Pre-calculate angle span
+    float span = fullCircle ? 360.0f : (nAngMax - nAngMin);
+    if (!fullCircle && nAngMax < nAngMin) {
+        span += 360.0f;
+    }
 
-    for (int i = 0; i < count; i++) {
-        // Find free slot
-        int slot = -1;
-        for (int j = 0; j < ps->maxCount; ++j) {
-            if (!ps->pool[j].alive) {
-                slot = j;
-                break;
-            }
-        }
-        if (slot < 0) {
-            break;  // No more free slots
-        }
+    // Spawn particles in O(actualCount) time
+    for (int i = 0; i < actualCount; i++) {
+        int slot = ps->activeCount + i;
+        RoxyParticle* p = &ps->pool[slot];
 
         // Initialize particle
-        RoxyParticle* p = &ps->pool[slot];
-        memset(p, 0, sizeof(RoxyParticle));
         p->alive = 1;
         p->age = 0.0f;
         p->lifetime = lifeMin + rnd01() * lifeRange;
 
-        // Frame initialization with SAFETY CHECK
-        if (ps->imageTable && ps->frameCount > 0) { // FrameCount validation
-            p->frameRate = ps->frameRate;
-            p->frameTimer = 0.0f;
-
-            switch (ps->frameMode) {
-              case FRAME_STATIC:
-                p->frame = ps->staticFrame;
-                break;
-              case FRAME_REVERSE:
-                p->frame = ps->frameCount - 1;
-                break;
-              case FRAME_RANDOM:
-                p->frame = rand() % ps->frameCount; // Now safe from division by zero
-                break;
-              case FRAME_SEQUENTIAL:
-              default:
-                p->frame = 0;
-                break;
-            }
-        } else {
-            p->frame = 0;
-            p->frameRate = 0.0f;
-            p->frameTimer = 0.0f;
-        }
+        // Frame initialization
+        init_particle_frame(p, ps);
 
         // Angle and velocity calculation
-        float theta;
-        if (fullCircle) {
-            theta = deg_to_rad(rnd01() * 360.0f);
-        } else {
-            theta = deg_to_rad(nAngMin + rnd01() * angleRange);
-        }
+        float angle = nAngMin + rnd01() * span;
+        angle = fmodf(angle, 360.0f);
+        float theta = deg_to_rad(angle);
         float speed = speedMin + rnd01() * speedRange;
 
         p->vx = speed * cosf(theta);
@@ -489,11 +527,12 @@ int roxy_particles_spawnMultiple_l(lua_State* L)
         p->x = ex;
         p->y = ey;
         p->size = sizeMin + rnd01() * sizeRange;
-
-        spawned++;
     }
 
-    pd->lua->pushInt(spawned);
+    // Update activeCount once at the end
+    ps->activeCount += actualCount;
+
+    pd->lua->pushInt(actualCount);
     return 1;
 }
 
@@ -518,16 +557,23 @@ int roxy_particles_update_l(lua_State* L)
     float axdt = ax * dt;
     float aydt = ay * dt;
 
-    int hasActiveParticles = 0;
-    for (int i = 0; i < ps->maxCount; ++i) {
+    float frameStep = 0.0f;
+    int doAnim = (ps->frameCount > 0);
+    if (doAnim) {
+        frameStep = 1.0f / fmaxf(ps->frameRate, 1.0f);
+    }
+
+    for (int i = ps->activeCount - 1; i >= 0; --i) {
         RoxyParticle* p = &ps->pool[i];
-        if (!p->alive) continue;
-        hasActiveParticles = 1;
 
         p->age += dt;
         if (p->age >= p->lifetime) {
-            p->alive = 0;
-            p->age = 0.0f;
+            // Kill particle by swapping with the last active particle
+            ps->activeCount--;
+            if (i < ps->activeCount) *p = ps->pool[ps->activeCount];
+            // Mark the now-unused slot as dead
+            ps->pool[ps->activeCount].alive = 0;
+            ps->pool[ps->activeCount].age = 0.0f;
             continue;
         }
 
@@ -539,38 +585,41 @@ int roxy_particles_update_l(lua_State* L)
         // FrameCount validation for animation
         if (p->frameRate > 0.0f && ps->frameCount > 0) {
             p->frameTimer += dt;
-            float frameStep = 1.0f / p->frameRate;
-            while (p->frameTimer >= frameStep) {
-                p->frameTimer -= frameStep;
+            float thisStep = (p->frameRate > 0.0f) ? (1.0f / p->frameRate) : frameStep;
+            while (p->frameTimer >= thisStep) {
+                p->frameTimer -= thisStep;
 
                 // Advance (or pick) the next frame
                 switch (ps->frameMode) {
-                  case FRAME_SEQUENTIAL:
-                    p->frame++;
-                    if (p->frame >= ps->frameCount) {
-                      if (ps->shouldLoop) p->frame = 0;
-                      else p->frame = ps->frameCount - 1;
-                    }
-                    break;
-                  case FRAME_REVERSE:
-                    p->frame--;
-                    if (p->frame < 0) {
-                      if (ps->shouldLoop) p->frame = ps->frameCount - 1;
-                      else p->frame = 0;
-                    }
-                    break;
-                  case FRAME_RANDOM:
-                    p->frame = rand() % ps->frameCount;
-                    break;
-                  case FRAME_STATIC:
-                  default:
-                    // No change
-                    break;
+                    case FRAME_SEQUENTIAL:
+                        p->frame++;
+                        if (p->frame >= ps->frameCount) {
+                            if (ps->shouldLoop) p->frame = 0;
+                            else p->frame = ps->frameCount - 1;
+                        }
+                        break;
+                    case FRAME_REVERSE:
+                        p->frame--;
+                        if (p->frame < 0) {
+                            if (ps->shouldLoop) p->frame = ps->frameCount - 1;
+                            else p->frame = 0;
+                        }
+                        break;
+                    case FRAME_RANDOM:
+                        if (ps->frameCount > 0) {
+                            p->frame = rand() % ps->frameCount;
+                        }
+                        break;
+                    case FRAME_STATIC:
+                    default:
+                        // No change
+                        break;
                 }
             }
         }
     }
-    pd->lua->pushBool(hasActiveParticles);
+
+    pd->lua->pushBool(ps->activeCount > 0);
     return 1;
 }
 
@@ -578,7 +627,7 @@ int roxy_particles_update_l(lua_State* L)
 // Draws all active particles
 int roxy_particles_draw_l(lua_State* L)
 {
-    RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
+    const RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
     if (!ps || !ps->pool) return 0;
 
     int color = pd->lua->getArgInt(2); // kColorBlack or kColorWhite
@@ -586,14 +635,12 @@ int roxy_particles_draw_l(lua_State* L)
     shapeID = roxy_math_clampi(shapeID, 0, 3);
 
     if (ps->imageTable && ps->frameCount > 0) { // FrameCount validation
-        int frameW = 0, frameH = 0;
-        // Get first frame using 0-based indexing
-        LCDBitmap *first = pd->graphics->getTableBitmap(ps->imageTable, 0);
-        if (first) pd->graphics->getBitmapData(first, &frameW, &frameH, NULL, NULL, NULL);
+        int frameW = ps->cachedFrameW;
+        int frameH = ps->cachedFrameH;
 
-        for (int i = 0; i < ps->maxCount; ++i) {
-            RoxyParticle* p = &ps->pool[i];
-            if (!p->alive) continue;
+        // Only loop through active particles
+        for (int i = 0; i < ps->activeCount; ++i) {
+            const RoxyParticle* p = &ps->pool[i];
 
             // Clamp frame to valid range
             int frame = p->frame;
@@ -603,7 +650,8 @@ int roxy_particles_draw_l(lua_State* L)
             // Use 0-based indexing for frame access
             LCDBitmap* bmp = pd->graphics->getTableBitmap(ps->imageTable, frame);
             if (bmp)
-                pd->graphics->drawBitmap(bmp, (int)(p->x - frameW/2), (int)(p->y - frameH/2), kBitmapUnflipped);
+                pd->graphics->drawBitmap(bmp, (int)(p->x - frameW/2.0f), (int)(p->y - frameH/2.0f), kBitmapUnflipped);
+
         }
         return 0;
     }
@@ -611,18 +659,20 @@ int roxy_particles_draw_l(lua_State* L)
     // Decide once: for filled shapes use pattern ptr or solid color
     void* fillColorPtr;
     if (ps->hasPattern && (shapeID == 0 || shapeID == 2)) {
-        fillColorPtr = ps->pattern;
+        fillColorPtr = (void*)(ps->pattern); // Cast is safe for API
     } else {
         fillColorPtr = (void*)(intptr_t)color;
     }
 
-    for (int i = 0; i < ps->maxCount; ++i) {
-        RoxyParticle* p = &ps->pool[i];
-        if (!p->alive) continue;
+    // Only loop through active particles
+    for (int i = 0; i < ps->activeCount; ++i) {
+        const RoxyParticle* p = &ps->pool[i];
 
         int x = (int)(p->x);
         int y = (int)(p->y);
         int size = (int)(p->size + 0.5f);
+        if (size < 1) size = 1;
+        if (size > 256) size = 256;
 
         switch (shapeID) {
             case 0: // Filled circle
@@ -773,11 +823,32 @@ int roxy_particles_resizePool_l(lua_State* L)
         return 1;
     }
 
-    // Compute sizes and attempt to realloc
-    size_t oldBytes = sizeof(RoxyParticle) * (size_t)ps->maxCount;
+    // Hard cap to avoid runaway allocations on device
+    if (newMax > ROXY_PARTICLES_MAX_COUNT) {
+        pd->system->logToConsole("RoxyParticlesC.resizePool: newMax=%d exceeds cap=%d",
+                                 newMax, ROXY_PARTICLES_MAX_COUNT);
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    // Additional safety check for reasonable limits on resource-constrained hardware
+    if (newMax > ROXY_PARTICLES_SAFE_MAX) {
+        pd->system->logToConsole("RoxyParticlesC.resizePool: newMax=%d exceeds safe limit=%d, consider using multiple smaller systems",
+                                 newMax, ROXY_PARTICLES_SAFE_MAX);
+    }
+
+    // Overflow guard for multiplication
+    if ((size_t)newMax > (SIZE_MAX / sizeof(RoxyParticle))) {
+        pd->system->logToConsole("RoxyParticlesC.resizePool: size overflow for newMax=%d", newMax);
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
     size_t newBytes = sizeof(RoxyParticle) * (size_t)newMax;
-    RoxyParticle* newBuf = pd->system->realloc(ps->pool, newBytes);
+
+    RoxyParticle* newBuf = (RoxyParticle*)roxy_realloc(ps->pool, newBytes);
     if (!newBuf) {
+        pd->system->logToConsole("RoxyParticlesC.resizePool: Failed to reallocate pool to %d particles", newMax);
         // On failure, leave the old pool intact
         pd->lua->pushBool(0);
         return 1;
@@ -785,11 +856,17 @@ int roxy_particles_resizePool_l(lua_State* L)
 
     // If we grew the pool, zero out the new slots
     if (newMax > ps->maxCount) {
-        memset(newBuf + ps->maxCount, 0, sizeof(RoxyParticle) * (newMax - ps->maxCount));
+        roxy_memset(newBuf + ps->maxCount, 0, sizeof(RoxyParticle) * (size_t)(newMax - ps->maxCount));
+    } else if (newMax < ps->maxCount) {
+        // If we shrunk the pool, adjust activeCount if necessary
+        if (ps->activeCount > newMax) {
+            ps->activeCount = newMax;
+        }
     }
 
-    // pdate our struct and report success
-    ps->pool     = newBuf;
+    // Update our struct and (re)label for nicer heap dumps
+    ps->pool = newBuf;
+    ROXY_LABEL(ps->pool, "RoxyParticlesC.pool");
     ps->maxCount = newMax;
 
     pd->lua->pushBool(1);
@@ -802,16 +879,17 @@ int roxy_particles_clear_l(lua_State* L)
 {
     RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
     if (!ps || !ps->pool) {
-        pd->lua->pushBool(0); // Indicate no particles active
+        pd->lua->pushBool(0);
         return 1;
     }
 
     for (int i = 0; i < ps->maxCount; ++i) {
         ps->pool[i].alive = 0;
-        ps->pool[i].age = 0.0f; // Reset age for safety
+        ps->pool[i].age = 0.0f;
     }
+    ps->activeCount = 0;
 
-    pd->lua->pushBool(0); // Indicate no particles active
+    pd->lua->pushBool(1);
     return 1;
 }
 
@@ -820,9 +898,16 @@ int roxy_particles_clear_l(lua_State* L)
 int roxy_particles_destroy_l(lua_State* L)
 {
     RoxyParticlesC* ps = pd->lua->getArgObject(1, "RoxyParticlesC", NULL);
-    if (ps) {
-        roxy_particles_free_pool(ps);
-    }
+    if (!ps) return 0;
+
+    // Idempotent: safe to call multiple times
+    roxy_particles_free_pool(ps);
+    ps->activeCount = 0;
+    ps->maxCount    = 0;
+    ps->imageTable  = NULL;
+    ps->frameCount  = 0;
+    // __gc will free the struct when Lua releases the userdata
+
     return 0;
 }
 

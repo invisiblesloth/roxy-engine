@@ -6,6 +6,18 @@ roxy = roxy or {}
 local Debug = roxy.Debug or {}
 roxy.Debug = Debug
 
+local max   <const> = math.max
+local floor <const> = math.floor
+
+local performAfterDelay <const> = pd.timer.performAfterDelay
+
+local c_heapGuardVerifyAll  <const> = roxy.heapGuardVerifyAll
+local c_heapGuardDumpActive <const> = roxy.heapGuardDumpActive
+local c_heapGuardSnap       <const> = roxy.heapGuardSnap
+
+local HG_ON = (type(c_heapGuardVerifyAll) == "function")
+Debug.heapGuardEnabled = HG_ON
+
 local debugCheckingEnabled = false
 local debugChecksActive    = false
 
@@ -15,16 +27,16 @@ Debug.visualDebug = false
 -- Store original Playdate SDK functions for tamper detection
 local debugFunctions = {}
 local function captureOriginalFunctions()
-  debugFunctions.update         = pd.update
-  debugFunctions.crankDocked    = pd.crankDocked
-  debugFunctions.crankUndocked  = pd.crankUndocked
-  debugFunctions.gameWillPause  = pd.gameWillPause
+  debugFunctions.update = pd.update
+  debugFunctions.crankDocked = pd.crankDocked
+  debugFunctions.crankUndocked = pd.crankUndocked
+  debugFunctions.gameWillPause = pd.gameWillPause
   debugFunctions.gameWillResume = pd.gameWillResume
 end
 
--- ----------------------------------------
--- Visual‑debug toggles
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Visual‑Debug Toggles
+--------------------------------------------------------------------------------
 
 -- ! Enable Visual Debug
 function Debug.enableVisualDebug()
@@ -46,9 +58,42 @@ function Debug.toggleVisualDebug()
   end)
 end
 
--- ----------------------------------------
--- Debug checking lifecycle
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Heap Guard Helpers
+--------------------------------------------------------------------------------
+
+-- ! Heap Guard Verify All
+function Debug.heapGuardVerify()
+  if HG_ON then c_heapGuardVerifyAll() end
+end
+
+-- ! Heap Guard Dump Active
+function Debug.heapGuardDump()
+  if HG_ON then c_heapGuardDumpActive() end
+end
+
+-- ! Heap Guard Snap
+function Debug.heapGuardSnap(tag)
+  if HG_ON then c_heapGuardSnap(tag) end
+end
+
+-- ! Heap Guard Verify For (Frames)
+-- Verify for N frames without touching pd.update
+function Debug.heapGuardVerifyFor(frames)
+  if not HG_ON then return end
+  local n = max(1, floor(frames or 60))
+  local function tick()
+    if n <= 0 then return end
+    c_heapGuardVerifyAll()
+    n = n - 1
+    performAfterDelay(0, tick) -- Schedule next frame
+  end
+  tick()
+end
+
+--------------------------------------------------------------------------------
+-- Debug Checking Lifecycle
+--------------------------------------------------------------------------------
 
 -- ! Enable Debug Checking
 function Debug.enableDebugChecking()
@@ -89,16 +134,16 @@ end
 function Debug.disableDebugChecking()
   if debugCheckingEnabled then
     debugCheckingEnabled = false
-    debugChecksActive    = false
+    debugChecksActive = false
     Log.info("Debug checking disabled.")
   else
     Log.warn("[Debug.disableDebugChecking] Debug checking was not enabled.")
   end
 end
 
--- ----------------------------------------
--- Runtime check Implementation
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Runtime Check Implementation
+--------------------------------------------------------------------------------
 
 -- ! Check
 local function check(funcRef, original, name)
@@ -114,11 +159,11 @@ function Debug.runChecks()
     return
   end
   if debugChecksActive then
-    check(pd.update,        debugFunctions.update,        "playdate.update")
-    check(pd.crankDocked,   debugFunctions.crankDocked,   "playdate.crankDocked")
+    check(pd.update, debugFunctions.update, "playdate.update")
+    check(pd.crankDocked, debugFunctions.crankDocked, "playdate.crankDocked")
     check(pd.crankUndocked, debugFunctions.crankUndocked, "playdate.crankUndocked")
     check(pd.gameWillPause, debugFunctions.gameWillPause, "playdate.gameWillPause")
-    check(pd.gameWillResume,debugFunctions.gameWillResume,"playdate.gameWillResume")
+    check(pd.gameWillResume, debugFunctions.gameWillResume, "playdate.gameWillResume")
   end
 end
 
