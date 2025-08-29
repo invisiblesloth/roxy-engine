@@ -67,7 +67,6 @@ local Sprite    <const> = Graphics.sprite
 
 local r           <const> = roxy
 local Debug       <const> = r.Debug
-local GameData    <const> = r.GameData
 local Cache       <const> = r.Cache
 local Config      <const> = r.Config
 local Input       <const> = r.Input
@@ -83,8 +82,6 @@ local randomseed <const> = math.randomseed
 local getSecondsSinceEpoch  <const> = pd.getSecondsSinceEpoch
 local spriteUpdate          <const> = Sprite.update
 
-local mergeImmutable <const> =roxy.Table.mergeImmutable
-
 local initConfig <const> = Config.init
 
 local getDeltaTime <const> = r.getDeltaTime
@@ -94,7 +91,6 @@ local drawCrankIndicator  <const> = Input.drawCrankIndicator
 
 local updateSequences <const> = Sequencer.update
 
-local loadTransitions             <const> = Transition.loadTransitions
 local prepareTransitionScreenshot <const> = Transition.prepareTransitionScreenshot
 local executeTransitionDrawing    <const> = Transition.executeTransitionDrawing
 
@@ -103,10 +99,9 @@ local getUpdateList     <const> = Scene.getUpdateList
 local getBackgroundList <const> = Scene.getBackgroundList
 local getDrawList       <const> = Scene.getDrawList
 
-local updateDebug <const> = Debug.update --#DEBUG
-local drawFPS     <const> = pd.drawFPS --#DEBUG
+local updateDebug <const> = Debug.update  --#DEBUG
+local drawFPS     <const> = pd.drawFPS    --#DEBUG
 
--- Constants
 local SHOW_FPS_DEFAULT  <const> = true    --#DEBUG
 local FPS_X_DEFAULT     <const> = 385     --#DEBUG
 local FPS_Y_DEFAULT     <const> = 228     --#DEBUG
