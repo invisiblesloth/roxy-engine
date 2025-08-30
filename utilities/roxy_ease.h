@@ -48,8 +48,8 @@ float roxy_ease_evaluate(int index,
                          float b,
                          float c,
                          float d,
-                         float paramA,  // (elastic “a” or back “s”)
-                         float paramB); // (elastic “p” only);
+                         float paramA,  // (elastic "a" or back "s")
+                         float paramB); // (elastic "p" only);
 
 // ----------------------------------------
 // Easing Function Prototypes
