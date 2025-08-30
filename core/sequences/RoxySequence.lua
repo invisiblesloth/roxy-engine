@@ -96,8 +96,14 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Easing
-function RoxySequence:addEasing(timestamp, from, to, duration, easeFunction)
-  self.easingArray:addEasing(timestamp, from, to, duration, easeFunction)
+function RoxySequence:addEasing(timestamp, from, to, duration, easeFn)
+  self.easingArray:addEasing(timestamp, from, to, duration, easeFn)
+end
+
+-- ! Set Easing At
+function RoxySequence:setEasingAt(idx, timestamp, from, to, duration, easeFn)
+  self.easingArray:setEasingAt(idx, timestamp, from, to, duration, easeFn)
+  return self
 end
 
 -- ! From
@@ -107,9 +113,9 @@ function RoxySequence:from(from)
 end
 
 -- ! To
-function RoxySequence:to(to, duration, easeFunction)
+function RoxySequence:to(to, duration, easeFn)
   if #self.easingArray == 0 then return self end
-  self.easingArray:to(to, duration, easeFunction)
+  self.easingArray:to(to, duration, easeFn)
   return self
 end
 
@@ -128,10 +134,10 @@ function RoxySequence:sleep(duration)
 end
 
 -- ! Callback
-function RoxySequence:callback(callbackFunction, timeOffset)
+function RoxySequence:callback(callback, timeOffset)
   local easingArray = self.easingArray
   local numEasingArray = #easingArray
-  if numEasingArray == 0 or not callbackFunction then
+  if numEasingArray == 0 or not callback then
     return self
   end
 
@@ -139,7 +145,7 @@ function RoxySequence:callback(callbackFunction, timeOffset)
   local lastTimestamp, _, _, lastDuration = getEasingData(easingArray, numEasingArray)
   local timestamp = lastTimestamp + lastDuration + (timeOffset or 0)
 
-  self.callbacks[#self.callbacks + 1] = { callbackFunction, timestamp, false }
+  self.callbacks[#self.callbacks + 1] = { callback, timestamp, false }
 
   return self
 end
@@ -269,9 +275,9 @@ function RoxySequence:update(dt)
   local numCallbacks = #callbacks
   for i = 1, numCallbacks do
     local callback = callbacks[i]
-    local callbackFunction, timestamp, triggered = callback[1], callback[2], callback[3]
+    local callbackFn, timestamp, triggered = callback[1], callback[2], callback[3]
     if timestamp >= oldTime and timestamp <= newTime and not triggered then
-      callbackFunction()
+      callbackFn()
       callback[3] = true
     end
   end
