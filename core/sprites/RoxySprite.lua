@@ -552,8 +552,8 @@ end
 -- ! Is on Screen
 function RoxySprite:isOnScreen()
   -- Direct property access instead of method calls
-  local spriteX = self.x
-  local spriteY = self.y
+  local spriteX = self.x or 0.5
+  local spriteY = self.y or 0.5
   local spriteWidth = self.width
   local spriteHeight = self.height
 
@@ -599,8 +599,8 @@ function RoxySprite:isOnScreenCached(camX, camY)
     )
   else
     -- World-space check with provided camera coordinates
-    local centerX = self.centerX
-    local centerY = self.centerY
+    local centerX = self.centerX or 0.5
+    local centerY = self.centerY or 0.5
     local left = spriteX - spriteWidth * centerX
     local top = spriteY - spriteHeight * centerY
     local right = left + spriteWidth

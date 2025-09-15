@@ -122,7 +122,7 @@ function RoxyPhysicsBody:update(dt)
   -- Zero ax so you treat acceleration as an instant "force" per input frame
   self.ax = 0
 
-  -- Also clear ay if we’re in top-down/no-gravity mode so forces don’t accumulate.
+  -- Also clear ay if we're in top-down/no-gravity mode so forces don't accumulate.
   if self.clearAyEachFrame then
     self.ay = 0
   end

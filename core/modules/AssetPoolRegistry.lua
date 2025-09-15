@@ -8,7 +8,7 @@ local Assets              <const> = roxy.Assets
 local getIsPoolRegistered <const> = Assets.getIsPoolRegistered
 local registerPool        <const> = Assets.registerPool
 
--- Weak-key set to remember “came from pool”
+-- Weak-key set to remember "came from pool"
 local poolTag = setmetatable({}, { __mode = "k" })  -- Weak keys
 
 -- ! Make From Pool
@@ -38,7 +38,7 @@ end
 
 -- ! Ensure Pool
 -- Returns the pool if it exists, or registers it on-demand.
--- Makes the “first call wins” rule go away.
+-- Makes the "first call wins" rule go away.
 function Registry.ensurePool(key, initialCount, loaderFn, options)
   if not getIsPoolRegistered(key) then
     registerPool(key, initialCount or 1, loaderFn, options)

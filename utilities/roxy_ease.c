@@ -112,7 +112,7 @@ void roxy_easingFunctions_setPlaydateAPI(PlaydateAPI* playdate)
 }
 
 // ! Roxy Ease Evaluate
-// The one “public” function that decides which pointer array to call
+// The one "public" function that decides which pointer array to call
 float roxy_ease_evaluate(
     int index,
     float t,
