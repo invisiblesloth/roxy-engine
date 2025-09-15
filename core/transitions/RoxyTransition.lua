@@ -141,7 +141,6 @@ function RoxyTransition:_onComplete()
   local scene = self._newScene
 
   if scene and scene.start then
-    print("running scene start")
     scene:start()
   end
 
