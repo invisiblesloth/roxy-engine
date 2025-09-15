@@ -50,6 +50,16 @@ Camera.smoothing      = 0   -- Smoothing rate in 1/seconds (0 = instant)
 Camera.shakeDuration  = 0   -- Remaining shake time (seconds)
 Camera.friction       = FRICTION_DEFAULT
 
+-- Public feel knobs
+Camera.targetBiasX    = 0       -- Extra pixels from center (screen space), x
+Camera.targetBiasY    = 0       -- Extra pixels from center (screen space), y
+Camera.biasReturnRate = 6       -- How fast bias returns to 0 (1/sec)
+Camera.mode           = "lerp"  -- "lerp" or "spring"
+
+-- Spring parameters (used when mode=="spring")
+Camera.springFreq = 6.0 -- Hz, natural frequency
+Camera.springDamp = 0.9 -- 0..1 (1=critical-ish)
+
 --
 -- Private Variables (internal module state; underscore-reserved)
 --
@@ -80,6 +90,9 @@ Camera._deadZoneHalfW     = 0     -- Cached half width for performance
 Camera._deadZoneHalfH     = 0     -- Cached half height for performance
 Camera._isActive          = true  -- Ensure initial update
 Camera._updateFunc        = nil   -- Default to static mode (set after functions defined)
+
+-- Parallax listeners
+Camera._onOffsetChanged = {}
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -122,6 +135,9 @@ local function _commitOffset(dt)
     Camera._screenRight = totalOffsetX + DISPLAY_WIDTH
     Camera._screenBottom = totalOffsetY + DISPLAY_HEIGHT
     Camera._isActive = true
+    for i=1,#Camera._onOffsetChanged do
+      Camera._onOffsetChanged[i](totalOffsetX, totalOffsetY)
+    end
   else
     Camera._isActive = Camera.shakeDuration > 0 or Camera._velocityX ~= 0 or Camera._velocityY ~= 0 or Camera.target ~= nil
   end
@@ -318,11 +334,40 @@ function Camera.reset()
   Camera.friction           = FRICTION_DEFAULT
   Camera._updateFunc        = Camera.updateStatic
 
+  -- Reset feel controls
+  Camera.targetBiasX        = 0
+  Camera.targetBiasY        = 0
+  Camera.biasReturnRate     = 6
+  Camera.mode               = "lerp"
+  Camera.springFreq         = 6.0
+  Camera.springDamp         = 0.9
+  Camera._onOffsetChanged   = {}
+
   -- Immediate screen‑space reset
   setDrawOffset(0, 0)
   redrawBackground()
 
   Camera._isActive = true
+end
+
+-- ! Set Bias
+function Camera.setBias(x, y)
+  Camera.targetBiasX, Camera.targetBiasY = x or 0, y or 0
+end
+
+-- ! Add Offset Listener
+function Camera.addOffsetListener(fn)  -- fn(totalOffsetX, totalOffsetY)
+  if type(fn) == "function" then table.insert(Camera._onOffsetChanged, fn) end
+end
+
+-- ! Clear Offset Listeners
+function Camera.clearOffsetListeners()
+  Camera._onOffsetChanged = {}
+end
+
+-- ! Set Mode
+function Camera.setMode(mode) -- "lerp" or "spring"
+  if mode == "spring" or mode == "lerp" then Camera.mode = mode end
 end
 
 -- ! Update
@@ -355,9 +400,9 @@ function Camera.updateFollow(dt)
   end
   --#DEBUG END
 
-  -- Calculate desired target position
-  local desiredX = px - CENTER_X
-  local desiredY = py - CENTER_Y
+  -- Calculate desired target position (world top-left for screen center)
+  local desiredX = (px - CENTER_X) + Camera.targetBiasX
+  local desiredY = (py - CENTER_Y) + Camera.targetBiasY
 
   -- Apply dead zone
   if Camera._deadZoneWidth > 0 and Camera._deadZoneHeight > 0 then
@@ -385,13 +430,27 @@ function Camera.updateFollow(dt)
   end
 
   -- Interpolate or set position
-  if hasSmoothing then
-    local t = min(Camera.smoothing * dt, 1)
-    Camera.x = lerp(Camera.x, Camera._targetX, t)
-    Camera.y = lerp(Camera.y, Camera._targetY, t)
+  if Camera.mode == "spring" then
+    -- critically damped spring (Tustin-ish simple integrator)
+    -- convert freq,damp to params
+    local omega = 2 * pi * Camera.springFreq
+    local zeta  = Camera.springDamp
+    -- velocity form
+    local ax = omega * omega * (desiredX - Camera.x) - 2 * zeta * omega * Camera._velocityX
+    local ay = omega * omega * (desiredY - Camera.y) - 2 * zeta * omega * Camera._velocityY
+    Camera._velocityX = Camera._velocityX + ax * dt
+    Camera._velocityY = Camera._velocityY + ay * dt
+    Camera.x = Camera.x + Camera._velocityX * dt
+    Camera.y = Camera.y + Camera._velocityY * dt
   else
-    Camera.x = Camera._targetX
-    Camera.y = Camera._targetY
+    if hasSmoothing then
+      local t = min(Camera.smoothing * dt, 1)
+      Camera.x = lerp(Camera.x, Camera._targetX, t)
+      Camera.y = lerp(Camera.y, Camera._targetY, t)
+    else
+      Camera.x = Camera._targetX
+      Camera.y = Camera._targetY
+    end
   end
 
   -- Clamp final position
