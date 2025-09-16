@@ -4,8 +4,8 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r         <const> = roxy
-local Camera   <const> = r.Camera
+local r       <const> = roxy
+local Camera  <const> = r.Camera
 
 local newImage      <const> = Graphics.image.new
 local newImagetable <const> = Graphics.imagetable.new
@@ -100,26 +100,35 @@ end
 -- View Management
 --------------------------------------------------------------------------------
 
--- ! Set View
--- Sets the visual representation for the sprite (image or animation).
-function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration)
-  if not view then
-    self:setVisible(false)
-    self._drawFn = nil
-    return self
-  end
-  self:setVisible(true)
-
+-- ! Clear View Helper
+function RoxySprite:clearView()
   -- Dispose previous visual
   if self.animation then
     self.animation:stop()
-    if self.animation.release then self.animation:release() end -- balance any retain
+    if self.animation.release then self.animation:release() end -- Balance any retain
     self.animation = nil
   end
   self.simpleAnim = nil -- Clear any previous simpleAnim
   if self:getImage() then
     self:setImage(nil)
   end
+  self._drawFn = nil
+  -- Set fallback size when clearing view
+  self:setSize(0, 0)
+end
+
+-- ! Set View
+-- Sets the visual representation for the sprite (image or animation).
+function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration)
+  if not view then
+    self:setVisible(false)
+    self:clearView()
+    return self
+  end
+  self:setVisible(true)
+
+  -- Clear previous state
+  self:clearView()
 
   -- Small helper: size this sprite from the first frame of an imagetable
   local function _applySizeFromImagetable(imagetable)
@@ -260,7 +269,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         currentFrame  = 1,
         frameDuration = frameDuration or 0.1,
         accumulator   = 0,
-        loop          = true,
+        loop          = (singleAnimationLoop ~= false),
       }
       -- Ensure the sprite has bounds for culling/dirty-rects
       _applySizeFromImagetable(view)
@@ -547,29 +556,33 @@ function RoxySprite:update()
     local oldFrame = currentFrame -- Track if frame changes
 
     accumulator = accumulator + dt
-    if accumulator >= frameDuration then
+
+    -- Use while loop to handle large delta times properly
+    while accumulator >= frameDuration do
       currentFrame = currentFrame + 1
       if currentFrame > endFrame then
         if loop then
           currentFrame = startFrame
         else
           currentFrame = endFrame
+          -- Auto-pause completed one-shot animations for performance
+          if not loop then
+            self:pause()
+          end
         end
       end
-      accumulator = accumulator - frameDuration -- Preserve overflow for smooth timing
-
-      -- Write back the changed values
-      simpleAnim.currentFrame = currentFrame
-      simpleAnim.accumulator = accumulator
-
-      -- Only mark dirty if frame actually changed
-      if currentFrame ~= oldFrame then
-        self:markDirty()
-      end
-    else
-      -- Only update accumulator if we didn't enter the timing branch
-      simpleAnim.accumulator = accumulator
+      accumulator = accumulator - frameDuration
     end
+
+    -- Write back the changed values
+    simpleAnim.currentFrame = currentFrame
+    simpleAnim.accumulator = accumulator
+
+    -- Only mark dirty if frame actually changed
+    if currentFrame ~= oldFrame then
+      self:markDirty()
+    end
+
     return
   end
 
@@ -632,69 +645,64 @@ function RoxySprite:isAdded()
 end
 
 -- ! Is on Screen
+-- Unified bounds calculation logic with proper center anchor handling
 function RoxySprite:isOnScreen()
-  -- Direct property access instead of method calls
-  local spriteX = self.x or 0.5
-  local spriteY = self.y or 0.5
-  local spriteWidth = self.width
-  local spriteHeight = self.height
+  local spriteX = self.x or 0
+  local spriteY = self.y or 0
+  local spriteWidth = self.width or 0
+  local spriteHeight = self.height or 0
+  local centerX = self.centerX or 0.5
+  local centerY = self.centerY or 0.5
 
+  -- Calculate actual bounds based on center anchor
+  local left = spriteX - spriteWidth * centerX
+  local top = spriteY - spriteHeight * centerY
+  local right = left + spriteWidth
+  local bottom = top + spriteHeight
+
+  local leftLimit, topLimit, rightLimit, bottomLimit
   if self._ignoresDrawOffset then
-    -- Screen-space check (simpler case)
-    return not (
-      spriteX + spriteWidth < 0 or spriteX > DISPLAY_WIDTH or
-      spriteY + spriteHeight < 0 or spriteY > DISPLAY_HEIGHT
-    )
+    -- Screen-space bounds
+    leftLimit, topLimit = 0, 0
+    rightLimit, bottomLimit = DISPLAY_WIDTH, DISPLAY_HEIGHT
   else
-    -- World-space check with camera
-    local centerX = self.centerX
-    local centerY = self.centerY
-    local left = spriteX - spriteWidth * centerX
-    local top = spriteY - spriteHeight * centerY
-    local right = left + spriteWidth
-    local bottom = top + spriteHeight
-
-    -- Cache camera position once
+    -- World-space bounds with camera
     local camX, camY = getPosition()
-    return not (
-      right < camX or
-      left > camX + DISPLAY_WIDTH or
-      bottom < camY or
-      top > camY + DISPLAY_HEIGHT
-    )
+    leftLimit, topLimit = camX, camY
+    rightLimit, bottomLimit = camX + DISPLAY_WIDTH, camY + DISPLAY_HEIGHT
   end
+
+  return not (right < leftLimit or left > rightLimit or bottom < topLimit or top > bottomLimit)
 end
 
 -- ! Is on Screen (with cached camera)
+-- Unified with isOnScreen logic and proper fallbacks
 function RoxySprite:isOnScreenCached(camX, camY)
-  -- Direct property access instead of method calls
-  local spriteX = self.x
-  local spriteY = self.y
-  local spriteWidth = self.width
-  local spriteHeight = self.height
+  local spriteX = self.x or 0
+  local spriteY = self.y or 0
+  local spriteWidth = self.width or 0
+  local spriteHeight = self.height or 0
+  local centerX = self.centerX or 0.5
+  local centerY = self.centerY or 0.5
 
+  -- Calculate actual bounds based on center anchor
+  local left = spriteX - spriteWidth * centerX
+  local top = spriteY - spriteHeight * centerY
+  local right = left + spriteWidth
+  local bottom = top + spriteHeight
+
+  local leftLimit, topLimit, rightLimit, bottomLimit
   if self._ignoresDrawOffset then
-    -- Screen-space check (simpler case) - camera position irrelevant
-    return not (
-      spriteX + spriteWidth < 0 or spriteX > DISPLAY_WIDTH or
-      spriteY + spriteHeight < 0 or spriteY > DISPLAY_HEIGHT
-    )
+    -- Screen-space bounds (camera position irrelevant)
+    leftLimit, topLimit = 0, 0
+    rightLimit, bottomLimit = DISPLAY_WIDTH, DISPLAY_HEIGHT
   else
-    -- World-space check with provided camera coordinates
-    local centerX = self.centerX or 0.5
-    local centerY = self.centerY or 0.5
-    local left = spriteX - spriteWidth * centerX
-    local top = spriteY - spriteHeight * centerY
-    local right = left + spriteWidth
-    local bottom = top + spriteHeight
-
-    return not (
-      right < camX or
-      left > camX + DISPLAY_WIDTH or
-      bottom < camY or
-      top > camY + DISPLAY_HEIGHT
-    )
+    -- World-space bounds with provided camera coordinates
+    leftLimit, topLimit = camX, camY
+    rightLimit, bottomLimit = camX + DISPLAY_WIDTH, camY + DISPLAY_HEIGHT
   end
+
+  return not (right < leftLimit or left > rightLimit or bottom < topLimit or top > bottomLimit)
 end
 
 -- ! Get Screen Position
