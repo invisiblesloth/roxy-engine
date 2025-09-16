@@ -4,50 +4,106 @@ local pd        <const> = playdate
 local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 
-local r         <const> = roxy
-
 local max             <const> = math.max
 local min             <const> = math.min
 local fmod            <const> = math.fmod
-local clamp           <const> = r.Math.clamp
-local truncateDecimal <const> = r.Math.truncateDecimal
 
 local newImagetable <const> = Graphics.imagetable.new
 local drawImage     <const> = Graphics.imagetable.drawImage
 
 local performAfterDelay <const> = pd.timer.performAfterDelay
 
-local updateAnimation <const> = r.Animation.update -- C Function
+local r         <const> = roxy
+local Math      <const> = r.Math
+local Assets    <const> = r.Assets
+local Animation <const> = r.Animation
+
+local clamp           <const> = Math.clamp
+local truncateDecimal <const> = Math.truncateDecimal
+
+local getAsset <const> = Assets.getAsset
+
+local updateAnimation <const> = Animation.update -- C Function
 
 local UNFLIPPED <const> = Graphics.kImageUnflipped
 
-local FRAME_DURATION_DEFAULT  <const> = 0.033 -- ≈30 FPS
-local MIN_FRAME_DURATION      <const> = 0.016 -- Guard against >60 FPS
+local FRAME_DURATION_DEFAULT  <const> = 0.033 -- About 30 FPS
+local MIN_FRAME_DURATION      <const> = 0.016 -- Guard against >60 FPS
 local MAX_FRAME_DURATION      <const> = 10    -- Sensible upper limit (sec)
 local MAX_ANIMATION_SPEED     <const> = 100   -- UI clamp for setSpeed
 
+-- Track shared animations by imagetable identity (weak keys)
+local _animCache = setmetatable({}, { __mode = "k" })
+
 -- ----------------------------------------
--- Class Definition & Init
+-- Class Definition and Initialize
 -- ----------------------------------------
 
 class("RoxyAnimation").extends(Object)
 
+-- ! Helper: From Image Table
+-- Constructor for imagetable objects
+function RoxyAnimation.fromImagetable(imagetable)
+  if not (imagetable and imagetable.drawImage) then
+    Log.error("[RoxyAnimation.fromImagetable] Expected imagetable userdata")
+    return nil
+  end
+
+  local cached = _animCache[imagetable]
+  if cached then
+    return cached:retain()
+  end
+
+  local self = RoxyAnimation(imagetable) -- init handles imagetable or path
+  self._refcount = 1
+  _animCache[imagetable] = self
+  return self
+end
+
+-- ! Helper: From Pool
+-- Helper to fetch from Assets pool directly
+function RoxyAnimation.fromPool(poolKey)
+  local imagetable = getAsset(poolKey)
+  if not imagetable then
+    Log.error("[RoxyAnimation.fromPool] No asset for key: ", tostring(poolKey)) --#DEBUG
+    return nil
+  end
+  return RoxyAnimation.fromImagetable(imagetable)
+end
+
+-- ! Initialize
+-- Keep existing path constructor but delegate the config init to a helper
 function RoxyAnimation:init(view)
   self.isRoxyAnimation = true
 
-  --#DEBUG START
-  if type(view) ~= "string" then
-    Log.error("[RoxyAnimation:init] Invalid view type for RoxyAnimation:", type(view), 2)
+  local viewType = type(view)
+  if viewType == "string" then
+    local imagetable = Graphics.imagetable.new(view)
+    --#DEBUG START
+    Log.assert(imagetable, function()
+      return string.format("[RoxyAnimation:init] Failed to create imagetable from: %s", tostring(view))
+    end, 1)
+    --#DEBUG END
+    self:_initCommon()
+    self.imagetable = imagetable
+    self._refcount  = 1
+    return
   end
-  --#DEBUG END
 
-  self.imagetable = newImagetable(view)
-  --#DEBUG START
-  if not self.imagetable then
-    Log.error("[RoxyAnimation:init] Failed to create imagetable from view:", view)
+  -- Support imagetables directly
+  if viewType == "userdata" and view and view.drawImage then
+    self:_initCommon()
+    self.imagetable = view
+    self._refcount = 1
+    return
   end
-  --#DEBUG END
 
+  Log.error("[RoxyAnimation:init] Expected string path or imagetable userdata (got " .. viewType .. ")", 1) --#DEBUG
+end
+
+-- ! Common Initialize
+-- Common initialization for both constructors
+function RoxyAnimation:_initCommon()
   self.animations       = {}
   self.defaultName      = nil
   self.currentName      = nil
@@ -56,6 +112,26 @@ function RoxyAnimation:init(view)
   self.isFirstCycle     = true
   self.isReversed       = false
   self.accumulator      = 0
+end
+
+-- ! Retain
+-- Increment reference count
+function RoxyAnimation:retain()
+  self._refcount = (self._refcount or 0) + 1
+  return self
+end
+
+-- ! Release
+-- Reference release; recycles imagetable when count drops to zero
+function RoxyAnimation:release()
+  if not self._refcount then return end
+
+  self._refcount = self._refcount - 1
+  if self._refcount <= 0 then
+    _animCache[self.imagetable] = nil
+    -- Do not free imagetable here; Assets pool owns it.
+    self:destroy()
+  end
 end
 
 -- ----------------------------------------
@@ -354,4 +430,5 @@ function RoxyAnimation:destroy()
   self.currentAnimation = nil
   self.animations = {}
   self.imagetable = nil
+  self._refcount = nil
 end
