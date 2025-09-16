@@ -23,7 +23,7 @@ function RoxyActor:init(manifest, defaultState)
 
   --#DEBUG START
   if not manifest.sheet then
-    Log.warn("[RoxyActor:init] No spritesheet provided in manifest")
+    Log.warn("[RoxyActor:init] No spritesheet/imagetable provided in manifest")
   end
   --#DEBUG END
 
@@ -33,65 +33,78 @@ function RoxyActor:init(manifest, defaultState)
   self.nextState    = nil
   self.facing       = 1
 
-  -- Set up view if sheet provided
+  -- Set up view based on sheet type
   if manifest.sheet then
-    self:setView(manifest.sheet, true, false, false)
+    local sheet = manifest.sheet
+    local sheetType = type(sheet)
+
+    if sheetType == "string" then
+      self:setView(sheet, true, false, false)
+    elseif sheetType == "userdata" and sheet.drawImage then
+      self:setView(RoxyAnimation.fromImagetable(sheet))
+    elseif sheetType == "table" then
+      -- Accept a direct RoxyAnimation, or a wrapper {animation=anim}
+      if sheet.isRoxyAnimation then
+        self:setView(s:retain()) -- Direct animation instance
+      elseif sheet.animation and sheet.animation.isRoxyAnimation then
+        self:setView(sheet.animation:retain())
+      else --#DEBUG
+        Log.warn("[RoxyActor:init] Unsupported table for 'sheet' (expected RoxyAnimation or {animation=...})") --#DEBUG
+      end
+    else --#DEBUG
+      Log.warn("[RoxyActor:init] Unsupported sheet type; expected path, imagetable, RoxyAnimation, or {animation=...}") --#DEBUG
+    end
   end
 
   -- Prepare for building animations
   local animation = self.animation
   local imagetable = animation and animation.imagetable
-  local perRow = manifest.frames or (imagetable and #imagetable) or 1
   local rows = manifest.rows
-  if type(rows) ~= "table" then
-    Log.warn("[RoxyActor:init] Manifest.rows missing or not a table; defaulting to empty") --#DEBUG
-    rows = {}
-  end
-  local doLoop = manifest.loop or {}
-  local doNext = manifest.next or {}
 
-  -- Build animations from rows
-  if imagetable then
+  -- Only build if rows is actually a table.
+  if type(rows) == "table" and imagetable then
+    local perRow = manifest.frames or #imagetable or 1
+    local doLoop = manifest.loop or {}
+    local doNext = manifest.next or {}
+
     for stateName, info in pairs(rows) do
       local startFrame, endFrame
       if type(info) == "table" then
         startFrame = info.start
-        endFrame = info.finish
+        endFrame   = info.finish
       else
-        -- fallback older style: index by row
         startFrame = (info - 1) * perRow + 1
-        endFrame = info * perRow
+        endFrame   = info * perRow
       end
-
-      local loop      = doLoop[stateName] ~= false
-      local nextState = doNext[stateName]
-      local speed    = (type(info) == "table") and info.speed or nil
-      local frameDur = (type(info) == "table") and info.frameDuration or nil
       self:addAnimation{
-        name                = stateName,
-        startFrame          = startFrame,
-        endFrame            = endFrame,
-        loop                = loop,
-        next                = nextState,
-        speed               = speed,
-        frameDuration       = frameDur,
-        onCompleteCallback  = function()
-          self:_onAnimationComplete(stateName)
-        end,
+        name       = stateName,
+        startFrame = startFrame,
+        endFrame   = endFrame,
+        loop       = (doLoop[stateName] ~= false),
+        next       = doNext[stateName],
+        speed      = (type(info) == "table") and info.speed or nil,
+        frameDuration = (type(info) == "table") and info.frameDuration or nil,
+        onCompleteCallback = function() self:_onAnimationComplete(stateName) end,
       }
     end
-  else --#DEBUG
-    Log.warn("[RoxyActor:init] No valid imagetable; animation states not set up") --#DEBUG
+  else
+    -- rows missing is fine when we already have a prebuilt animation
+    -- (do nothing)
   end
 
   -- Ensure animations table is present
-  self.animations = self.animations or (animation and animation.animations) or {}
+  local animation = self.animation
+  self.animations = (animation and animation.animations) or self.animations or {}
 
   -- Cache transition rules for physics updates
   self:_cacheTransitionRules()
 
-  -- Start in default or first-added state
-  self:setState(self.defaultState or self.defaultName)
+  -- Start in default or first-added state (only if it exists)
+  if self.defaultState and self.animations[self.defaultState] then
+    self:setState(self.defaultState)
+  elseif self.defaultName and self.animations[self.defaultName] then
+    self:setState(self.defaultName)
+  end
 end
 
 -- ----------------------------------------
@@ -200,26 +213,19 @@ end
 -- ! Play Once
 -- Play a one-shot animation state, then return to the previous/default.
 function RoxyActor:playOnce(stateName, onFinish)
-  --#DEBUG START
-  if type(stateName) ~= "string" then
-    Log.warn("[RoxyActor:playOnce] Expected string for playOnce stateName, got", type(stateName))
-    return self
-  end
-  if not self.animations[stateName] then
-    Log.warn("[RoxyActor:playOnce] Unknown one-shot state:", stateName)
-    return self
-  end
-  --#DEBUG END
+  if not self.animation or not self.animations then return self end
 
+  if type(stateName) ~= "string" or not self.animations[stateName] then
+    Log.warn("[RoxyActor:playOnce] Unknown one-shot state:" .. tostring(stateName)) --#DEBUG
+    return self
+  end
   local prev = self.currentState or self.defaultState
   self:queueState(prev)
   if type(onFinish) == "function" then
-    -- Attach a temporary callback for when the animation completes
     self._onPlayOnceFinish = onFinish
   else
     self._onPlayOnceFinish = nil
   end
-
   return self:setState(stateName, true)
 end
 
