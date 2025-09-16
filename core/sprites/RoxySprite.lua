@@ -113,11 +113,82 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
   -- Dispose previous visual
   if self.animation then
     self.animation:stop()
+    if self.animation.release then self.animation:release() end -- balance any retain
     self.animation = nil
   end
   self.simpleAnim = nil -- Clear any previous simpleAnim
   if self:getImage() then
     self:setImage(nil)
+  end
+
+  -- Small helper: size this sprite from the first frame of an imagetable
+  local function _applySizeFromImagetable(imagetable)
+    if imagetable and imagetable.getImage then
+      local first = imagetable:getImage(1)
+      if first and first.getSize then
+        local width, height = first:getSize()
+        if width and height then
+          self:setSize(width, height)
+          self:setCenter(0.5, 0.5)
+        end
+      end
+    end
+  end
+
+  -- Handle descriptor table form
+  if type(view) == "table" and view.poolKey then
+    local kind = view.kind or "sheet"
+    if kind == "sheet" then
+      -- Load imagetable from pool; wrap as RoxyAnimation
+      local imagetable = roxy.Assets.getAsset(view.poolKey)
+      if not imagetable then
+        Log.error("[RoxySprite:setView] Pool key not found: ", view.poolKey) --#DEBUG
+        return self
+      end
+      self.animation = RoxyAnimation.fromImagetable(imagetable) -- Refcount owned by this sprite
+      _applySizeFromImagetable(self.animation.imagetable)
+      self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+
+    elseif kind == "animation" then
+      -- Pooled/shared animation object in Assets pool
+      local animation = roxy.Assets.getAsset(view.poolKey)
+      if type(animation) == "table" and animation.isRoxyAnimation then
+        if animation.retain then animation:retain() end -- Retain while this sprite uses it
+        self.animation = animation
+        _applySizeFromImagetable(self.animation.imagetable)
+        self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+      else --#DEBUG
+        Log.error("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: ", view.poolKey) --#DEBUG
+      end
+
+    elseif kind == "image" then
+      local img = roxy.Assets.getAsset(view.poolKey)
+      if img and img.draw then
+        self:setImage(img) -- Sets sprite size from image
+        self._drawFn = function(_, x, y, flip) img:draw(x, y, flip) end
+      else --#DEBUG
+        Log.error("[RoxySprite:setView] Pool key does not resolve to Image: ", view.poolKey) --#DEBUG
+      end
+    end
+    return self
+  end
+
+  -- Handle direct pooled objects (existing extension)
+  if type(view) == "table" and view.imagetable then
+    -- Direct imagetable object from pool
+    self.animation = RoxyAnimation.fromImagetable(view.imagetable) -- refcount owned by this sprite
+    _applySizeFromImagetable(self.animation.imagetable)
+    self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+    return self
+  end
+
+  if type(view) == "table" and view.animation and (type(view.animation) == "table" and view.animation.isRoxyAnimation) then
+    -- Direct pooled animation object
+    if view.animation.retain then view.animation:retain() end -- retain while this sprite uses it
+    self.animation = view.animation
+    _applySizeFromImagetable(self.animation.imagetable)
+    self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+    return self
   end
 
   -- Pick and cache draw path
@@ -135,10 +206,12 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
           startFrame    = 1,
           endFrame      = imagetable:getLength(),
           currentFrame  = 1,
-          frameDuration = frameDuration,
+          frameDuration = frameDuration or 0.1,
           accumulator   = 0,
-          loop          = singleAnimationLoop,
+          loop          = (singleAnimationLoop ~= false),
         }
+        -- Ensure the sprite has bounds for culling/dirty-rects
+        _applySizeFromImagetable(imagetable)
         -- Draw function for simpleanim
         self._drawFn = function(sprite, x, y, flip)
           local simpleAnim = sprite.simpleAnim
@@ -148,10 +221,11 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         end
       else
         -- Full RoxyAnimation
-        self.animation = RoxyAnimation(view)
+        self.animation = RoxyAnimation(view) -- path-based constructor
         if not (self.animation and self.animation.imagetable) then
           Log.error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite") --#DEBUG
         end
+        _applySizeFromImagetable(self.animation and self.animation.imagetable)
         self._drawFn = function(sprite, x, y, flip)
           sprite.animation:draw(x, y, flip)
         end
@@ -159,19 +233,24 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     else
       -- Static
       local image = newImage(view)
-      self:setImage(image)
+      self:setImage(image) -- playdate sets sprite size from image
       self._drawFn = function(sprite, x, y, flip)
         local img = sprite:getImage()
         if img then img:draw(x, y, flip) end
       end
     end
-  elseif type(view) == "table" and RoxyAnimation:isa(view) then
+
+  elseif type(view) == "table" and (view.isRoxyAnimation == true) then
+    -- Passed a RoxyAnimation instance directly
+    if view.retain then view:retain() end -- retain while this sprite uses it
     self.animation = view
+    _applySizeFromImagetable(self.animation.imagetable)
     self._drawFn = function(sprite, x, y, flip)
       sprite.animation:draw(x, y, flip)
     end
+
   elseif type(view) == "userdata" then
-    -- If it's an ImageTable (has drawImage), treat as a simpleAnim
+    -- If it is an ImageTable (has drawImage), treat as a simpleAnim
     if view.drawImage then
       local length = view:getLength()
       self.simpleAnim = {
@@ -183,6 +262,8 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         accumulator   = 0,
         loop          = true,
       }
+      -- Ensure the sprite has bounds for culling/dirty-rects
+      _applySizeFromImagetable(view)
       self._drawFn = function(sprite, x, y, flip)
         local anim = sprite.simpleAnim
         if anim and anim.imagetable then
@@ -191,11 +272,12 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       end
     else
       -- otherwise it must be a plain image
-      self:setImage(view)
+      self:setImage(view) -- playdate sets sprite size from image
       self._drawFn = function(_, x, y, flip)
         view:draw(x, y, flip)
       end
     end
+
   else
     Log.error("[RoxySprite:setView] Unsupported view type for RoxySprite:", type(view)) --#DEBUG
     self._drawFn = nil
@@ -625,8 +707,12 @@ function RoxySprite:getScreenPosition()
 end
 
 -- ! Destroy
+-- On destroy/remove, release shared animation
 function RoxySprite:destroy()
   self:remove()
+  if self.animation and self.animation.release then
+    self.animation:release()
+  end
   self.animation  = nil
   self.simpleAnim = nil
   self:setImage(nil)
