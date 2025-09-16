@@ -40,12 +40,12 @@ function RoxyActor:init(manifest, defaultState)
 
     if sheetType == "string" then
       self:setView(sheet, true, false, false)
-    elseif sheetType == "userdata" and sheet.drawImage then
+    elseif sheetType == "userdata" and sheet.getImage then  -- Fixed: changed from drawImage to getImage
       self:setView(RoxyAnimation.fromImagetable(sheet))
     elseif sheetType == "table" then
       -- Accept a direct RoxyAnimation, or a wrapper {animation=anim}
       if sheet.isRoxyAnimation then
-        self:setView(s:retain()) -- Direct animation instance
+        self:setView(sheet:retain()) -- Fixed: changed from s:retain() to sheet:retain()
       elseif sheet.animation and sheet.animation.isRoxyAnimation then
         self:setView(sheet.animation:retain())
       else --#DEBUG
@@ -63,7 +63,7 @@ function RoxyActor:init(manifest, defaultState)
 
   -- Only build if rows is actually a table.
   if type(rows) == "table" and imagetable then
-    local perRow = manifest.frames or #imagetable or 1
+    local perRow = manifest.frames or (imagetable and #imagetable) or 1  -- Fixed: safer nil handling
     local doLoop = manifest.loop or {}
     local doNext = manifest.next or {}
 
@@ -99,11 +99,10 @@ function RoxyActor:init(manifest, defaultState)
   -- Cache transition rules for physics updates
   self:_cacheTransitionRules()
 
-  -- Start in default or first-added state (only if it exists)
+  -- Start in default state (only if it exists)
+  -- Fixed: Removed the undefined self.defaultName condition
   if self.defaultState and self.animations[self.defaultState] then
     self:setState(self.defaultState)
-  elseif self.defaultName and self.animations[self.defaultName] then
-    self:setState(self.defaultName)
   end
 end
 
@@ -121,12 +120,36 @@ function RoxyActor:_cacheTransitionRules()
   if type(rules) ~= "table" then
     return
   end
+
+  -- Pre-parse condition types for performance
   for _, rule in ipairs(rules) do
     if rule.state then
       local conds = {}
       for key, value in pairs(rule) do
         if key ~= "state" then
-          conds[key] = value
+          -- Parse condition type once during caching
+          local condType = "eq" -- default to equality
+          local optionName = key
+
+          if key:find("GreaterThan$") then
+            condType = "gt"
+            optionName = key:gsub("GreaterThan$", "")
+          elseif key:find("LessThan$") then
+            condType = "lt"
+            optionName = key:gsub("LessThan$", "")
+          elseif key:find("AtLeast$") then
+            condType = "gte"
+            optionName = key:gsub("AtLeast$", "")
+          elseif key:find("AtMost$") then
+            condType = "lte"
+            optionName = key:gsub("AtMost$", "")
+          end
+
+          table.insert(conds, {
+            type = condType,
+            option = optionName,
+            value = value
+          })
         end
       end
       table.insert(self._transitionRulesCache, { state = rule.state, conditions = conds })
@@ -270,32 +293,42 @@ end
 
 function RoxyActor:updatePhysics(opts)
   opts = opts or {}
+
+  -- Provide defaults for commonly used options
   local vx        = opts.vx        or 0
   local vy        = opts.vy        or 0
   local desiredVx = opts.intentVX  or vx
+  local onGround  = opts.onGround ~= nil and opts.onGround or true  -- Fixed: safer default handling
 
-  self:setFacing(vx)
+  -- Cache frequently accessed values
+  local anim = self.animation
+  local currentAnimation = anim and anim.currentAnimation
 
-  -- Cached transition rules
+  -- Check one-shots first to avoid interruption
+  if currentAnimation and not currentAnimation.loop then
+    return self
+  end
+
+  -- Set facing based on desired velocity (intent, not actual)
+  self:setFacing(desiredVx)
+
+  -- Cached transition rules with optimized condition checking
   local cache = self._transitionRulesCache
   if cache and #cache > 0 then
     for _, rule in ipairs(cache) do
       local ok = true
-      for key, value in pairs(rule.conditions) do
-        if key:find("GreaterThan$") then
-          local option = key:gsub("GreaterThan$", "")
-          if not (opts[option] and opts[option] > value) then ok = false break end
-        elseif key:find("LessThan$") then
-          local option = key:gsub("LessThan$", "")
-          if not (opts[option] and opts[option] < value) then ok = false break end
-        elseif key:find("AtLeast$") then
-          local option = key:gsub("AtLeast$", "")
-          if not (opts[option] and opts[option] >= value) then ok = false break end
-        elseif key:find("AtMost$") then
-          local option = key:gsub("AtMost$", "")
-          if not (opts[option] and opts[option] <= value) then ok = false break end
-        else
-          if opts[key] ~= value then ok = false break end
+      for _, cond in ipairs(rule.conditions) do
+        local optVal = opts[cond.option]
+        if cond.type == "gt" then
+          if not (optVal and optVal > cond.value) then ok = false break end
+        elseif cond.type == "lt" then
+          if not (optVal and optVal < cond.value) then ok = false break end
+        elseif cond.type == "gte" then
+          if not (optVal and optVal >= cond.value) then ok = false break end
+        elseif cond.type == "lte" then
+          if not (optVal and optVal <= cond.value) then ok = false break end
+        else -- equality
+          if optVal ~= cond.value then ok = false break end
         end
       end
       if ok and rule.state ~= self.currentState then
@@ -304,19 +337,11 @@ function RoxyActor:updatePhysics(opts)
     end
   end
 
-  -- Don't interrupt one-shots
-  local currentAnimation = self.animation and self.animation.currentAnimation
-  if currentAnimation and not currentAnimation.loop then
-    return self
-  end
-
   -- Generic fallback (idle / run / jump / fall)
   local targetState
-  if opts.onGround == false then
+  if onGround == false then
     targetState = (vy < 0) and "jump" or "fall"
   elseif abs(desiredVx) > 0 then
-    self.facing = desiredVx < 0 and -1 or 1
-    if self.facing < 0 then self:flipX() else self:unflip() end
     targetState = "run"
   else
     targetState = "idle"
