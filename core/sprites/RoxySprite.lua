@@ -21,11 +21,13 @@ local r       <const> = roxy
 local Assets  <const> = r.Assets
 local Camera  <const> = r.Camera
 
+-- Roxy Utilities
+local round <const> = r.Math.round
+
 -- Roxy Framework Function Aliases
 local getAsset      <const> = Assets.getAsset
 local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
-local round         <const> = r.Math.round
 
 --------------------------------------------------------------------------------
 -- Graphics Constants
@@ -227,8 +229,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       -- Load imagetable from pool; wrap as RoxyAnimation
       local imagetable = getAsset(view.poolKey)
       if not imagetable then
-        Log.error("[RoxySprite:setView] Pool key not found: ", view.poolKey) --#DEBUG
-        return self
+        error(("[RoxySprite:setView] Pool key not found: %s"):format(tostring(view.poolKey)), 2)
       end
       self.animation = RoxyAnimation.fromImagetable(imagetable) -- Refcount owned by this sprite
       _applySizeFromImagetable(self.animation.imagetable)
@@ -242,8 +243,8 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         self.animation = animation
         _applySizeFromImagetable(self.animation.imagetable)
         self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
-      else --#DEBUG
-        Log.error("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: ", view.poolKey) --#DEBUG
+      else
+        error(("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: %s"):format(tostring(view.poolKey)), 2)
       end
 
     elseif kind == "image" then
@@ -251,8 +252,8 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       if img and img.draw then
         self:setImage(img) -- Sets sprite size from image
         self._drawFn = function(_, x, y, flip) img:draw(x, y, flip) end
-      else --#DEBUG
-        Log.error("[RoxySprite:setView] Pool key does not resolve to Image: ", view.poolKey) --#DEBUG
+      else
+        error(("[RoxySprite:setView] Pool key does not resolve to Image: %s"):format(tostring(view.poolKey)), 2)
       end
     end
     return self
@@ -283,9 +284,12 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         -- Simple looping spritesheet
         local imagetable = newImagetable(view)
         if not imagetable then
-          Log.error("[RoxySprite:setView] Failed to load imagetable for simpleAnim") --#DEBUG
-          return self
+          error("[RoxySprite:setView] Failed to load imagetable for simpleAnim", 2)
         end
+        --#DEBUG START
+        -- Assert positive frame duration to prevent infinite update loops
+        assert((frameDuration or 0.1) > 0, "[RoxySprite:setView] frameDuration must be > 0 for simpleAnim")
+        --#DEBUG END
         self.simpleAnim = {
           imagetable    = imagetable,
           startFrame    = 1,
@@ -308,7 +312,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         -- Full RoxyAnimation
         self.animation = RoxyAnimation(view) -- Path-based constructor
         if not (self.animation and self.animation.imagetable) then
-          Log.error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite") --#DEBUG
+          error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite", 2)
         end
         _applySizeFromImagetable(self.animation and self.animation.imagetable)
         self._drawFn = function(sprite, x, y, flip)
@@ -327,7 +331,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
 
   elseif type(view) == "table" and (view.isRoxyAnimation == true) then
     -- Passed a RoxyAnimation instance directly
-    if view.retain then view:retain() end -- retain while this sprite uses it
+    if view.retain then view:retain() end -- Retain while this sprite uses it
     self.animation = view
     _applySizeFromImagetable(self.animation.imagetable)
     self._drawFn = function(sprite, x, y, flip)
@@ -356,17 +360,16 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         end
       end
     elseif view.draw then
-      self:setImage(view) -- Playdate sets sprite size from image
+      self:setImage(view)
       self._drawFn = function(_, x, y, flip)
         view:draw(x, y, flip)
       end
     else
-      Log.error("[RoxySprite:setView] Unsupported userdata type for view") --#DEBUG
+      error("[RoxySprite:setView] Unsupported userdata type for view", 2)
     end
 
   else
-    Log.error("[RoxySprite:setView] Unsupported view type for RoxySprite:", type(view)) --#DEBUG
-    self._drawFn = nil
+    error(("[RoxySprite:setView] Unsupported view type for RoxySprite: %s"):format(type(view)), 2)
   end
 
   return self
@@ -419,10 +422,14 @@ end
 -- Switches the currently playing animation.
 --
 function RoxySprite:setAnimation(name, nextContinuity, unlessThisAnimation)
+  --#DEBUG START
+  if not self.animation then
+    assert(false, "[RoxySprite:setAnimation] Sprite is not animated.")
+  end
+  --#DEBUG END
+
   if self.animation then
     self.animation:setAnimation(name, nextContinuity, unlessThisAnimation)
-  else --#DEBUG
-    Log.warn("[RoxySprite:setAnimation] Sprite is not animated.") --#DEBUG
   end
   return self
 end
@@ -438,11 +445,14 @@ end
 
 -- ! Set isPaused
 function RoxySprite:setIsPaused(flag)
-  if type(flag) == "boolean" then
-    self.isPaused = flag
-  else --#DEBUG
-    Log.warn("[RoxySprite:setIsPaused] Expected boolean for 'isPaused', got", type(flag)) --#DEBUG
+  --#DEBUG START
+  if type(flag) ~= "boolean" then
+    Log.warn("[RoxySprite:setIsPaused] Expected boolean for 'isPaused', got", type(flag))
+    return self
   end
+  --#DEBUG END
+
+  self.isPaused = flag
   return self
 end
 
@@ -516,8 +526,10 @@ end
 function RoxySprite:reverse()
   if self.animation then
     self.animation:reverse()
-  else --#DEBUG
-    Log.warn("[RoxySprite:reverse] Sprite has no animation (or simpleAnim) to reverse.") --#DEBUG
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:reverse] Sprite has no animation (or simpleAnim) to reverse.")
+  --#DEBUG END
   end
   return self
 end
@@ -537,15 +549,16 @@ end
 
 -- ! Set Speed
 function RoxySprite:setSpeed(speed, currentOnly)
+  assert(type(speed) == "number", "[RoxySprite:setSpeed] 'speed' must be a number") --#DEBUG
+
   if self.animation then
-    if type(speed) == "number" then
-      self.animation:setSpeed(speed, currentOnly)
-    else --#DEBUG
-      Log.warn("[RoxySprite:setSpeed] Expected number for 'speed', got", type(speed)) --#DEBUG
-    end
-  else --#DEBUG
-    Log.warn("[RoxySprite:setSpeed] Sprite has no animation (or simpleAnim) to set speed.") --#DEBUG
+    self.animation:setSpeed(speed, currentOnly)
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:setSpeed] Sprite has no animation (or simpleAnim) to set speed.")
+  --#DEBUG END
   end
+
   return self
 end
 
@@ -560,15 +573,16 @@ end
 
 -- ! Set Frame Duration
 function RoxySprite:setFrameDuration(frameDuration, currentOnly)
+  assert(type(frameDuration) == "number", "[RoxySprite:setFrameDuration] 'frameDuration' must be a number") --#DEBUG
+
   if self.animation then
-    if type(frameDuration) == "number" then
-      self.animation:setFrameDuration(frameDuration, currentOnly)
-    else --#DEBUG
-      Log.warn("[RoxySprite:setFrameDuration] Expected number for 'frameDuration', got", type(frameDuration)) --#DEBUG
-    end
-  else --#DEBUG
-    Log.warn("[RoxySprite:setFrameDuration] Sprite has no animation (or simpleAnim) to set frame duration.") --#DEBUG
+    self.animation:setFrameDuration(frameDuration, currentOnly)
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:setFrameDuration] Sprite has no animation (or simpleAnim) to set frame duration.")
+  --#DEBUG END
   end
+
   return self
 end
 
@@ -582,8 +596,10 @@ function RoxySprite:drawSpecificFrame(frame, andPause)
     if andPause then self:pause() end
     self.animation:jumpToSpecificFrame(frame)
     if self.isPaused then self:markDirty() end
-  else --#DEBUG
-    Log.warn("[RoxySprite:drawSpecificFrame] Sprite has no animation (or simpleAnim) to draw specific frame.") --#DEBUG
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:drawSpecificFrame] Sprite has no animation (or simpleAnim) to draw specific frame.")
+  --#DEBUG END
   end
   return self
 end
@@ -594,8 +610,10 @@ function RoxySprite:stepFrame(direction)
     self:pause()
     self.animation:stepFrame(direction)
     self:markDirty()
-  else --#DEBUG
-    Log.warn("[RoxySprite:stepFrame] Sprite has no animation (or simpleAnim) to step frame.") --#DEBUG
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:stepFrame] Sprite has no animation (or simpleAnim) to step frame.")
+  --#DEBUG END
   end
   return self
 end
