@@ -363,6 +363,12 @@ function RoxyScene:addTilemap(tilemap)
 
   -- Give the tilemap a back-pointer so it can self-remove later
   tilemap.scene = self
+
+  -- Set the layer manager’s scene so callers don’t have to
+  local layerManager = tilemap.layerManager
+  if layerManager then
+    layerManager:setScene(self)
+  end
 end
 
 -- ! Remove Tilemap
@@ -370,9 +376,22 @@ function RoxyScene:removeTilemap(tilemap)
   if not tilemap then return end
   for i = #self.tilemaps, 1, -1 do
     if self.tilemaps[i] == tilemap then
+      -- Detach layer sprites first (defensive; layerManager:destroy usually does this)
+      local layerManager = tilemap.layerManager
+      if layerManager and layerManager.detachSprites then layerManager:detachSprites() end
+
+      -- Clear wiring
+      if layerManager and layerManager.setScene then
+        layerManager:setScene(nil)
+      end
       tilemap.scene = nil -- Clear back-pointer
-      tilemap:destroy()
+
+      -- Destroy the tilemap object
+      if tilemap.destroy then tilemap:destroy() end
+
+      -- Remove from the scene list
       tableRemove(self.tilemaps, i)
+
       return
     end
   end
@@ -383,8 +402,11 @@ function RoxyScene:removeAllTilemaps()
   local tilemaps = self.tilemaps
   for i = #tilemaps, 1, -1 do
     local tilemap = tilemaps[i]
+    local layerManager = tilemap.layerManager
+    if layerManager and layerManager.detachSprites then layerManager:detachSprites() end
     tilemap.scene = nil -- Clear back-pointer
-    tilemap:destroy()
+    if layerManager and layerManager.setScene then layerManager:setScene(nil) end
+    if tilemap.destroy then tilemap:destroy() end
   end
   self.tilemaps = {}
 end
