@@ -1,26 +1,48 @@
--- core/sprites/RoxySprite.lua
+-- libraries/roxy/core/sprites/RoxySprite.lua
+
+--------------------------------------------------------------------------------
+-- Playdate SDK Imports
+--------------------------------------------------------------------------------
 
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
+-- Playdate SDK Function Aliases
+local performAfterDelay   <const> = pd.timer.performAfterDelay
+local newImage            <const> = Graphics.image.new
+local newImagetable       <const> = Graphics.imagetable.new
+
+--------------------------------------------------------------------------------
+-- Roxy Framework Imports
+--------------------------------------------------------------------------------
+
 local r       <const> = roxy
 local Camera  <const> = r.Camera
 
-local newImage      <const> = Graphics.image.new
-local newImagetable <const> = Graphics.imagetable.new
-
-local performAfterDelay <const> = pd.timer.performAfterDelay
-
+-- Roxy Framework Function Aliases
 local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
+local round         <const> = r.Math.round
+
+--------------------------------------------------------------------------------
+-- Graphics Constants
+--------------------------------------------------------------------------------
 
 local UNFLIPPED   <const> = Graphics.kImageUnflipped
 local FLIPPED_X   <const> = Graphics.kImageFlippedX
 local FLIPPED_Y   <const> = Graphics.kImageFlippedY
 local FLIPPED_X_Y <const> = Graphics.kImageFlippedXY
 
+--------------------------------------------------------------------------------
+-- Time Constants
+--------------------------------------------------------------------------------
+
 local MS_PER_SECOND <const> = 1000
+
+--------------------------------------------------------------------------------
+-- Display Constants
+--------------------------------------------------------------------------------
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
@@ -45,6 +67,24 @@ function RoxySprite:init(opts, scene)
   self.simpleAnim         = nil
   self._drawFn            = nil
   self._ignoresDrawOffset = false
+
+  -- Parallax (optional; only active if configured)
+  self.worldX, self.worldY           = nil, nil
+  self.parallaxX, self.parallaxY     = nil, nil
+  self.parallaxOriginX, self.parallaxOriginY = nil, nil
+
+  -- Initialize from opts if provided
+  if opts.worldX or opts.worldY or opts.parallaxX or opts.parallaxY
+     or opts.parallaxOriginX or opts.parallaxOriginY then
+    self.worldX         = opts.worldX or (self.x or 0)
+    self.worldY         = opts.worldY or (self.y or 0)
+    self.parallaxX      = opts.parallaxX or 1
+    self.parallaxY      = opts.parallaxY or 1
+    self.parallaxOriginX= opts.parallaxOriginX or 0
+    self.parallaxOriginY= opts.parallaxOriginY or 0
+    self:setIgnoresDrawOffset(true)
+    self:setUpdatesEnabled(true)
+  end
 
   if opts.view then
     self:setView(
@@ -94,6 +134,39 @@ end
 function RoxySprite:moveTo(x, y)
   RoxySprite.super.moveTo(self, x, y)
   return self
+end
+
+--------------------------------------------------------------------------------
+-- Parallax API (optional)
+--------------------------------------------------------------------------------
+
+-- ! Enable/adjust world position used for parallax placement
+function RoxySprite:setWorldPosition(x, y)
+  self.worldX = (x ~= nil) and x or self.worldX or self.x or 0
+  self.worldY = (y ~= nil) and y or self.worldY or self.y or 0
+  return self
+end
+
+-- ! Set Parallax factors (1 = camera-locked like world space)
+function RoxySprite:setParallax(px, py)
+  self.parallaxX = (px ~= nil) and px or self.parallaxX or 1
+  self.parallaxY = (py ~= nil) and py or self.parallaxY or 1
+  -- Parallax uses screen-space placement
+  self:setIgnoresDrawOffset(true)
+  self:setUpdatesEnabled(true)
+  return self
+end
+
+-- ! Set Parallax origin (anchor in screen/world terms)
+function RoxySprite:setParallaxOrigin(ox, oy)
+  self.parallaxOriginX = (ox ~= nil) and ox or self.parallaxOriginX or 0
+  self.parallaxOriginY = (oy ~= nil) and oy or self.parallaxOriginY or 0
+  return self
+end
+
+-- ! Parallax enabled?
+function RoxySprite:isParallaxEnabled()
+  return self.parallaxX ~= nil or self.parallaxY ~= nil
 end
 
 --------------------------------------------------------------------------------
@@ -230,7 +303,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         end
       else
         -- Full RoxyAnimation
-        self.animation = RoxyAnimation(view) -- path-based constructor
+        self.animation = RoxyAnimation(view) -- Path-based constructor
         if not (self.animation and self.animation.imagetable) then
           Log.error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite") --#DEBUG
         end
@@ -242,7 +315,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     else
       -- Static
       local image = newImage(view)
-      self:setImage(image) -- playdate sets sprite size from image
+      self:setImage(image) -- Playdate sets sprite size from image
       self._drawFn = function(sprite, x, y, flip)
         local img = sprite:getImage()
         if img then img:draw(x, y, flip) end
@@ -280,8 +353,8 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         end
       end
     else
-      -- otherwise it must be a plain image
-      self:setImage(view) -- playdate sets sprite size from image
+      -- Otherwise it must be a plain image
+      self:setImage(view) -- Playdate sets sprite size from image
       self._drawFn = function(_, x, y, flip)
         view:draw(x, y, flip)
       end
@@ -531,6 +604,20 @@ end
 function RoxySprite:update()
   if self.isPaused then return end
 
+  -- If parallax is configured, compute screen-space placement first.
+  if self.parallaxX or self.parallaxY then
+    local camX, camY = getPosition()
+    local wx  = self.worldX or self.x or 0
+    local wy  = self.worldY or self.y or 0
+    local px  = self.parallaxX or 1
+    local py  = self.parallaxY or 1
+    local pox = self.parallaxOriginX or 0
+    local poy = self.parallaxOriginY or 0
+    local screenX = round(wx + pox * (1 - px) - camX * px)
+    local screenY = round(wy + poy * (1 - py) - camY * py)
+    self:moveTo(screenX, screenY)
+  end
+
   -- Cache camera position once for all sprites that need it
   local camX, camY
   if not self._ignoresDrawOffset then
@@ -725,3 +812,85 @@ function RoxySprite:destroy()
   self.simpleAnim = nil
   self:setImage(nil)
 end
+
+--[[
+USAGE EXAMPLE:
+RoxySprite is the foundation sprite class with optional parallax support
+
+-- Basic sprite creation
+local sprite = RoxySprite({
+  name = "PlayerSprite",
+  view = "images/player-idle"
+}, scene)
+
+-- Animated sprite with spritesheet
+local animatedSprite = RoxySprite({
+  name = "Enemy",
+  view = "images/enemy-walk",
+  isSheet = true
+})
+
+-- Simple looping animation
+local simpleSprite = RoxySprite({
+  view = "images/coin-spin",
+  isSheet = true,
+  singleAnim = true,
+  frameDuration = 0.2
+})
+
+-- Parallax background layer
+local backgroundSprite = RoxySprite({
+  name = "Mountains",
+  view = "images/mountains",
+  worldX = 400,
+  worldY = 240,
+  parallaxX = 0.3, -- Moves slower than camera
+  parallaxY = 0.1,
+  parallaxOriginX = 200,
+  parallaxOriginY = 120
+})
+
+-- Setup and positioning
+sprite:moveTo(100, 100)
+sprite:setZIndex(10)
+sprite:setCenter(0.5, 1.0) -- Bottom-center anchor
+
+-- Animation control
+animatedSprite:addAnimation("walk", { frames = {1, 2, 3, 4}, loop = true })
+animatedSprite:addAnimation("attack", { frames = {5, 6, 7}, nextAnimation = "walk" })
+animatedSprite:setAnimation("walk")
+animatedSprite:play()
+
+-- Playback control
+sprite:pause()
+sprite:play()
+sprite:setSpeed(2.0) -- Double speed
+sprite:setFrameDuration(0.05) -- 20 FPS
+
+-- Parallax control (can be added later)
+sprite:setParallax(0.5, 0.8)
+sprite:setWorldPosition(200, 150)
+sprite:setParallaxOrigin(100, 75)
+
+-- Sprite management
+sprite:add()            -- Add to display list
+scene:addSprite(sprite) -- Add to scene
+sprite:remove()         -- Remove from display list
+sprite:destroy()        -- Clean up resources
+
+-- Utility methods
+local onScreen = sprite:isOnScreen()
+local screenX, screenY = sprite:getScreenPosition()
+local isParallax = sprite:isParallaxEnabled()
+
+-- Flip states
+sprite:flipX()
+sprite:flipY()
+sprite:flipXY()
+sprite:unflip()
+
+-- Frame control (for animations)
+sprite:drawSpecificFrame(5, true) -- Jump to frame 5 and pause
+sprite:stepFrame(1)               -- Step forward one frame
+sprite:stepFrame(-1)              -- Step backward one frame
+]]--
