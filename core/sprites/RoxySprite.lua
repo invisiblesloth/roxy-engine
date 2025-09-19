@@ -18,9 +18,11 @@ local newImagetable       <const> = Graphics.imagetable.new
 --------------------------------------------------------------------------------
 
 local r       <const> = roxy
+local Assets  <const> = r.Assets
 local Camera  <const> = r.Camera
 
 -- Roxy Framework Function Aliases
+local getAsset      <const> = Assets.getAsset
 local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
 local round         <const> = r.Math.round
@@ -110,6 +112,7 @@ end
 function RoxySprite:setIgnoresDrawOffset(flag)
   self._ignoresDrawOffset = flag
   RoxySprite.super.setIgnoresDrawOffset(self, flag)
+  return self
 end
 
 -- ! Set Z-Index
@@ -222,7 +225,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     local kind = view.kind or "sheet"
     if kind == "sheet" then
       -- Load imagetable from pool; wrap as RoxyAnimation
-      local imagetable = roxy.Assets.getAsset(view.poolKey)
+      local imagetable = getAsset(view.poolKey)
       if not imagetable then
         Log.error("[RoxySprite:setView] Pool key not found: ", view.poolKey) --#DEBUG
         return self
@@ -233,7 +236,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
 
     elseif kind == "animation" then
       -- Pooled/shared animation object in Assets pool
-      local animation = roxy.Assets.getAsset(view.poolKey)
+      local animation = getAsset(view.poolKey)
       if type(animation) == "table" and animation.isRoxyAnimation then
         if animation.retain then animation:retain() end -- Retain while this sprite uses it
         self.animation = animation
@@ -244,7 +247,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       end
 
     elseif kind == "image" then
-      local img = roxy.Assets.getAsset(view.poolKey)
+      local img = getAsset(view.poolKey)
       if img and img.draw then
         self:setImage(img) -- Sets sprite size from image
         self._drawFn = function(_, x, y, flip) img:draw(x, y, flip) end
@@ -352,12 +355,13 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
           anim.imagetable:drawImage(anim.currentFrame, x, y, flip)
         end
       end
-    else
-      -- Otherwise it must be a plain image
+    elseif view.draw then
       self:setImage(view) -- Playdate sets sprite size from image
       self._drawFn = function(_, x, y, flip)
         view:draw(x, y, flip)
       end
+    else
+      Log.error("[RoxySprite:setView] Unsupported userdata type for view") --#DEBUG
     end
 
   else
@@ -403,7 +407,7 @@ end
 
 -- ! Add Animation
 -- Adds an animation definition to this sprite.
--- Table‑based addAnimation; delegates cleanly to RoxyAnimation
+-- Table-based addAnimation; delegates cleanly to RoxyAnimation
 function RoxySprite:addAnimation(name, nextContinuity, unlessThisAnimation)
   if self.animation then
     self.animation:addAnimation(name, nextContinuity, unlessThisAnimation)
@@ -717,7 +721,7 @@ function RoxySprite:remove()
   if self.scene then
     local scene = self.scene
     self.scene = nil
-    -- Guard against double‑removal
+    -- Guard against double-removal
     if scene.removeSprite then scene:removeSprite(self) end
   end
 
@@ -738,8 +742,7 @@ function RoxySprite:isOnScreen()
   local spriteY = self.y or 0
   local spriteWidth = self.width or 0
   local spriteHeight = self.height or 0
-  local centerX = self.centerX or 0.5
-  local centerY = self.centerY or 0.5
+  local centerX, centerY = self:getCenter()
 
   -- Calculate actual bounds based on center anchor
   local left = spriteX - spriteWidth * centerX
@@ -769,8 +772,7 @@ function RoxySprite:isOnScreenCached(camX, camY)
   local spriteY = self.y or 0
   local spriteWidth = self.width or 0
   local spriteHeight = self.height or 0
-  local centerX = self.centerX or 0.5
-  local centerY = self.centerY or 0.5
+  local centerX, centerY = self:getCenter()
 
   -- Calculate actual bounds based on center anchor
   local left = spriteX - spriteWidth * centerX
