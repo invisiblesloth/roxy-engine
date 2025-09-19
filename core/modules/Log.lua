@@ -27,176 +27,114 @@ local levelNames = {
 -- Default threshold
 Log.level = Log.INFO
 
--- ! Set Log Level
--- Sets the logging level for Log output. Accepts string or number.
+-- Set the logging level for controllable output (warn, info, debug).
+-- Errors and asserts always fire regardless of level.
 function Log.setLogLevel(level)
   local original = level
   if type(level) == "string" then
-    level = levelNames[level:lower()]
+    level = levelNames[level:lower()] or Log.INFO
   end
-  if type(level) ~= "number" then
+  if type(level) ~= "number" or level < Log.SILENT or level > Log.DEBUG then
     Log.warn(function()
-      return string.format("[setLogLevel] invalid log level '%s', defaulting to 'info'", tostring(original))
-    end)
-    level = Log.INFO
-  end
-  if level < Log.SILENT or level > Log.DEBUG then
-    Log.warn(function()
-      return string.format("[setLogLevel] log level '%s' is out of range, defaulting to 'info'", tostring(original))
+      return string.format("[setLogLevel] Invalid log level '%s', defaulting to 'info'", tostring(original))
     end)
     level = Log.INFO
   end
   Log.level = level
-
-  -- Find string name for confirmation
-  local name = nil
-  for key, value in pairs(levelNames) do
-    if value == level then
-      name = key
-      break
-    end
-  end
   Log.info(function()
+    local name = ({[Log.SILENT]="silent", [Log.ERROR]="error", [Log.WARN]="warn", [Log.INFO]="info", [Log.DEBUG]="debug"})[level]
     return string.format("Log level set to %s", name or tostring(level))
   end)
 end
 
--- ! Message Resolution Helper
--- Resolves messages with vararg support for formatting and concatenation
+-- Resolves messages with vararg support for formatting and concatenation.
 local function resolveMessage(msgOrFn, ...)
   local argCount = select("#", ...)
-
-  -- If it's a function, call it with the extra args
   if type(msgOrFn) == "function" then
     return msgOrFn(...)
   end
-
-  -- If no extra arguments, return as-is
   if argCount == 0 then
     return msgOrFn
   end
-
-  -- If first arg is string and we have extra args, try string.format
   if type(msgOrFn) == "string" then
     local success, result = pcall(string.format, msgOrFn, ...)
     if success then
       return result
     end
-    -- If format failed, fall through to concatenation
   end
-
-  -- Concatenate all arguments with spaces (like print does)
   local parts = {tostring(msgOrFn)}
   for i = 1, argCount do
-    parts[#parts + 1] = tostring((select(i, ...)))
+    parts[#parts + 1] = tostring(select(i, ...))
   end
   return table.concat(parts, " ")
 end
 
--- ! Emit
-local function emit(level, msgOrFn, stackLevel, ...)
-  -- Resolve message with vararg support
-  local message = resolveMessage(msgOrFn, ...)
-
-  if level == Log.ERROR then
-    -- stackLevel == 0 => caller wants NO prefix from error()
-    local errLevel = (stackLevel == 0) and 0 or ((stackLevel or 1) + 2)
-    error_(message, errLevel)
-  elseif level == Log.WARN then
-    warn_(message)
-  else
-    print_(message)
-  end
-end
-
--- ! Error
+-- Error: Always emits, regardless of Log.level (uncontrollable).
 function Log.error(msgOrFn, ...)
   local args = {...}
   local stackLevel = nil
-
-  -- Check if second argument is a numeric stackLevel
   if #args > 0 and type(args[1]) == "number" then
     stackLevel = args[1]
-    -- Remove stackLevel from args to forward the rest
     table.remove(args, 1)
   end
-
-  if Log.ERROR > Log.level then return end
-  emit(Log.ERROR, msgOrFn, stackLevel, table.unpack(args))
+  local message = resolveMessage(msgOrFn, table.unpack(args))
+  local errLevel = (stackLevel == 0) and 0 or ((stackLevel or 1) + 2)
+  error_(message, errLevel)
 end
 
--- ! Warn
+-- Warn: Controllable based on Log.level.
 function Log.warn(msgOrFn, ...)
-  local args = {...}
-  local stackLevel = nil
-
-  -- Check if second argument is a numeric stackLevel
-  if #args > 0 and type(args[1]) == "number" then
-    stackLevel = args[1]
-    table.remove(args, 1)
-  end
-
-  if Log.WARN > Log.level then return end
-  emit(Log.WARN, msgOrFn, stackLevel, table.unpack(args))
+  if Log.level < Log.WARN then return end
+  warn_(resolveMessage(msgOrFn, ...))
 end
 
--- ! Info
+-- Info: Controllable based on Log.level.
 function Log.info(msgOrFn, ...)
-  local args = {...}
-  local stackLevel = nil
-
-  -- Check if second argument is a numeric stackLevel
-  if #args > 0 and type(args[1]) == "number" then
-    stackLevel = args[1]
-    table.remove(args, 1)
-  end
-
-  if Log.INFO > Log.level then return end
-  emit(Log.INFO, msgOrFn, stackLevel, table.unpack(args))
+  if Log.level < Log.INFO then return end
+  print_(resolveMessage(msgOrFn, ...))
 end
 
--- ! Debug
+-- Debug: Controllable based on Log.level.
 function Log.debug(msgOrFn, ...)
-  local args = {...}
-  local stackLevel = nil
-
-  -- Check if second argument is a numeric stackLevel
-  if #args > 0 and type(args[1]) == "number" then
-    stackLevel = args[1]
-    table.remove(args, 1)
-  end
-
-  if Log.DEBUG > Log.level then return end
-  emit(Log.DEBUG, msgOrFn, stackLevel, table.unpack(args))
+  if Log.level < Log.DEBUG then return end
+  print_(resolveMessage(msgOrFn, ...))
 end
 
--- ! Assert
-function Log.assert(condition, msgOrFn, stackLevel, ...)
+-- Assert: Always fires, regardless of Log.level (uncontrollable).
+function Log.assert(condition, msgOrFn, ...)
   if not condition then
-    -- CRITICAL FIX: Bypass Log.error's level guard by calling emit directly
-    -- This ensures assertions always fire regardless of log level
     local message = resolveMessage(msgOrFn or "Assertion failed!", ...)
-    local errLevel = (stackLevel == 0) and 0 or ((stackLevel or 1) + 2)
-    error_(message, errLevel)
+    error_(message, 2)
   end
   return condition, ...
 end
 
 --[[
 USAGE EXAMPLE:
--- String formatting (your examples now work!)
-Log.warn("[RoxyAnimation:setAnimation] Animation %s not found", tostring(name))
-Log.warn("[RoxyStagTilemap] Failed to allocate chunk image (%dx%d)", width, height)
 
--- Print-style concatenation
-Log.info("Player health:", health, "Score:", score)
+Three-tier behavior model:
+1. UNCONTROLLABLE (always fire): Log.error, Log.assert
+2. CONTROLLABLE CRITICAL: Log.warn
+3. CONTROLLABLE NON-CRITICAL: Log.info, Log.debug
 
--- Function producers with args
-Log.debug(function(x, y) return string.format("Position: (%d, %d)", x, y) end, player.x, player.y)
+-- Using Log module (formatted, unified API)
+Log.error("Critical error occurred")                -- Always shown
+Log.error("File not found: %s", filename, 2)        -- Always shown, custom stack level
+Log.assert(player ~= nil, "Player object is nil!")  -- Always fires
+Log.warn("[RoxyAnimation] Animation %s not found", name)  -- Shown if level >= WARN
+Log.info("Player health:", health, "Score:", score)       -- Shown if level >= INFO
+Log.debug(function() return expensive_debug_info() end)   -- Shown if level >= DEBUG
 
--- Stack level still works
-Log.error("Critical error", 2, "additional", "context")
+-- Using native Lua calls (clean output, can coexist)
+error("Critical error")         -- Same as Log.error
+assert(player, "Player is nil") -- Same as Log.assert
+--#DEBUG warn("Debug warning")  -- Stripped in production
+--#DEBUG print("Debug info")    -- Stripped in production
 
--- Assertions now always fire regardless of log level
-Log.assert(player ~= nil, "Player object is nil!")
+-- Level control examples
+Log.setLogLevel("error")  -- Only errors/asserts fire
+Log.setLogLevel("warn")   -- Errors, asserts, warnings
+Log.setLogLevel("info")   -- Errors, asserts, warnings, info
+Log.setLogLevel("debug")  -- All logs fire
+Log.setLogLevel("silent") -- Only errors and asserts fire
 ]]--
