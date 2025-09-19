@@ -942,6 +942,11 @@ function RoxyTilemap:_getValidLayer(layerName)
   return layerData
 end
 
+-- ! Get Map Size in Tiles
+function RoxyTilemap:getMapSizeInTiles()
+  return self.mapWidth, self.mapHeight
+end
+
 -- ! World to Screen
 -- Converts world coordinates to screen coordinates for the given layer
 function RoxyTilemap:worldToScreen(worldX, worldY, layer)
@@ -1024,11 +1029,9 @@ function RoxyTilemap:destroy()
         release(sprite._retainedImagePath)
         sprite._retainedImagePath = nil
       end
-      if self.scene and self.scene.removeSprite then
-        self.scene:removeSprite(sprite)
-      else
-        sprite:remove()
-      end
+      -- Always remove the sprite directly;
+      -- the scene will remove the tilemap itself
+      sprite:remove()
     end
   end
 
@@ -1046,9 +1049,6 @@ function RoxyTilemap:destroy()
   self.tilesets = nil
   self.objectLayers = nil
 
-  if self.scene then
-    local scene = self.scene
-    self.scene = nil
-    if scene.removeTilemap then scene:removeTilemap(self) end
-  end
+  -- Just clear the back-pointer; do not call back into the scene
+  self.scene = nil
 end

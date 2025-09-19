@@ -13,6 +13,7 @@ import "CoreLibs/crank"
 import "CoreLibs/animation"
 import "CoreLibs/animator"
 import "CoreLibs/timer"
+import "CoreLibs/frameTimer"
 import "CoreLibs/ui/crankIndicator"
 import "CoreLibs/ui/gridview"
 
@@ -81,6 +82,9 @@ local randomseed <const> = math.randomseed
 
 local getSecondsSinceEpoch  <const> = pd.getSecondsSinceEpoch
 local spriteUpdate          <const> = Sprite.update
+
+local updateTimers      <const> = pd.timer.updateTimers
+local updateFrameTimers <const> = pd.frameTimer.updateTimers
 
 local initConfig <const> = Config.init
 
@@ -245,6 +249,9 @@ function pd.update()
     Log.debug("Long frame: " .. dt)
   end
   --#DEBUG END
+
+  updateTimers()
+  updateFrameTimers()
 
   handleInput()
   updateSequences(dt)

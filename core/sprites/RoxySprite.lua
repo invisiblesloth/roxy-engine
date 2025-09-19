@@ -4,8 +4,8 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r         <const> = roxy
-local Camera   <const> = r.Camera
+local r       <const> = roxy
+local Camera  <const> = r.Camera
 
 local newImage      <const> = Graphics.image.new
 local newImagetable <const> = Graphics.imagetable.new
@@ -100,24 +100,104 @@ end
 -- View Management
 --------------------------------------------------------------------------------
 
--- ! Set View
--- Sets the visual representation for the sprite (image or animation).
-function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration)
-  if not view then
-    self:setVisible(false)
-    self._drawFn = nil
-    return self
-  end
-  self:setVisible(true)
-
+-- ! Clear View Helper
+function RoxySprite:clearView()
   -- Dispose previous visual
   if self.animation then
     self.animation:stop()
+    if self.animation.release then self.animation:release() end -- Balance any retain
     self.animation = nil
   end
   self.simpleAnim = nil -- Clear any previous simpleAnim
   if self:getImage() then
     self:setImage(nil)
+  end
+  self._drawFn = nil
+  -- Set fallback size when clearing view
+  self:setSize(0, 0)
+end
+
+-- ! Set View
+-- Sets the visual representation for the sprite (image or animation).
+function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration)
+  if not view then
+    self:setVisible(false)
+    self:clearView()
+    return self
+  end
+  self:setVisible(true)
+
+  -- Clear previous state
+  self:clearView()
+
+  -- Small helper: size this sprite from the first frame of an imagetable
+  local function _applySizeFromImagetable(imagetable)
+    if imagetable and imagetable.getImage then
+      local first = imagetable:getImage(1)
+      if first and first.getSize then
+        local width, height = first:getSize()
+        if width and height then
+          self:setSize(width, height)
+          self:setCenter(0.5, 0.5)
+        end
+      end
+    end
+  end
+
+  -- Handle descriptor table form
+  if type(view) == "table" and view.poolKey then
+    local kind = view.kind or "sheet"
+    if kind == "sheet" then
+      -- Load imagetable from pool; wrap as RoxyAnimation
+      local imagetable = roxy.Assets.getAsset(view.poolKey)
+      if not imagetable then
+        Log.error("[RoxySprite:setView] Pool key not found: ", view.poolKey) --#DEBUG
+        return self
+      end
+      self.animation = RoxyAnimation.fromImagetable(imagetable) -- Refcount owned by this sprite
+      _applySizeFromImagetable(self.animation.imagetable)
+      self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+
+    elseif kind == "animation" then
+      -- Pooled/shared animation object in Assets pool
+      local animation = roxy.Assets.getAsset(view.poolKey)
+      if type(animation) == "table" and animation.isRoxyAnimation then
+        if animation.retain then animation:retain() end -- Retain while this sprite uses it
+        self.animation = animation
+        _applySizeFromImagetable(self.animation.imagetable)
+        self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+      else --#DEBUG
+        Log.error("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: ", view.poolKey) --#DEBUG
+      end
+
+    elseif kind == "image" then
+      local img = roxy.Assets.getAsset(view.poolKey)
+      if img and img.draw then
+        self:setImage(img) -- Sets sprite size from image
+        self._drawFn = function(_, x, y, flip) img:draw(x, y, flip) end
+      else --#DEBUG
+        Log.error("[RoxySprite:setView] Pool key does not resolve to Image: ", view.poolKey) --#DEBUG
+      end
+    end
+    return self
+  end
+
+  -- Handle direct pooled objects (existing extension)
+  if type(view) == "table" and view.imagetable then
+    -- Direct imagetable object from pool
+    self.animation = RoxyAnimation.fromImagetable(view.imagetable) -- refcount owned by this sprite
+    _applySizeFromImagetable(self.animation.imagetable)
+    self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+    return self
+  end
+
+  if type(view) == "table" and view.animation and (type(view.animation) == "table" and view.animation.isRoxyAnimation) then
+    -- Direct pooled animation object
+    if view.animation.retain then view.animation:retain() end -- retain while this sprite uses it
+    self.animation = view.animation
+    _applySizeFromImagetable(self.animation.imagetable)
+    self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+    return self
   end
 
   -- Pick and cache draw path
@@ -135,10 +215,12 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
           startFrame    = 1,
           endFrame      = imagetable:getLength(),
           currentFrame  = 1,
-          frameDuration = frameDuration,
+          frameDuration = frameDuration or 0.1,
           accumulator   = 0,
-          loop          = singleAnimationLoop,
+          loop          = (singleAnimationLoop ~= false),
         }
+        -- Ensure the sprite has bounds for culling/dirty-rects
+        _applySizeFromImagetable(imagetable)
         -- Draw function for simpleanim
         self._drawFn = function(sprite, x, y, flip)
           local simpleAnim = sprite.simpleAnim
@@ -148,10 +230,11 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         end
       else
         -- Full RoxyAnimation
-        self.animation = RoxyAnimation(view)
+        self.animation = RoxyAnimation(view) -- path-based constructor
         if not (self.animation and self.animation.imagetable) then
           Log.error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite") --#DEBUG
         end
+        _applySizeFromImagetable(self.animation and self.animation.imagetable)
         self._drawFn = function(sprite, x, y, flip)
           sprite.animation:draw(x, y, flip)
         end
@@ -159,19 +242,24 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     else
       -- Static
       local image = newImage(view)
-      self:setImage(image)
+      self:setImage(image) -- playdate sets sprite size from image
       self._drawFn = function(sprite, x, y, flip)
         local img = sprite:getImage()
         if img then img:draw(x, y, flip) end
       end
     end
-  elseif type(view) == "table" and RoxyAnimation:isa(view) then
+
+  elseif type(view) == "table" and (view.isRoxyAnimation == true) then
+    -- Passed a RoxyAnimation instance directly
+    if view.retain then view:retain() end -- retain while this sprite uses it
     self.animation = view
+    _applySizeFromImagetable(self.animation.imagetable)
     self._drawFn = function(sprite, x, y, flip)
       sprite.animation:draw(x, y, flip)
     end
+
   elseif type(view) == "userdata" then
-    -- If it's an ImageTable (has drawImage), treat as a simpleAnim
+    -- If it is an ImageTable (has drawImage), treat as a simpleAnim
     if view.drawImage then
       local length = view:getLength()
       self.simpleAnim = {
@@ -181,8 +269,10 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         currentFrame  = 1,
         frameDuration = frameDuration or 0.1,
         accumulator   = 0,
-        loop          = true,
+        loop          = (singleAnimationLoop ~= false),
       }
+      -- Ensure the sprite has bounds for culling/dirty-rects
+      _applySizeFromImagetable(view)
       self._drawFn = function(sprite, x, y, flip)
         local anim = sprite.simpleAnim
         if anim and anim.imagetable then
@@ -191,11 +281,12 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       end
     else
       -- otherwise it must be a plain image
-      self:setImage(view)
+      self:setImage(view) -- playdate sets sprite size from image
       self._drawFn = function(_, x, y, flip)
         view:draw(x, y, flip)
       end
     end
+
   else
     Log.error("[RoxySprite:setView] Unsupported view type for RoxySprite:", type(view)) --#DEBUG
     self._drawFn = nil
@@ -465,29 +556,33 @@ function RoxySprite:update()
     local oldFrame = currentFrame -- Track if frame changes
 
     accumulator = accumulator + dt
-    if accumulator >= frameDuration then
+
+    -- Use while loop to handle large delta times properly
+    while accumulator >= frameDuration do
       currentFrame = currentFrame + 1
       if currentFrame > endFrame then
         if loop then
           currentFrame = startFrame
         else
           currentFrame = endFrame
+          -- Auto-pause completed one-shot animations for performance
+          if not loop then
+            self:pause()
+          end
         end
       end
-      accumulator = accumulator - frameDuration -- Preserve overflow for smooth timing
-
-      -- Write back the changed values
-      simpleAnim.currentFrame = currentFrame
-      simpleAnim.accumulator = accumulator
-
-      -- Only mark dirty if frame actually changed
-      if currentFrame ~= oldFrame then
-        self:markDirty()
-      end
-    else
-      -- Only update accumulator if we didn't enter the timing branch
-      simpleAnim.accumulator = accumulator
+      accumulator = accumulator - frameDuration
     end
+
+    -- Write back the changed values
+    simpleAnim.currentFrame = currentFrame
+    simpleAnim.accumulator = accumulator
+
+    -- Only mark dirty if frame actually changed
+    if currentFrame ~= oldFrame then
+      self:markDirty()
+    end
+
     return
   end
 
@@ -550,69 +645,64 @@ function RoxySprite:isAdded()
 end
 
 -- ! Is on Screen
+-- Unified bounds calculation logic with proper center anchor handling
 function RoxySprite:isOnScreen()
-  -- Direct property access instead of method calls
-  local spriteX = self.x or 0.5
-  local spriteY = self.y or 0.5
-  local spriteWidth = self.width
-  local spriteHeight = self.height
+  local spriteX = self.x or 0
+  local spriteY = self.y or 0
+  local spriteWidth = self.width or 0
+  local spriteHeight = self.height or 0
+  local centerX = self.centerX or 0.5
+  local centerY = self.centerY or 0.5
 
+  -- Calculate actual bounds based on center anchor
+  local left = spriteX - spriteWidth * centerX
+  local top = spriteY - spriteHeight * centerY
+  local right = left + spriteWidth
+  local bottom = top + spriteHeight
+
+  local leftLimit, topLimit, rightLimit, bottomLimit
   if self._ignoresDrawOffset then
-    -- Screen-space check (simpler case)
-    return not (
-      spriteX + spriteWidth < 0 or spriteX > DISPLAY_WIDTH or
-      spriteY + spriteHeight < 0 or spriteY > DISPLAY_HEIGHT
-    )
+    -- Screen-space bounds
+    leftLimit, topLimit = 0, 0
+    rightLimit, bottomLimit = DISPLAY_WIDTH, DISPLAY_HEIGHT
   else
-    -- World-space check with camera
-    local centerX = self.centerX
-    local centerY = self.centerY
-    local left = spriteX - spriteWidth * centerX
-    local top = spriteY - spriteHeight * centerY
-    local right = left + spriteWidth
-    local bottom = top + spriteHeight
-
-    -- Cache camera position once
+    -- World-space bounds with camera
     local camX, camY = getPosition()
-    return not (
-      right < camX or
-      left > camX + DISPLAY_WIDTH or
-      bottom < camY or
-      top > camY + DISPLAY_HEIGHT
-    )
+    leftLimit, topLimit = camX, camY
+    rightLimit, bottomLimit = camX + DISPLAY_WIDTH, camY + DISPLAY_HEIGHT
   end
+
+  return not (right < leftLimit or left > rightLimit or bottom < topLimit or top > bottomLimit)
 end
 
 -- ! Is on Screen (with cached camera)
+-- Unified with isOnScreen logic and proper fallbacks
 function RoxySprite:isOnScreenCached(camX, camY)
-  -- Direct property access instead of method calls
-  local spriteX = self.x
-  local spriteY = self.y
-  local spriteWidth = self.width
-  local spriteHeight = self.height
+  local spriteX = self.x or 0
+  local spriteY = self.y or 0
+  local spriteWidth = self.width or 0
+  local spriteHeight = self.height or 0
+  local centerX = self.centerX or 0.5
+  local centerY = self.centerY or 0.5
 
+  -- Calculate actual bounds based on center anchor
+  local left = spriteX - spriteWidth * centerX
+  local top = spriteY - spriteHeight * centerY
+  local right = left + spriteWidth
+  local bottom = top + spriteHeight
+
+  local leftLimit, topLimit, rightLimit, bottomLimit
   if self._ignoresDrawOffset then
-    -- Screen-space check (simpler case) - camera position irrelevant
-    return not (
-      spriteX + spriteWidth < 0 or spriteX > DISPLAY_WIDTH or
-      spriteY + spriteHeight < 0 or spriteY > DISPLAY_HEIGHT
-    )
+    -- Screen-space bounds (camera position irrelevant)
+    leftLimit, topLimit = 0, 0
+    rightLimit, bottomLimit = DISPLAY_WIDTH, DISPLAY_HEIGHT
   else
-    -- World-space check with provided camera coordinates
-    local centerX = self.centerX or 0.5
-    local centerY = self.centerY or 0.5
-    local left = spriteX - spriteWidth * centerX
-    local top = spriteY - spriteHeight * centerY
-    local right = left + spriteWidth
-    local bottom = top + spriteHeight
-
-    return not (
-      right < camX or
-      left > camX + DISPLAY_WIDTH or
-      bottom < camY or
-      top > camY + DISPLAY_HEIGHT
-    )
+    -- World-space bounds with provided camera coordinates
+    leftLimit, topLimit = camX, camY
+    rightLimit, bottomLimit = camX + DISPLAY_WIDTH, camY + DISPLAY_HEIGHT
   end
+
+  return not (right < leftLimit or left > rightLimit or bottom < topLimit or top > bottomLimit)
 end
 
 -- ! Get Screen Position
@@ -625,8 +715,12 @@ function RoxySprite:getScreenPosition()
 end
 
 -- ! Destroy
+-- On destroy/remove, release shared animation
 function RoxySprite:destroy()
   self:remove()
+  if self.animation and self.animation.release then
+    self.animation:release()
+  end
   self.animation  = nil
   self.simpleAnim = nil
   self:setImage(nil)

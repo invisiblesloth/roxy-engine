@@ -7,6 +7,7 @@ local Camera <const> = roxy.Camera
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
+local Timer     <const> = pd.timer
 
 local abs   <const> = math.abs
 local min   <const> = math.min
@@ -19,6 +20,8 @@ local ceil  <const> = math.ceil
 local pi    <const> = math.pi
 local lerp  <const> = roxy.Math.lerp
 local round <const> = roxy.Math.roundInt
+
+local performAfterDelay <const> = Timer.performAfterDelay
 
 local tableRemove <const> = table.remove
 local tableInsert <const> = table.insert
@@ -57,7 +60,7 @@ Camera.biasReturnRate = 6       -- How fast bias returns to 0 (1/sec)
 Camera.mode           = "lerp"  -- "lerp" or "spring"
 
 -- Spring parameters (used when mode=="spring")
-Camera.springFreq = 6.0 -- Hz, natural frequency
+Camera.springFreq = 4.0 -- Hz, natural frequency
 Camera.springDamp = 0.9 -- 0..1 (1=critical-ish)
 
 --
@@ -339,7 +342,7 @@ function Camera.reset()
   Camera.targetBiasY        = 0
   Camera.biasReturnRate     = 6
   Camera.mode               = "lerp"
-  Camera.springFreq         = 6.0
+  Camera.springFreq         = 4.0
   Camera.springDamp         = 0.9
   Camera._onOffsetChanged   = {}
 
@@ -368,6 +371,19 @@ end
 -- ! Set Mode
 function Camera.setMode(mode) -- "lerp" or "spring"
   if mode == "spring" or mode == "lerp" then Camera.mode = mode end
+end
+
+-- ! Follow After Delay
+-- Delayed follow helper: stop following, then start after N ms
+function Camera.followAfterDelay(sprite, delayMS, smoothing)
+  -- Keep current offset; just stop following briefly
+  Camera.setTarget(nil)
+  performAfterDelay(delayMS or 0, function()
+    -- Only re-attach if the sprite still exists
+    if sprite and sprite.getPosition then
+      Camera.setTarget(sprite, smoothing)
+    end
+  end)
 end
 
 -- ! Update
@@ -455,8 +471,11 @@ function Camera.updateFollow(dt)
 
   -- Clamp final position
   if Camera._hasBounds then
+    local boundsX, boundsY = Camera.x, Camera.y
     Camera.x = clamp(Camera.x, Camera._minX, Camera._maxX)
     Camera.y = clamp(Camera.y, Camera._minY, Camera._maxY)
+    if Camera.x ~= boundsX then Camera._velocityX = 0 end
+    if Camera.y ~= boundsY then Camera._velocityY = 0 end
   end
 
   if Camera.smoothing > 0
