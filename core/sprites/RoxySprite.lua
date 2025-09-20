@@ -9,9 +9,9 @@ local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
 -- Playdate SDK Function Aliases
-local performAfterDelay   <const> = pd.timer.performAfterDelay
-local newImage            <const> = Graphics.image.new
-local newImagetable       <const> = Graphics.imagetable.new
+local performAfterDelay <const> = pd.timer.performAfterDelay
+local newImage          <const> = Graphics.image.new
+local newImageTable     <const> = Graphics.imagetable.new
 
 --------------------------------------------------------------------------------
 -- Roxy Framework Imports
@@ -30,6 +30,12 @@ local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
 
 --------------------------------------------------------------------------------
+-- Defaults
+--------------------------------------------------------------------------------
+
+local DELAY_DEFAULT <const> = 1 -- Seconds
+
+--------------------------------------------------------------------------------
 -- Graphics Constants
 --------------------------------------------------------------------------------
 
@@ -45,11 +51,17 @@ local FLIPPED_X_Y <const> = Graphics.kImageFlippedXY
 local MS_PER_SECOND <const> = 1000
 
 --------------------------------------------------------------------------------
--- Display Constants
+-- Display Constants (Cached for Performance)
 --------------------------------------------------------------------------------
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+
+-- Screen bounds constants for isOnScreen optimization
+local SCREEN_LEFT_LIMIT   <const> = 0
+local SCREEN_TOP_LIMIT    <const> = 0
+local SCREEN_RIGHT_LIMIT  <const> = DISPLAY_WIDTH
+local SCREEN_BOTTOM_LIMIT <const> = DISPLAY_HEIGHT
 
 --------------------------------------------------------------------------------
 -- Class Definition & Init
@@ -58,45 +70,47 @@ local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 class("RoxySprite").extends(Sprite)
 
 -- ! Initialize
-function RoxySprite:init(opts, scene)
-  opts = opts or {}
+function RoxySprite:init(options, scene)
+  options = options or {}
   RoxySprite.super.init(self)
 
-  self.name               = opts.name or "RoxySprite"
+  self.name               = options.name or "RoxySprite"
   self.isRoxySprite       = true
   self._added             = false
   self.isPaused           = true
   self.flip               = UNFLIPPED
   self.animation          = nil
-  self.simpleAnim         = nil
+  self._animationRetained = false -- Track if we retained the current animation
+  self.simpleAnimation    = nil
   self._drawFn            = nil
   self._ignoresDrawOffset = false
+  self._destroyed         = false -- Prevent use-after-destroy
 
   -- Parallax (optional; only active if configured)
-  self.worldX, self.worldY           = nil, nil
-  self.parallaxX, self.parallaxY     = nil, nil
+  self.worldX, self.worldY        = nil, nil
+  self.parallaxX, self.parallaxY  = nil, nil
   self.parallaxOriginX, self.parallaxOriginY = nil, nil
 
-  -- Initialize from opts if provided
-  if opts.worldX or opts.worldY or opts.parallaxX or opts.parallaxY
-     or opts.parallaxOriginX or opts.parallaxOriginY then
-    self.worldX         = opts.worldX or (self.x or 0)
-    self.worldY         = opts.worldY or (self.y or 0)
-    self.parallaxX      = opts.parallaxX or 1
-    self.parallaxY      = opts.parallaxY or 1
-    self.parallaxOriginX= opts.parallaxOriginX or 0
-    self.parallaxOriginY= opts.parallaxOriginY or 0
+  -- Initialize from options if provided
+  if options.worldX or options.worldY or options.parallaxX or options.parallaxY
+     or options.parallaxOriginX or options.parallaxOriginY then
+    self.worldX           = options.worldX or (self.x or 0)
+    self.worldY           = options.worldY or (self.y or 0)
+    self.parallaxX        = options.parallaxX or 1
+    self.parallaxY        = options.parallaxY or 1
+    self.parallaxOriginX  = options.parallaxOriginX or 0
+    self.parallaxOriginY  = options.parallaxOriginY or 0
     self:setIgnoresDrawOffset(true)
     self:setUpdatesEnabled(true)
   end
 
-  if opts.view then
+  if options.view then
     self:setView(
-      opts.view,
-      opts.isSheet,
-      opts.singleAnim,
-      opts.singleAnimLoop ~= false,
-      opts.frameDuration or 0.1
+      options.view,
+      options.isSheet,
+      options.singleAnimation,
+      options.singleAnimationLoop ~= false,
+      options.frameDuration or 0.1
     )
   end
 
@@ -112,6 +126,8 @@ end
 
 -- ! Set Ignores Draw Offset
 function RoxySprite:setIgnoresDrawOffset(flag)
+  assert(type(flag) == "boolean", "[RoxySprite:setIgnoresDrawOffset] Expected boolean, got " .. tostring(type(flag)))
+
   self._ignoresDrawOffset = flag
   RoxySprite.super.setIgnoresDrawOffset(self, flag)
   return self
@@ -119,24 +135,32 @@ end
 
 -- ! Set Z-Index
 function RoxySprite:setZIndex(zIndex)
+  assert(type(zIndex) == "number", "[RoxySprite:setZIndex] Expected number, got " .. tostring(type(zIndex)))
+
   RoxySprite.super.setZIndex(self, zIndex)
   return self
 end
 
 -- ! Set Size
 function RoxySprite:setSize(width, height)
+  assert(type(width) == "number" and type(height) == "number", "[RoxySprite:setSize] Width and height must be numbers")
+
   RoxySprite.super.setSize(self, width, height)
   return self
 end
 
 -- ! Set Center
 function RoxySprite:setCenter(x, y)
+  assert(type(x) == "number" and type(y) == "number", "[RoxySprite:setCenter] Center coordinates must be numbers")
+
   RoxySprite.super.setCenter(self, x, y)
   return self
 end
 
 -- ! Move To
 function RoxySprite:moveTo(x, y)
+  assert(type(x) == "number" and type(y) == "number", "[RoxySprite:moveTo] Coordinates must be numbers")
+
   RoxySprite.super.moveTo(self, x, y)
   return self
 end
@@ -147,15 +171,33 @@ end
 
 -- ! Enable/adjust world position used for parallax placement
 function RoxySprite:setWorldPosition(x, y)
-  self.worldX = (x ~= nil) and x or self.worldX or self.x or 0
-  self.worldY = (y ~= nil) and y or self.worldY or self.y or 0
+  if x ~= nil and type(x) ~= "number" then
+    Log.warn("[RoxySprite:setWorldPosition] x must be a number or nil; keeping current x=%s", tostring(self.worldX or self.x or 0)) --#DEBUG
+    x = nil
+  end
+  if y ~= nil and type(y) ~= "number" then
+    Log.warn("[RoxySprite:setWorldPosition] y must be a number or nil; keeping current y=%s", tostring(self.worldY or self.y or 0)) --#DEBUG
+    y = nil
+  end
+
+  self.worldX = x or self.worldX or self.x or 0
+  self.worldY = y or self.worldY or self.y or 0
   return self
 end
 
--- ! Set Parallax factors (1 = camera-locked like world space)
-function RoxySprite:setParallax(px, py)
-  self.parallaxX = (px ~= nil) and px or self.parallaxX or 1
-  self.parallaxY = (py ~= nil) and py or self.parallaxY or 1
+-- ! Set Parallax factors (1 = normal scrolling, 0 = fixed position, 0.5 = half speed)
+function RoxySprite:setParallax(parallaxX, parallaxY)
+  if parallaxX ~= nil and type(parallaxX) ~= "number" then
+    Log.warn("[RoxySprite:setParallax] parallaxX must be a number or nil; keeping current parallaxX=%s", tostring(self.parallaxX or 1)) --#DEBUG
+    parallaxX = nil
+  end
+  if parallaxY ~= nil and type(parallaxY) ~= "number" then
+    Log.warn("[RoxySprite:setParallax] parallaxY must be a number or nil; keeping current parallaxY=%s", tostring(self.parallaxY or 1)) --#DEBUG
+    parallaxY = nil
+  end
+
+  self.parallaxX = parallaxX or self.parallaxX or 1
+  self.parallaxY = parallaxY or self.parallaxY or 1
   -- Parallax uses screen-space placement
   self:setIgnoresDrawOffset(true)
   self:setUpdatesEnabled(true)
@@ -163,9 +205,18 @@ function RoxySprite:setParallax(px, py)
 end
 
 -- ! Set Parallax origin (anchor in screen/world terms)
-function RoxySprite:setParallaxOrigin(ox, oy)
-  self.parallaxOriginX = (ox ~= nil) and ox or self.parallaxOriginX or 0
-  self.parallaxOriginY = (oy ~= nil) and oy or self.parallaxOriginY or 0
+function RoxySprite:setParallaxOrigin(originX, originY)
+  if originX ~= nil and type(originX) ~= "number" then
+    Log.warn("[RoxySprite:setParallaxOrigin] originX must be a number or nil; keeping current originX=%s", tostring(self.parallaxOriginX or 0)) --#DEBUG
+    originX = nil
+  end
+  if originY ~= nil and type(originY) ~= "number" then
+    Log.warn("[RoxySprite:setParallaxOrigin] originY must be a number or nil; keeping current originY=%s", tostring(self.parallaxOriginY or 0)) --#DEBUG
+    originY = nil
+  end
+
+  self.parallaxOriginX = originX or self.parallaxOriginX or 0
+  self.parallaxOriginY = originY or self.parallaxOriginY or 0
   return self
 end
 
@@ -178,15 +229,20 @@ end
 -- View Management
 --------------------------------------------------------------------------------
 
--- ! Clear View Helper
+-- ! Clear View Helper - Fixed memory leak by properly tracking retained animations
 function RoxySprite:clearView()
-  -- Dispose previous visual
+  -- Properly release retained animations to prevent memory leaks
   if self.animation then
     self.animation:stop()
-    if self.animation.release then self.animation:release() end -- Balance any retain
+    -- Only release if we retained it
+    if self._animationRetained and self.animation.release then
+      self.animation:release()
+    end
     self.animation = nil
+    self._animationRetained = false
   end
-  self.simpleAnim = nil -- Clear any previous simpleAnim
+
+  self.simpleAnimation = nil -- Clear any previous simpleAnimation
   if self:getImage() then
     self:setImage(nil)
   end
@@ -195,9 +251,99 @@ function RoxySprite:clearView()
   self:setSize(0, 0)
 end
 
+-- ! Helper: Apply sprite size from first frame of an image table
+local function _applySizeFromImageTable(sprite, imagetable)
+  if not imagetable or not imagetable.getImage then return end
+
+  local first = imagetable:getImage(1)
+  if not first or not first.getSize then return end
+
+  local width, height = first:getSize()
+  if width and height then
+    sprite:setSize(width, height)
+    sprite:setCenter(0.5, 0.5)
+  end
+end
+
+-- ! Helper: Setup pooled animation with proper memory management
+local function _setupPooledAnimation(sprite, view)
+  local kind = view.kind or "sheet"
+
+  if kind == "sheet" then
+    -- Load imagetable from pool; wrap as RoxyAnimation
+    local imagetable = getAsset(view.poolKey)
+    if not imagetable then
+      error(("[RoxySprite:setView] Pool key not found: %s"):format(tostring(view.poolKey)), 3)
+    end
+    sprite.animation = RoxyAnimation.fromImagetable(imagetable) -- Refcount owned by this sprite
+    sprite._animationRetained = false -- We own this, don't need to release
+    _applySizeFromImageTable(sprite, imagetable)
+    sprite._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+
+  elseif kind == "animation" then
+    -- Pooled/shared animation object in Assets pool
+    local animation = getAsset(view.poolKey)
+    if not (type(animation) == "table" and animation.isRoxyAnimation) then
+      error(("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: %s"):format(tostring(view.poolKey)), 3)
+    end
+    if animation.retain then
+      animation:retain()
+      sprite._animationRetained = true -- Track that we retained this
+    end
+    sprite.animation = animation
+    _applySizeFromImageTable(sprite, animation.imagetable)
+    sprite._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+
+  elseif kind == "image" then
+    local image = getAsset(view.poolKey)
+    if not (image and image.draw) then
+      error(("[RoxySprite:setView] Pool key does not resolve to Image: %s"):format(tostring(view.poolKey)), 3)
+    end
+    sprite:setImage(image) -- Sets sprite size from image
+    sprite._drawFn = function(_, x, y, flip) image:draw(x, y, flip) end
+
+  else
+    error(("[RoxySprite:setView] Unknown view kind: %s"):format(tostring(kind)), 3)
+  end
+end
+
+-- ! Helper: Setup simple animation with validation
+local function _setupSimpleAnimation(sprite, imagetable, frameDuration, loop)
+  assert(imagetable, "[RoxySprite:setView] Failed to load imagetable for simpleAnimation")
+
+  -- Validate frame duration to prevent infinite update loops
+  if not frameDuration or frameDuration <= 0 then
+    error("[RoxySprite:setView] frameDuration must be > 0 for simpleAnimation", 3)
+  end
+
+  sprite.simpleAnimation = {
+    imagetable    = imagetable,
+    startFrame    = 1,
+    endFrame      = imagetable:getLength(),
+    currentFrame  = 1,
+    frameDuration = frameDuration,
+    accumulator   = 0,
+    loop          = loop,
+  }
+
+  _applySizeFromImageTable(sprite, imagetable)
+  -- Optimized draw function for simpleAnimation
+  sprite._drawFn = function(s, x, y, flip)
+    local simpleAnimation = s.simpleAnimation
+    if simpleAnimation and simpleAnimation.imagetable then
+      simpleAnimation.imagetable:drawImage(simpleAnimation.currentFrame, x, y, flip)
+    end
+  end
+end
+
 -- ! Set View
--- Sets the visual representation for the sprite (image or animation).
 function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration)
+  --#DEBUG START
+  if self._destroyed then
+    error("[RoxySprite:setView] Cannot set view on destroyed sprite", 2)
+  end
+  --#DEBUG END
+
   if not view then
     self:setVisible(false)
     self:clearView()
@@ -205,182 +351,101 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
   end
   self:setVisible(true)
 
-  -- Clear previous state
+  -- Clear previous state (handles memory cleanup properly)
   self:clearView()
-
-  -- Small helper: size this sprite from the first frame of an imagetable
-  local function _applySizeFromImagetable(imagetable)
-    if imagetable and imagetable.getImage then
-      local first = imagetable:getImage(1)
-      if first and first.getSize then
-        local width, height = first:getSize()
-        if width and height then
-          self:setSize(width, height)
-          self:setCenter(0.5, 0.5)
-        end
-      end
-    end
-  end
 
   -- Handle descriptor table form
   if type(view) == "table" and view.poolKey then
-    local kind = view.kind or "sheet"
-    if kind == "sheet" then
-      -- Load imagetable from pool; wrap as RoxyAnimation
-      local imagetable = getAsset(view.poolKey)
-      if not imagetable then
-        error(("[RoxySprite:setView] Pool key not found: %s"):format(tostring(view.poolKey)), 2)
-      end
-      self.animation = RoxyAnimation.fromImagetable(imagetable) -- Refcount owned by this sprite
-      _applySizeFromImagetable(self.animation.imagetable)
-      self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
-
-    elseif kind == "animation" then
-      -- Pooled/shared animation object in Assets pool
-      local animation = getAsset(view.poolKey)
-      if type(animation) == "table" and animation.isRoxyAnimation then
-        if animation.retain then animation:retain() end -- Retain while this sprite uses it
-        self.animation = animation
-        _applySizeFromImagetable(self.animation.imagetable)
-        self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
-      else
-        error(("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: %s"):format(tostring(view.poolKey)), 2)
-      end
-
-    elseif kind == "image" then
-      local img = getAsset(view.poolKey)
-      if img and img.draw then
-        self:setImage(img) -- Sets sprite size from image
-        self._drawFn = function(_, x, y, flip) img:draw(x, y, flip) end
-      else
-        error(("[RoxySprite:setView] Pool key does not resolve to Image: %s"):format(tostring(view.poolKey)), 2)
-      end
-    end
+    _setupPooledAnimation(self, view)
     return self
   end
 
-  -- Handle direct pooled objects (existing extension)
+  -- Handle direct pooled objects
   if type(view) == "table" and view.imagetable then
-    -- Direct imagetable object from pool
-    self.animation = RoxyAnimation.fromImagetable(view.imagetable) -- refcount owned by this sprite
-    _applySizeFromImagetable(self.animation.imagetable)
-    self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+    self.animation = RoxyAnimation.fromImagetable(view.imagetable)
+    self._animationRetained = false
+    _applySizeFromImageTable(self, view.imagetable)
+    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
     return self
   end
 
-  if type(view) == "table" and view.animation and (type(view.animation) == "table" and view.animation.isRoxyAnimation) then
-    -- Direct pooled animation object
-    if view.animation.retain then view.animation:retain() end -- retain while this sprite uses it
+  if type(view) == "table" and view.animation and
+     (type(view.animation) == "table" and view.animation.isRoxyAnimation) then
+    if view.animation.retain then
+      view.animation:retain()
+      self._animationRetained = true
+    end
     self.animation = view.animation
-    _applySizeFromImagetable(self.animation.imagetable)
-    self._drawFn = function(sprite, x, y, flip) sprite.animation:draw(x, y, flip) end
+    _applySizeFromImageTable(self, view.animation.imagetable)
+    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
     return self
   end
 
-  -- Pick and cache draw path
+  -- Handle string paths
   if type(view) == "string" then
     if viewIsSpritesheet then
       if singleAnimation then
         -- Simple looping spritesheet
-        local imagetable = newImagetable(view)
-        if not imagetable then
-          error("[RoxySprite:setView] Failed to load imagetable for simpleAnim", 2)
-        end
-        --#DEBUG START
-        -- Assert positive frame duration to prevent infinite update loops
-        assert((frameDuration or 0.1) > 0, "[RoxySprite:setView] frameDuration must be > 0 for simpleAnim")
-        --#DEBUG END
-        self.simpleAnim = {
-          imagetable    = imagetable,
-          startFrame    = 1,
-          endFrame      = imagetable:getLength(),
-          currentFrame  = 1,
-          frameDuration = frameDuration or 0.1,
-          accumulator   = 0,
-          loop          = (singleAnimationLoop ~= false),
-        }
-        -- Ensure the sprite has bounds for culling/dirty-rects
-        _applySizeFromImagetable(imagetable)
-        -- Draw function for simpleanim
-        self._drawFn = function(sprite, x, y, flip)
-          local simpleAnim = sprite.simpleAnim
-          if simpleAnim and simpleAnim.imagetable then
-            simpleAnim.imagetable:drawImage(simpleAnim.currentFrame, x, y, flip)
-          end
-        end
+        local imagetable = newImageTable(view)
+        _setupSimpleAnimation(self, imagetable, frameDuration or 0.1, singleAnimationLoop ~= false)
       else
         -- Full RoxyAnimation
         self.animation = RoxyAnimation(view) -- Path-based constructor
+        self._animationRetained = false
         if not (self.animation and self.animation.imagetable) then
           error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite", 2)
         end
-        _applySizeFromImagetable(self.animation and self.animation.imagetable)
-        self._drawFn = function(sprite, x, y, flip)
-          sprite.animation:draw(x, y, flip)
-        end
+        _applySizeFromImageTable(self, self.animation.imagetable)
+        self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
       end
     else
-      -- Static
+      -- Static image
       local image = newImage(view)
+      if not image then
+        error("[RoxySprite:setView] Failed to load image: " .. tostring(view), 2)
+      end
       self:setImage(image) -- Playdate sets sprite size from image
-      self._drawFn = function(sprite, x, y, flip)
-        local img = sprite:getImage()
-        if img then img:draw(x, y, flip) end
+      self._drawFn = function(s, x, y, flip)
+        local image = s:getImage()
+        if image then image:draw(x, y, flip) end
       end
     end
 
   elseif type(view) == "table" and (view.isRoxyAnimation == true) then
-    -- Passed a RoxyAnimation instance directly
-    if view.retain then view:retain() end -- Retain while this sprite uses it
-    self.animation = view
-    _applySizeFromImagetable(self.animation.imagetable)
-    self._drawFn = function(sprite, x, y, flip)
-      sprite.animation:draw(x, y, flip)
+    -- Direct RoxyAnimation instance
+    if view.retain then
+      view:retain()
+      self._animationRetained = true
     end
+    self.animation = view
+    _applySizeFromImageTable(self, view.imagetable)
+    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
 
   elseif type(view) == "userdata" then
-    -- If it is an ImageTable (has drawImage), treat as a simpleAnim
+    -- Handle ImageTable or Image userdata
     if view.drawImage then
-      local length = view:getLength()
-      self.simpleAnim = {
-        imagetable    = view,
-        startFrame    = 1,
-        endFrame      = length,
-        currentFrame  = 1,
-        frameDuration = frameDuration or 0.1,
-        accumulator   = 0,
-        loop          = (singleAnimationLoop ~= false),
-      }
-      -- Ensure the sprite has bounds for culling/dirty-rects
-      _applySizeFromImagetable(view)
-      self._drawFn = function(sprite, x, y, flip)
-        local anim = sprite.simpleAnim
-        if anim and anim.imagetable then
-          anim.imagetable:drawImage(anim.currentFrame, x, y, flip)
-        end
-      end
+      -- ImageTable - treat as simple animation
+      _setupSimpleAnimation(self, view, frameDuration or 0.1, singleAnimationLoop ~= false)
     elseif view.draw then
+      -- Image
       self:setImage(view)
-      self._drawFn = function(_, x, y, flip)
-        view:draw(x, y, flip)
-      end
+      self._drawFn = function(_, x, y, flip) view:draw(x, y, flip) end
     else
       error("[RoxySprite:setView] Unsupported userdata type for view", 2)
     end
 
   else
-    error(("[RoxySprite:setView] Unsupported view type for RoxySprite: %s"):format(type(view)), 2)
+    error(("[RoxySprite:setView] Unsupported view type: %s"):format(type(view)), 2)
   end
 
   return self
 end
 
 --------------------------------------------------------------------------------
--- Flip Flip
+-- Flip State Management
 --------------------------------------------------------------------------------
 
 -- ! Set Flip State
--- Updates flip state and marks dirty only when changed.
 function RoxySprite:setFlipState(newFlip)
   if self.flip ~= newFlip then
     self.flip = newFlip
@@ -388,54 +453,65 @@ function RoxySprite:setFlipState(newFlip)
   end
   return self
 end
+
 function RoxySprite:unflip()
   return self:setFlipState(UNFLIPPED)
 end
+
 function RoxySprite:flipX()
   return self:setFlipState(FLIPPED_X)
 end
+
 function RoxySprite:flipY()
   return self:setFlipState(FLIPPED_Y)
 end
+
 function RoxySprite:flipXY()
   return self:setFlipState(FLIPPED_X_Y)
 end
+
 function RoxySprite:getOrientation()
   return self.flip
 end
 
 --------------------------------------------------------------------------------
--- Animation Helpers
+-- Animation Definition
 --------------------------------------------------------------------------------
 
 -- ! Add Animation
--- Adds an animation definition to this sprite.
--- Table-based addAnimation; delegates cleanly to RoxyAnimation
 function RoxySprite:addAnimation(name, nextContinuity, unlessThisAnimation)
+  if not name or type(name) ~= "string" then
+    assert(type(name) == "string" and name ~= "", "[RoxySprite:addAnimation] Animation name must be a non-empty string")
+  end
+
   if self.animation then
     self.animation:addAnimation(name, nextContinuity, unlessThisAnimation)
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:addAnimation] Sprite has no animation system")
+  --#DEBUG END
   end
   return self
 end
 
 -- ! Set Animation
--- Switches the currently playing animation.
---
 function RoxySprite:setAnimation(name, nextContinuity, unlessThisAnimation)
-  --#DEBUG START
-  if not self.animation then
-    assert(false, "[RoxySprite:setAnimation] Sprite is not animated.")
+  if not name or type(name) ~= "string" then
+    assert(type(name) == "string" and name ~= "", "[RoxySprite:setAnimation] Animation name must be a non-empty string")
   end
-  --#DEBUG END
 
   if self.animation then
     self.animation:setAnimation(name, nextContinuity, unlessThisAnimation)
+  --#DEBUG START
+  else
+    Log.warn("[RoxySprite:setAnimation] Sprite has no animation system")
+  --#DEBUG END
   end
   return self
 end
 
 --------------------------------------------------------------------------------
--- Playback
+-- Playback Control
 --------------------------------------------------------------------------------
 
 -- ! Get isPaused
@@ -445,34 +521,41 @@ end
 
 -- ! Set isPaused
 function RoxySprite:setIsPaused(flag)
+  if type(flag) == "boolean" then
+    self.isPaused = flag
   --#DEBUG START
-  if type(flag) ~= "boolean" then
-    Log.warn("[RoxySprite:setIsPaused] Expected boolean for 'isPaused', got", type(flag))
-    return self
-  end
+  else
+    Log.warn("[RoxySprite:setIsPaused] Expected boolean, got %s", type(flag))
   --#DEBUG END
-
-  self.isPaused = flag
+  end
   return self
 end
 
 -- ! Play
 function RoxySprite:play()
-  if self.animation or self.simpleAnim then
+  if self.animation or self.simpleAnimation then
     self.isPaused = false
-    self:setUpdatesEnabled(true)  -- Enable engine updates
+    self:setUpdatesEnabled(true) -- Enable engine updates
   end
   return self
 end
 
--- ! Play With Delay
+-- ! Play With Delay - Fixed race condition
 function RoxySprite:playWithDelay(delay, animationName)
-  if (self.animation or self.simpleAnim) and type(delay) == "number" and delay > 0 then
+  if not (type(delay) == "number" and delay > 0) then
+    Log.warn("[RoxySprite:playWithDelay] Delay must be a positive number") --#DEBUG
+    delay = DELAY_DEFAULT
+  end
+
+  if self.animation or self.simpleAnimation then
     performAfterDelay(delay * MS_PER_SECOND, function()
-      if self.animation then
-        self:setAnimation(animationName)
+      -- Check if sprite still exists and hasn't been destroyed
+      if not self._destroyed and self.animation then
+        if animationName then
+          self:setAnimation(animationName)
+        end
+        self:play()
       end
-      self:play()
     end)
   end
   return self
@@ -480,42 +563,45 @@ end
 
 -- ! Pause
 function RoxySprite:pause()
-  if self.animation or self.simpleAnim then
+  if self.animation or self.simpleAnimation then
     self.isPaused = true
-    self:setUpdatesEnabled(false)  -- Disable engine updates
+    self:setUpdatesEnabled(false) -- Disable engine updates
   end
   return self
 end
 
 -- ! Toggle Play/Pause
 function RoxySprite:togglePlayPause()
-  if self.isPaused then return self:play() else return self:pause() end
+  if self.isPaused then
+    return self:play()
+  else
+    return self:pause()
+  end
 end
 
 -- ! Replay
 function RoxySprite:replay()
   if self.animation then
     self.animation:resetAnimationStart()
-  elseif self.simpleAnim then
-    self.simpleAnim.currentFrame = self.simpleAnim.startFrame
-    self.simpleAnim.accumulator  = 0
+  elseif self.simpleAnimation then
+    self.simpleAnimation.currentFrame = self.simpleAnimation.startFrame
+    self.simpleAnimation.accumulator  = 0
   end
   self.isPaused = false
-  self:setUpdatesEnabled(true)  -- Enable engine updates
+  self:setUpdatesEnabled(true)
   return self
 end
 
 -- ! Stop
--- Stops the sprite's animation and resets it to the first frame.
 function RoxySprite:stop()
-  if self.animation or self.simpleAnim then
+  if self.animation or self.simpleAnimation then
     self.isPaused = true
-    self:setUpdatesEnabled(false)  -- Disable engine updates
+    self:setUpdatesEnabled(false)
     if self.animation then
       self.animation:resetAnimationStart()
-    elseif self.simpleAnim then
-      self.simpleAnim.currentFrame = self.simpleAnim.startFrame
-      self.simpleAnim.accumulator  = 0
+    elseif self.simpleAnimation then
+      self.simpleAnimation.currentFrame = self.simpleAnimation.startFrame
+      self.simpleAnimation.accumulator  = 0
     end
     self:markDirty()
   end
@@ -528,14 +614,14 @@ function RoxySprite:reverse()
     self.animation:reverse()
   --#DEBUG START
   else
-    Log.warn("[RoxySprite:reverse] Sprite has no animation (or simpleAnim) to reverse.")
+    Log.warn("[RoxySprite:reverse] Sprite has no animation system")
   --#DEBUG END
   end
   return self
 end
 
 --------------------------------------------------------------------------------
--- Speed and Frame Duration
+-- Speed and Frame Duration Control
 --------------------------------------------------------------------------------
 
 -- ! Get Speed
@@ -543,19 +629,18 @@ function RoxySprite:getSpeed()
   if self.animation then
     return self.animation:getSpeed()
   end
-  Log.warn("[RoxySprite:getSpeed] Sprite has no animation (or simpleAnim) for speed.") --#DEBUG
   return nil
 end
 
 -- ! Set Speed
 function RoxySprite:setSpeed(speed, currentOnly)
-  assert(type(speed) == "number", "[RoxySprite:setSpeed] 'speed' must be a number") --#DEBUG
+  assert(type(speed) == "number", "[RoxySprite:setSpeed] Speed must be a number")
 
   if self.animation then
     self.animation:setSpeed(speed, currentOnly)
   --#DEBUG START
   else
-    Log.warn("[RoxySprite:setSpeed] Sprite has no animation (or simpleAnim) to set speed.")
+    Log.warn("[RoxySprite:setSpeed] Sprite has no animation system")
   --#DEBUG END
   end
 
@@ -567,19 +652,19 @@ function RoxySprite:getFrameDuration()
   if self.animation then
     return self.animation:getFrameDuration()
   end
-  Log.warn("[RoxySprite:getFrameDuration] Sprite has no animation (or simpleAnim) for frame duration.") --#DEBUG
   return nil
 end
 
 -- ! Set Frame Duration
 function RoxySprite:setFrameDuration(frameDuration, currentOnly)
-  assert(type(frameDuration) == "number", "[RoxySprite:setFrameDuration] 'frameDuration' must be a number") --#DEBUG
+  assert(type(frameDuration) == "number" and frameDuration > 0,
+         "[RoxySprite:setFrameDuration] Frame duration must be a positive number")
 
   if self.animation then
     self.animation:setFrameDuration(frameDuration, currentOnly)
   --#DEBUG START
   else
-    Log.warn("[RoxySprite:setFrameDuration] Sprite has no animation (or simpleAnim) to set frame duration.")
+    Log.warn("[RoxySprite:setFrameDuration] Sprite has no animation system")
   --#DEBUG END
   end
 
@@ -592,13 +677,18 @@ end
 
 -- ! Draw Specific Frame
 function RoxySprite:drawSpecificFrame(frame, andPause)
+  if type(frame) ~= "number" or frame < 1 then
+    Log.warn("[RoxySprite:drawSpecificFrame] Frame must be a positive number") --#DEBUG
+    frame = 1
+  end
+
   if self.animation then
     if andPause then self:pause() end
     self.animation:jumpToSpecificFrame(frame)
     if self.isPaused then self:markDirty() end
   --#DEBUG START
   else
-    Log.warn("[RoxySprite:drawSpecificFrame] Sprite has no animation (or simpleAnim) to draw specific frame.")
+    Log.warn("[RoxySprite:drawSpecificFrame] Sprite has no animation system")
   --#DEBUG END
   end
   return self
@@ -606,101 +696,93 @@ end
 
 -- ! Step Frame
 function RoxySprite:stepFrame(direction)
+  direction = direction or 1
+  if type(direction) ~= "number" then
+    Log.warn("[RoxySprite:stepFrame] Direction must be a number") --#DEBUG
+    direction = 1
+  end
+
   if self.animation then
     self:pause()
     self.animation:stepFrame(direction)
     self:markDirty()
   --#DEBUG START
   else
-    Log.warn("[RoxySprite:stepFrame] Sprite has no animation (or simpleAnim) to step frame.")
+    Log.warn("[RoxySprite:stepFrame] Sprite has no animation system")
   --#DEBUG END
   end
   return self
 end
 
 --------------------------------------------------------------------------------
--- Rendering
+-- Rendering - Optimized to cache camera position once
 --------------------------------------------------------------------------------
 
 -- ! Update
 function RoxySprite:update()
-  if self.isPaused then return end
+  if self.isPaused or self._destroyed then return end
 
-  -- If parallax is configured, compute screen-space placement first.
+  -- Cache camera position once for all operations that need it
+  local cameraX, cameraY
+  local needsCameraPos = (self.parallaxX or self.parallaxY) or not self._ignoresDrawOffset
+
+  if needsCameraPos then
+    cameraX, cameraY = getPosition()
+  end
+
+  -- Convert world coordinates to screen space using parallax factors.
+  -- ParallaxX/Y of 1.0 = normal scrolling, 0.0 = fixed position, 0.5 = half speed
   if self.parallaxX or self.parallaxY then
-    local camX, camY = getPosition()
-    local wx  = self.worldX or self.x or 0
-    local wy  = self.worldY or self.y or 0
-    local px  = self.parallaxX or 1
-    local py  = self.parallaxY or 1
-    local pox = self.parallaxOriginX or 0
-    local poy = self.parallaxOriginY or 0
-    local screenX = round(wx + pox * (1 - px) - camX * px)
-    local screenY = round(wy + poy * (1 - py) - camY * py)
+    local worldX  = self.worldX or self.x or 0
+    local worldY  = self.worldY or self.y or 0
+    local parallaxX  = self.parallaxX or 1
+    local parallaxY  = self.parallaxY or 1
+    local parallaxOriginX = self.parallaxOriginX or 0
+    local parallaxOriginY = self.parallaxOriginY or 0
+    local screenX = round(worldX + parallaxOriginX * (1 - parallaxX) - cameraX * parallaxX)
+    local screenY = round(worldY + parallaxOriginY * (1 - parallaxY) - cameraY * parallaxY)
     self:moveTo(screenX, screenY)
   end
 
-  -- Cache camera position once for all sprites that need it
-  local camX, camY
-  if not self._ignoresDrawOffset then
-    camX, camY = getPosition()
-  end
-
-  -- Skip all animations if sprite is off-screen
-  if not self:isOnScreenCached(camX, camY) then return end
+  -- Skip all animations if sprite is off-screen (using cached camera position)
+  if not self:isOnScreen(cameraX, cameraY) then return end
 
   local dt = r.deltaTime or 0
 
-  -- (Fast) Simple animation path
-  local simpleAnim = self.simpleAnim
-  if simpleAnim then
-    -- Cache frequently accessed table fields as locals
-    local currentFrame = simpleAnim.currentFrame
-    local accumulator = simpleAnim.accumulator
-    local frameDuration = simpleAnim.frameDuration
-    local endFrame = simpleAnim.endFrame
-    local startFrame = simpleAnim.startFrame
-    local loop = simpleAnim.loop
+  -- Fast path: Simple animation with reduced local variable copying
+  local simpleAnimation = self.simpleAnimation
+  if simpleAnimation then
+    local oldFrame = simpleAnimation.currentFrame -- Track if frame changes
+    simpleAnimation.accumulator += dt
 
-    local oldFrame = currentFrame -- Track if frame changes
-
-    accumulator = accumulator + dt
-
-    -- Use while loop to handle large delta times properly
-    while accumulator >= frameDuration do
-      currentFrame = currentFrame + 1
-      if currentFrame > endFrame then
-        if loop then
-          currentFrame = startFrame
+    -- Handle large delta times properly
+    while simpleAnimation.accumulator >= simpleAnimation.frameDuration do
+      simpleAnimation.currentFrame += 1
+      if simpleAnimation.currentFrame > simpleAnimation.endFrame then
+        if simpleAnimation.loop then
+          simpleAnimation.currentFrame = simpleAnimation.startFrame
         else
-          currentFrame = endFrame
-          -- Auto-pause completed one-shot animations for performance
-          if not loop then
-            self:pause()
-          end
+          simpleAnimation.currentFrame = simpleAnimation.endFrame
+          -- Auto-pause to save CPU when one-shot completes
+          self:pause()
+          break
         end
       end
-      accumulator = accumulator - frameDuration
+      simpleAnimation.accumulator -= simpleAnimation.frameDuration
     end
-
-    -- Write back the changed values
-    simpleAnim.currentFrame = currentFrame
-    simpleAnim.accumulator = accumulator
 
     -- Only mark dirty if frame actually changed
-    if currentFrame ~= oldFrame then
+    if simpleAnimation.currentFrame ~= oldFrame then
       self:markDirty()
     end
-
     return
   end
 
-  -- (Normal) Full roxyanimation path
-  local animation = self.animation
-  if animation then
-    local prev = animation.currentFrame
-    animation:update()
-    if animation.currentFrame ~= prev then
+  -- Full RoxyAnimation path
+  if self.animation then
+    local previousFrame = self.animation.currentFrame
+    self.animation:update()
+    if self.animation.currentFrame ~= previousFrame then
       self:markDirty()
     end
   end
@@ -708,7 +790,7 @@ end
 
 -- ! Draw
 function RoxySprite:draw()
-  if self._drawFn then
+  if self._drawFn and not self._destroyed then
     self._drawFn(self, 0, 0, self.flip)
   end
 end
@@ -726,7 +808,7 @@ end
 
 -- ! Remove Sprite
 function RoxySprite:remove()
-  if self.isRoxySprite and (self.animation or self.simpleAnim) then
+  if self.isRoxySprite and (self.animation or self.simpleAnimation) then
     self:stop()
   end
 
@@ -754,38 +836,7 @@ function RoxySprite:isAdded()
 end
 
 -- ! Is on Screen
--- Unified bounds calculation logic with proper center anchor handling
-function RoxySprite:isOnScreen()
-  local spriteX = self.x or 0
-  local spriteY = self.y or 0
-  local spriteWidth = self.width or 0
-  local spriteHeight = self.height or 0
-  local centerX, centerY = self:getCenter()
-
-  -- Calculate actual bounds based on center anchor
-  local left = spriteX - spriteWidth * centerX
-  local top = spriteY - spriteHeight * centerY
-  local right = left + spriteWidth
-  local bottom = top + spriteHeight
-
-  local leftLimit, topLimit, rightLimit, bottomLimit
-  if self._ignoresDrawOffset then
-    -- Screen-space bounds
-    leftLimit, topLimit = 0, 0
-    rightLimit, bottomLimit = DISPLAY_WIDTH, DISPLAY_HEIGHT
-  else
-    -- World-space bounds with camera
-    local camX, camY = getPosition()
-    leftLimit, topLimit = camX, camY
-    rightLimit, bottomLimit = camX + DISPLAY_WIDTH, camY + DISPLAY_HEIGHT
-  end
-
-  return not (right < leftLimit or left > rightLimit or bottom < topLimit or top > bottomLimit)
-end
-
--- ! Is on Screen (with cached camera)
--- Unified with isOnScreen logic and proper fallbacks
-function RoxySprite:isOnScreenCached(camX, camY)
+function RoxySprite:isOnScreen(cachedCamX, cachedCamY)
   local spriteX = self.x or 0
   local spriteY = self.y or 0
   local spriteWidth = self.width or 0
@@ -801,10 +852,14 @@ function RoxySprite:isOnScreenCached(camX, camY)
   local leftLimit, topLimit, rightLimit, bottomLimit
   if self._ignoresDrawOffset then
     -- Screen-space bounds (camera position irrelevant)
-    leftLimit, topLimit = 0, 0
-    rightLimit, bottomLimit = DISPLAY_WIDTH, DISPLAY_HEIGHT
+    leftLimit, topLimit = SCREEN_LEFT_LIMIT, SCREEN_TOP_LIMIT
+    rightLimit, bottomLimit = SCREEN_RIGHT_LIMIT, SCREEN_BOTTOM_LIMIT
   else
-    -- World-space bounds with provided camera coordinates
+    -- World-space bounds with camera (use cached values if provided)
+    local camX, camY = cachedCamX, cachedCamY
+    if not camX then
+      camX, camY = getPosition()
+    end
     leftLimit, topLimit = camX, camY
     rightLimit, bottomLimit = camX + DISPLAY_WIDTH, camY + DISPLAY_HEIGHT
   end
@@ -822,15 +877,23 @@ function RoxySprite:getScreenPosition()
 end
 
 -- ! Destroy
--- On destroy/remove, release shared animation
 function RoxySprite:destroy()
+  if self._destroyed then return end -- Prevent double-destroy
+
+  self._destroyed = true
   self:remove()
-  if self.animation and self.animation.release then
+
+  -- Release retained animations to prevent memory leaks
+  if self.animation and self._animationRetained and self.animation.release then
     self.animation:release()
   end
-  self.animation  = nil
-  self.simpleAnim = nil
+
+  self.animation = nil
+  self._animationRetained = false
+  self.simpleAnimation = nil
   self:setImage(nil)
+  self:setSize(0, 0)
+  self._drawFn = nil
 end
 
 --[[
