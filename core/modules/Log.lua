@@ -116,9 +116,9 @@ end
 -- Always emits, regardless of Log.level (uncontrollable)
 -- Deprecated in spirit: Prefer 'error()' at call sites; this remains for compatibility
 function Log.error(msgOrFn, ...)
-  -- Clarify and adjust stack level behavior:
-  --    - If first vararg is a number, treat it as RELATIVE to the caller of Log.error
-  --    - Default is 1 (i.e., point at caller), which maps to error level 2
+  -- Stack level behavior:
+  --    - If first vararg is a number, treat it as stack level parameter
+  --    - Default is 1, which points to the caller of Log.error
   --    - If '0' is passed, honor Lua's special case (no stack level adjustment)
   local args = {...}
   local stackLevel = nil
@@ -129,11 +129,12 @@ function Log.error(msgOrFn, ...)
   local message = resolveMessage(msgOrFn, tableUnpack(args))
 
   -- Compute error level:
-  -- Base of 2 points to the caller of Log.error
-  -- A user-specified stackLevel n shifts the blame n-1 frames above the caller
+  -- stackLevel 1 = caller of Log.error (default)
+  -- stackLevel 2 = caller's caller
+  -- stackLevel 0 = special case (no stack trace adjustment)
   -- Examples:
-  --    nil --> 2 (caller)
-  --    1   --> 2 (caller)
+  --    nil --> 2 (caller of Log.error)
+  --    1   --> 2 (caller of Log.error)
   --    2   --> 3 (caller's caller)
   --    0   --> 0 (special: pass-through)
   local errLevel
@@ -180,7 +181,7 @@ function Log.assert(condition, msgOrFn, ...)
 end
 
 --[[
-USAGE EXAMPLES:
+GUIDANCE:
 Prefer native Lua 'error()' and 'assert()' at call sites going forward.
 Keep 'Log.warn'/'Log.info'/'Log.debug' for controllable, non-fatal output.
 Strip debug-only calls with '--#DEBUG' or '--#DEBUG START/END' at the call site
