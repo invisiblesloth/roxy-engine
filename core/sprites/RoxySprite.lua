@@ -1,6 +1,12 @@
 -- libraries/roxy/core/sprites/RoxySprite.lua
 
 --------------------------------------------------------------------------------
+-- Standard Lua Function Aliases
+--------------------------------------------------------------------------------
+
+local floor <const> = math.floor
+
+--------------------------------------------------------------------------------
 -- Playdate SDK Imports
 --------------------------------------------------------------------------------
 
@@ -720,31 +726,30 @@ end
 
 -- ! Update
 function RoxySprite:update()
-  if self.isPaused or self._destroyed then return end
+  if self._destroyed then return end
 
-  -- Cache camera position once for all operations that need it
+  local hasParallax = (self.parallaxX ~= nil) or (self.parallaxY ~= nil)
   local cameraX, cameraY
-  local needsCameraPos = (self.parallaxX or self.parallaxY) or not self._ignoresDrawOffset
 
-  if needsCameraPos then
-    cameraX, cameraY = getPosition()
+  if hasParallax or not self._ignoresDrawOffset then
+    cameraX, cameraY = Camera.getPosition()
   end
 
-  -- Convert world coordinates to screen space using parallax factors.
-  -- ParallaxX/Y of 1.0 = normal scrolling, 0.0 = fixed position, 0.5 = half speed
-  if self.parallaxX or self.parallaxY then
-    local worldX  = self.worldX or self.x or 0
-    local worldY  = self.worldY or self.y or 0
-    local parallaxX  = self.parallaxX or 1
-    local parallaxY  = self.parallaxY or 1
+  if hasParallax then
+    local worldX = self.worldX or 0
+    local worldY = self.worldY or 0
+    local parallaxX = self.parallaxX or 1
+    local parallaxY = self.parallaxY or 1
     local parallaxOriginX = self.parallaxOriginX or 0
     local parallaxOriginY = self.parallaxOriginY or 0
-    local screenX = round(worldX + parallaxOriginX * (1 - parallaxX) - cameraX * parallaxX)
-    local screenY = round(worldY + parallaxOriginY * (1 - parallaxY) - cameraY * parallaxY)
-    self:moveTo(screenX, screenY)
+
+    local spriteX = floor(parallaxOriginX + (worldX - cameraX) * parallaxX + 0.5)
+    local spriteY = floor(parallaxOriginY + (worldY - cameraY) * parallaxY + 0.5)
+    self:moveTo(spriteX, spriteY)
   end
 
-  -- Skip all animations if sprite is off-screen (using cached camera position)
+  -- Skip all animations if sprite is paused or off-screen
+  if self.isPaused then return end
   if not self:isOnScreen(cameraX, cameraY) then return end
 
   local dt = r.deltaTime or 0
