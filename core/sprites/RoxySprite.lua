@@ -7,7 +7,7 @@
 local floor <const> = math.floor
 
 --------------------------------------------------------------------------------
--- Playdate SDK Imports
+-- Playdate SDK Imports and Aliases
 --------------------------------------------------------------------------------
 
 local pd        <const> = playdate
@@ -20,12 +20,15 @@ local newImage          <const> = Graphics.image.new
 local newImageTable     <const> = Graphics.imagetable.new
 
 --------------------------------------------------------------------------------
--- Roxy Framework Imports
+-- Roxy Framework Imports and Aliases
 --------------------------------------------------------------------------------
 
 local r       <const> = roxy
 local Assets  <const> = r.Assets
 local Camera  <const> = r.Camera
+
+-- Roxy Core Components
+local RoxyAnimation <const> = r.RoxyAnimation
 
 -- Roxy Utilities
 local round <const> = r.Math.round
@@ -34,12 +37,6 @@ local round <const> = r.Math.round
 local getAsset      <const> = Assets.getAsset
 local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
-
---------------------------------------------------------------------------------
--- Defaults
---------------------------------------------------------------------------------
-
-local DELAY_DEFAULT <const> = 1 -- Seconds
 
 --------------------------------------------------------------------------------
 -- Graphics Constants
@@ -57,6 +54,12 @@ local FLIPPED_X_Y <const> = Graphics.kImageFlippedXY
 local MS_PER_SECOND <const> = 1000
 
 --------------------------------------------------------------------------------
+-- Default Values
+--------------------------------------------------------------------------------
+
+local DELAY_DEFAULT <const> = 1 -- Seconds
+
+--------------------------------------------------------------------------------
 -- Display Constants (Cached for Performance)
 --------------------------------------------------------------------------------
 
@@ -70,7 +73,7 @@ local SCREEN_RIGHT_LIMIT  <const> = DISPLAY_WIDTH
 local SCREEN_BOTTOM_LIMIT <const> = DISPLAY_HEIGHT
 
 --------------------------------------------------------------------------------
--- Class Definition & Init
+-- Class Definition and Init
 --------------------------------------------------------------------------------
 
 class("RoxySprite").extends(Sprite)
