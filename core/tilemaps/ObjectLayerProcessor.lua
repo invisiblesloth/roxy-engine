@@ -43,7 +43,7 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
   local parallaxX, parallaxY = 1, 1
   local parallaxOriginX, parallaxOriginY = 0, 0
   local objectProperties = {}
-  
+
   if object.properties then
     for _, property in ipairs(object.properties) do
       local name = property.name
@@ -60,7 +60,7 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
       end
     end
   end
-  
+
   -- Use layer fallback only if object did not override
   if parallaxX == 1 and parallaxY == 1 then
     if fallbackParallaxX then parallaxX = fallbackParallaxX end
@@ -88,7 +88,7 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
   -- Create appropriate sprite type
   local sprite
   if hasParallax then
-    sprite = RoxyParallaxSprite({
+    sprite = RoxySprite({
       view = img,
       worldX = object.x or 0,
       worldY = object.y or 0,
@@ -131,7 +131,7 @@ end
 -- ! Process Object Layer
 function ObjectLayerProcessor.processObjectLayer(layer, opts, layerOptions, autoAdd, scene, sceneHasAdd, outSprites)
   local objects = layer.objects or {}
-  
+
   -- Resolve per-layer parallax once.
   -- (1) Prefer explicit layerOptions (both camelCase and lowercase accepted),
   -- (2) then Tiled layer fields (parallaxx/parallaxy),
@@ -142,12 +142,12 @@ function ObjectLayerProcessor.processObjectLayer(layer, opts, layerOptions, auto
   local layerPY = tonumber(layer.parallaxy) or nil
   local resolvedParallaxX = tonumber(optPX) or layerPX or 1
   local resolvedParallaxY = tonumber(optPY) or layerPY or 1
-  
+
   local layerSprites = tableCreate(#objects, 0)
-  
+
   for _, object in ipairs(objects) do
     local sprite = nil
-  
+
     if opts.spriteFactory and type(opts.spriteFactory) == "function" then
       sprite = opts.spriteFactory(object, layer, layerOptions)
     elseif layerOptions.spriteFactory and type(layerOptions.spriteFactory) == "function" then
