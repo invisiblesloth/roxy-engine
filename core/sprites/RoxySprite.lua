@@ -27,9 +27,6 @@ local r       <const> = roxy
 local Assets  <const> = r.Assets
 local Camera  <const> = r.Camera
 
--- Roxy Core Components
-local RoxyAnimation <const> = r.RoxyAnimation
-
 -- Roxy Utilities
 local round <const> = r.Math.round
 
