@@ -1,9 +1,8 @@
 -- core/physics/RoxyPhysicsBody.lua
 
+local abs     <const> = math.abs
 local pd      <const> = playdate
 local Object  <const> = pd.object
-
-local abs <const> = math.abs
 
 local FLOOR_LIMIT <const> = 0.7 --  normal.y  < -FLOOR_LIMIT  --> floor
 local CEIL_LIMIT  <const> = 0.7 --  normal.y  >  CEIL_LIMIT   --> ceiling
@@ -15,6 +14,7 @@ local WALL_LIMIT <const> = 0.7  -- |normal.x| >  WALL_LIMIT   --> wall
 
 class("RoxyPhysicsBody").extends(Object)
 
+-- ! Initializes
 function RoxyPhysicsBody:init(owner, opts)
   opts = opts or {}
   self.owner = owner -- The RoxyActor/RoxySprite
@@ -56,6 +56,7 @@ function RoxyPhysicsBody:_hasInvalidCollideRect(sprite)
   return false
 end
 
+-- ! Update
 function RoxyPhysicsBody:update(dt)
   -- Integrate acceleration
   self.vx = self.vx + self.ax * dt

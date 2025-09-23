@@ -1,114 +1,115 @@
 -- core/sprites/RoxyActor.lua
 
-local pd       <const> = playdate
-local Graphics <const> = pd.graphics
-local r        <const> = roxy
+local abs       <const> = math.abs
+local pd        <const> = playdate
+local Graphics  <const> = pd.graphics
+local r         <const> = roxy
 
-local abs <const> = math.abs
-
--- ----------------------------------------
--- Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- ! Class Definition & Init
+--------------------------------------------------------------------------------
 
 class("RoxyActor").extends(RoxySprite)
 
 -- Manifest may include:
 --   sheet, rows, frames, loop, next, default, transitions
-function RoxyActor:init(manifest, defaultState)
-  RoxyActor.super.init(self)
-
-  -- Cache manifest locally
-  manifest = manifest or {}
-  self.manifest = manifest
-
-  --#DEBUG START
-  if not manifest.sheet then
-    Log.warn("[RoxyActor:init] No spritesheet/imagetable provided in manifest")
+-- Sprite options (forwarded to RoxySprite) may include:
+--   name, worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, view, isSheet, singleAnimation, frameDuration
+function RoxyActor:init(manifest, defaultState, opts, scene)
+  -- Allow 3-arg form where 2nd arg is actually scene
+  if defaultState and type(defaultState) == "table" and defaultState.addSprite and not opts and not scene then
+    scene, defaultState = defaultState, nil
   end
-  --#DEBUG END
+  -- Allow 3-arg form where 3rd arg is scene (when opts omitted)
+  if opts and opts.addSprite and scene == nil then
+    scene, opts = opts, nil
+  end
 
-  -- default and current states
+  manifest = manifest or {}
+  opts = opts or {}
+
+  RoxyActor.super.init(self, opts, scene)
+
+  self.manifest     = manifest
   self.defaultState = defaultState or manifest.default
   self.currentState = nil
   self.nextState    = nil
   self.facing       = 1
 
-  -- Set up view based on sheet type
-  if manifest.sheet then
-    local sheet = manifest.sheet
-    local sheetType = type(sheet)
+  --#DEBUG START
+  if not self.animation and not manifest.sheet then
+    Log.warn("[RoxyActor:init] No spritesheet/imagetable provided in manifest")
+  end
+  --#DEBUG END
 
+  -- Only set view if one isn't already set (respects opts.view or pre-set view)
+  if not self.animation and manifest.sheet then
+    local sheet, sheetType = manifest.sheet, type(manifest.sheet)
     if sheetType == "string" then
       self:setView(sheet, true, false, false)
-    elseif sheetType == "userdata" and sheet.getImage then  -- Fixed: changed from drawImage to getImage
+    elseif sheetType == "userdata" and sheet.getImage then
       self:setView(RoxyAnimation.fromImagetable(sheet))
     elseif sheetType == "table" then
-      -- Accept a direct RoxyAnimation, or a wrapper {animation=anim}
       if sheet.isRoxyAnimation then
-        self:setView(sheet:retain()) -- Fixed: changed from s:retain() to sheet:retain()
+        self:setView(sheet:retain())
       elseif sheet.animation and sheet.animation.isRoxyAnimation then
         self:setView(sheet.animation:retain())
-      else --#DEBUG
-        Log.warn("[RoxyActor:init] Unsupported table for 'sheet' (expected RoxyAnimation or {animation=...})") --#DEBUG
+      --#DEBUG START
+      else
+        Log.warn("[RoxyActor:init] Unsupported table for 'sheet'")
+      --#DEBUG END
       end
-    else --#DEBUG
-      Log.warn("[RoxyActor:init] Unsupported sheet type; expected path, imagetable, RoxyAnimation, or {animation=...}") --#DEBUG
+    --#DEBUG START
+    else
+      Log.warn("[RoxyActor:init] Unsupported sheet type; expected path, imagetable, RoxyAnimation, or {animation=...}")
+    --#DEBUG END
     end
   end
 
-  -- Prepare for building animations
+  -- Build animations from manifest.rows if we have an imagetable
   local animation = self.animation
   local imagetable = animation and animation.imagetable
   local rows = manifest.rows
-
-  -- Only build if rows is actually a table.
   if type(rows) == "table" and imagetable then
-    local perRow = manifest.frames or (imagetable and #imagetable) or 1  -- Fixed: safer nil handling
+    local perRow = manifest.frames or #imagetable or 1
     local doLoop = manifest.loop or {}
     local doNext = manifest.next or {}
-
     for stateName, info in pairs(rows) do
       local startFrame, endFrame
       if type(info) == "table" then
         startFrame = info.start
-        endFrame   = info.finish
+        endFrame = info.finish
       else
         startFrame = (info - 1) * perRow + 1
-        endFrame   = info * perRow
+        endFrame = info * perRow
       end
       self:addAnimation{
-        name       = stateName,
-        startFrame = startFrame,
-        endFrame   = endFrame,
-        loop       = (doLoop[stateName] ~= false),
-        next       = doNext[stateName],
-        speed      = (type(info) == "table") and info.speed or nil,
+        name          = stateName,
+        startFrame    = startFrame,
+        endFrame      = endFrame,
+        loop          = (doLoop[stateName] ~= false),
+        next          = doNext[stateName],
+        speed         = (type(info) == "table") and info.speed or nil,
         frameDuration = (type(info) == "table") and info.frameDuration or nil,
         onCompleteCallback = function() self:_onAnimationComplete(stateName) end,
       }
     end
-  else
-    -- rows missing is fine when we already have a prebuilt animation
-    -- (do nothing)
   end
 
-  -- Ensure animations table is present
-  local animation = self.animation
+  -- Ensure animations table present
+  animation = self.animation
   self.animations = (animation and animation.animations) or self.animations or {}
 
-  -- Cache transition rules for physics updates
   self:_cacheTransitionRules()
 
-  -- Start in default state (only if it exists)
-  -- Fixed: Removed the undefined self.defaultName condition
   if self.defaultState and self.animations[self.defaultState] then
     self:setState(self.defaultState)
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Internal Methods
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- TODO: Should these be local helpers not methods?
 
@@ -177,9 +178,9 @@ function RoxyActor:_onAnimationComplete(stateName)
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Public API
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Set State
 -- Immediately switch to `stateName`.
@@ -265,32 +266,41 @@ function RoxyActor:setFacing(vx)
 end
 
 -- ! Add Physics
--- Attach a physics body and override this instance's update method to step physics before animation.
+-- Attach physics and patch update in a reversible way
 function RoxyActor:addPhysics(body)
   self.physicsBody = body
 
-  -- Capture the original update method once
-  local originalUpdate = self.update
+  -- Save the pre-physics update once
+  if not self._updateBeforePhysics then
+    self._updateBeforePhysics = self.update
+  end
 
-  -- Override only this instance's update(dt)
+  -- Instance-level update wrapper
   function self:update(dt)
     dt = dt or r.deltaTime or 0
 
-    -- (1) Step physics first
-    if self.physicsBody and self.physicsBody.update then
-      self.physicsBody:update(dt)
+    -- (1) Step physics first if present
+    local physicsBody = self.physicsBody
+    if physicsBody and physicsBody.update then
+      physicsBody:update(dt)
       if self.updatePhysics then
-        self:updatePhysics(self.physicsBody)
+        self:updatePhysics(physicsBody)
       end
     end
 
-    -- (2) Proceed with original update
-    originalUpdate(self, dt)
+    -- (2) Continue with original update
+    if self._updateBeforePhysics then
+      self._updateBeforePhysics(self, dt)
+    else
+      -- Fallback to super if somehow missing
+      RoxyActor.super.update(self, dt)
+    end
   end
 
   return self
 end
 
+-- ! Update Physics
 function RoxyActor:updatePhysics(opts)
   opts = opts or {}
 
@@ -358,4 +368,38 @@ end
 -- Pass through to base update (which updates sprite and animation)
 function RoxyActor:update(dt)
   RoxyActor.super.update(self, dt)
+end
+
+--------------------------------------------------------------------------------
+-- Cleanup
+--------------------------------------------------------------------------------
+
+-- ! Clear Physics
+function RoxyActor:clearPhysics()
+  local physicsBody = self.physicsBody
+  if not physicsBody then return self end
+
+  -- Break back-reference to help GC and avoid accidental use
+  physicsBody.owner = nil
+  self.physicsBody = nil
+
+  -- Restore original update if we had patched it
+  if self._updateBeforePhysics then
+    self.update = self._updateBeforePhysics
+    self._updateBeforePhysics = nil
+  end
+
+  return self
+end
+
+-- ! Remove
+function RoxyActor:remove()
+  self:clearPhysics()
+  return RoxyActor.super.remove(self)
+end
+
+-- ! Destroy
+function RoxyActor:destroy()
+  self:clearPhysics()
+  RoxyActor.super.destroy(self)
 end
