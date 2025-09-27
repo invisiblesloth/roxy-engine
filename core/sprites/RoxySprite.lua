@@ -786,7 +786,7 @@ function RoxySprite:update()
   -- Full RoxyAnimation path
   if self.animation then
     local previousFrame = self.animation.currentFrame
-    self.animation:update()
+    self.animation:update(dt)
     if self.animation.currentFrame ~= previousFrame then
       self:markDirty()
     end
