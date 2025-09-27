@@ -364,7 +364,7 @@ function RoxyScene:addTilemap(tilemap)
   -- Give the tilemap a back-pointer so it can self-remove later
   tilemap.scene = self
 
-  -- Set the layer manager’s scene so callers don’t have to
+  -- Set the layer manager's scene so callers don't have to
   local layerManager = tilemap.layerManager
   if layerManager then
     layerManager:setScene(self)

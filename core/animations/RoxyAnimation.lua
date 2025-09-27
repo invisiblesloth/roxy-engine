@@ -1,121 +1,169 @@
 -- core/animations/RoxyAnimation.lua
 
-local pd        <const> = playdate
-local Object    <const> = pd.object
-local Graphics  <const> = pd.graphics
+--------------------------------------------------------------------------------
+-- Standard Lua Function Aliases
+--------------------------------------------------------------------------------
 
+-- Math functions
 local max   <const> = math.max
 local min   <const> = math.min
 local fmod  <const> = math.fmod
 
+--------------------------------------------------------------------------------
+-- Playdate SDK Aliases
+--------------------------------------------------------------------------------
+
+-- Core Playdate
+local pd        <const> = playdate
+local Object    <const> = pd.object
+local Graphics  <const> = pd.graphics
+
+-- Timer functions
+local performAfterDelay <const> = pd.timer.performAfterDelay
+
+-- Graphics functions
 local newImagetable <const> = Graphics.imagetable.new
 local drawImage     <const> = Graphics.imagetable.drawImage
 
-local performAfterDelay <const> = pd.timer.performAfterDelay
+--------------------------------------------------------------------------------
+-- Roxy Framework Aliases
+--------------------------------------------------------------------------------
 
+-- Roxy core
 local r         <const> = roxy
 local Math      <const> = r.Math
 local Assets    <const> = r.Assets
 local Animation <const> = r.Animation
 
+-- Roxy framework function aliases
 local clamp           <const> = Math.clamp
 local truncateDecimal <const> = Math.truncateDecimal
-
-local getAsset <const> = Assets.getAsset
-
+local getAsset        <const> = Assets.getAsset
 local updateAnimation <const> = Animation.update -- C Function
 
+--------------------------------------------------------------------------------
+-- Graphics Constants
+--------------------------------------------------------------------------------
+
+-- Image flip states
 local UNFLIPPED <const> = Graphics.kImageUnflipped
+
+--------------------------------------------------------------------------------
+-- Animation Constants
+--------------------------------------------------------------------------------
 
 local FRAME_DURATION_DEFAULT  <const> = 0.033 -- About 30 FPS
 local MIN_FRAME_DURATION      <const> = 0.016 -- Guard against >60 FPS
 local MAX_FRAME_DURATION      <const> = 10    -- Sensible upper limit (sec)
 local MAX_ANIMATION_SPEED     <const> = 100   -- UI clamp for setSpeed
 
+--------------------------------------------------------------------------------
+-- Local State Variables
+--------------------------------------------------------------------------------
+
 -- Track shared animations by imagetable identity (weak keys)
-local _animCache = setmetatable({}, { __mode = "k" })
+local _animationCache = setmetatable({}, { __mode = "k" })
 -- Cache animations by path to avoid duplicate imagetables
 local _pathCache = setmetatable({}, { __mode = "k" })
 
--- ----------------------------------------
--- Class Definition and Initialize
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Class Definition
+--------------------------------------------------------------------------------
 
 class("RoxyAnimation").extends(Object)
 
--- ! Helper: From Image Table
--- Constructor for imagetable objects
+--------------------------------------------------------------------------------
+-- Static Factory Methods
+--------------------------------------------------------------------------------
+
+-- ! From Image Table
+-- Create animation from existing imagetable with reference counting
 function RoxyAnimation.fromImagetable(imagetable)
   if not (imagetable and imagetable.drawImage) then
-    Log.error("[RoxyAnimation.fromImagetable] Expected imagetable userdata")
+    error("[RoxyAnimation.fromImagetable] Expected imagetable userdata") --#DEBUG
     return nil
   end
 
-  local cached = _animCache[imagetable]
+  -- Return existing cached instance with incremented reference count
+  local cached = _animationCache[imagetable]
   if cached then
     return cached:retain()
   end
 
-  local self = RoxyAnimation(imagetable) -- init handles imagetable or path
+  -- Create new instance and add to cache
+  local self = RoxyAnimation(imagetable)
   self._refcount = 1
-  _animCache[imagetable] = self
+  _animationCache[imagetable] = self
   return self
 end
 
--- ! Helper: From Pool
--- Helper to fetch from Assets pool directly
+-- ! From Pool
+-- Create animation from Assets pool
 function RoxyAnimation.fromPool(poolKey)
   local imagetable = getAsset(poolKey)
   if not imagetable then
-    Log.error("[RoxyAnimation.fromPool] No asset for key: ", tostring(poolKey)) --#DEBUG
+    error("[RoxyAnimation.fromPool] No asset for key: ", tostring(poolKey))
     return nil
   end
   return RoxyAnimation.fromImagetable(imagetable)
 end
 
+--------------------------------------------------------------------------------
+-- Initialization
+--------------------------------------------------------------------------------
+
 -- ! Initialize
--- Keep existing path constructor but delegate the config init to a helper
+-- Initialize with path string or imagetable userdata
 function RoxyAnimation:init(view)
   self.isRoxyAnimation = true
 
   local viewType = type(view)
   if viewType == "string" then
-    -- Check path cache first to avoid duplicate imagetables
-    local cached = _pathCache[view]
-    if cached then
-      return cached:retain()
-    end
-
-    local imagetable = Graphics.imagetable.new(view)
-    --#DEBUG START
-    Log.assert(imagetable, function()
-      return string.format("[RoxyAnimation:init] Failed to create imagetable from: %s", tostring(view))
-    end, 1)
-    --#DEBUG END
-    self:_initCommon()
-    self.imagetable = imagetable
-    self._length = #imagetable
-    self._refcount  = 1
-    self._path = view -- Store path for cleanup
-    _pathCache[view] = self
-    _animCache[imagetable] = self -- Add to both caches
-    return
+    return self:_initFromPath(view)
+  elseif viewType == "userdata" and view and view.drawImage then
+    return self:_initFromImagetable(view)
+  else
+    error("[RoxyAnimation:init] Expected string path or imagetable userdata (got " .. viewType .. ")")
   end
-
-  -- Support imagetables directly
-  if viewType == "userdata" and view and view.drawImage then
-    self:_initCommon()
-    self.imagetable = view
-    self._length = #view
-    self._refcount = 1
-    return
-  end
-
-  Log.error("[RoxyAnimation:init] Expected string path or imagetable userdata (got " .. viewType .. ")", 1) --#DEBUG
 end
 
--- ! Common Initialize
--- Common initialization for both constructors
+-- ! Initialize From Path
+-- Initialize from file path with caching
+function RoxyAnimation:_initFromPath(path)
+  -- Check path cache to avoid duplicate imagetables
+  local cached = _pathCache[path]
+  if cached then
+    return cached:retain()
+  end
+
+  local imagetable = newImagetable(path)
+  if not imagetable then
+    error("[RoxyAnimation:_initFromPath] Failed to create imagetable from: " .. path)
+    return
+  end
+
+  self:_initCommon()
+  self.imagetable = imagetable
+  self._length = #imagetable
+  self._refcount = 1
+  self._path = path -- Store for cache cleanup
+
+  -- Add to both caches
+  _pathCache[path] = self
+  _animationCache[imagetable] = self
+end
+
+-- ! Initialize From Image Table
+-- Initialize from existing imagetable
+function RoxyAnimation:_initFromImagetable(imagetable)
+  self:_initCommon()
+  self.imagetable = imagetable
+  self._length = #imagetable
+  self._refcount = 1
+end
+
+-- ! Initialize Common
+-- Common initialization for all constructors
 function RoxyAnimation:_initCommon()
   self.animations       = {}
   self.defaultName      = nil
@@ -125,100 +173,60 @@ function RoxyAnimation:_initCommon()
   self.isFirstCycle     = true
   self.isReversed       = false
   self.accumulator      = 0
-  -- _length will be set after imagetable is assigned
 end
 
+--------------------------------------------------------------------------------
+-- Reference Counting
+--------------------------------------------------------------------------------
+
 -- ! Retain
--- Increment reference count
+-- Increment reference count and return self for chaining
 function RoxyAnimation:retain()
   self._refcount = (self._refcount or 0) + 1
   return self
 end
 
 -- ! Release
--- Reference release; recycles imagetable when count drops to zero
+-- Decrement reference count, cleanup when reaches zero
 function RoxyAnimation:release()
   if not self._refcount then return end
 
-  self._refcount = self._refcount - 1
+  self._refcount -= 1
   if self._refcount <= 0 then
-    _animCache[self.imagetable] = nil
-    -- Remove from path cache using stored path
-    if self._path then
-      _pathCache[self._path] = nil
-    end
-    -- Do not free imagetable here; Assets pool owns it.
+    self:_cleanupCaches()
     self:destroy()
   end
 end
 
--- ----------------------------------------
--- Internal Methods
--- ----------------------------------------
-
--- ! Should Prevent Animation Change
-function RoxyAnimation:shouldPreventAnimationChange(unlessThisAnimation)
-  return unlessThisAnimation and (
-    (type(unlessThisAnimation) == "string" and self.currentName == unlessThisAnimation) or
-    (type(unlessThisAnimation) == "table"  and self.currentAnimation == unlessThisAnimation)
-  )
+-- ! Cleanup Caches
+-- Remove from both caches when reference count reaches zero
+function RoxyAnimation:_cleanupCaches()
+  _animationCache[self.imagetable] = nil
+  if self._path then
+    _pathCache[self._path] = nil
+  end
 end
 
--- ----------------------------------------
--- Public API
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- Animation Management
+--------------------------------------------------------------------------------
 
 -- ! Add Animation
+-- Add named animation with frame range and playback options
 function RoxyAnimation:addAnimation(opts)
-  -- Validate animation name
-  if not opts.name or type(opts.name) ~= "string" then
-    Log.error("[RoxyAnimation:addAnimation] Animation name must be a non-empty string")
+  if not self:_validateAnimationOpts(opts) then
     return self
   end
 
-  -- Check for empty imagetable
-  if self._length == 0 then
-    Log.error("[RoxyAnimation:addAnimation] Cannot add animation to empty imagetable")
-    return self
-  end
-
-  -- Build animation directly to avoid unnecessary table creation
-  local animation = {
-    name               = opts.name,
-    startFrame         = tonumber(opts.startFrame) or 1,
-    endFrame           = tonumber(opts.endFrame) or self._length,
-    loop               = (opts.loop ~= false),
-    next               = opts.next,
-    onCompleteCallback = opts.onCompleteCallback or opts.onComplete,
-    speed              = opts.speed or 1,
-    frameDuration      = opts.frameDuration or FRAME_DURATION_DEFAULT
-  }
-
-  -- Swap if out of order
-  if animation.startFrame > animation.endFrame then
-    animation.startFrame, animation.endFrame = animation.endFrame, animation.startFrame
-  end
-
-  -- Clamp into valid ranges
-  animation.startFrame    = max(1, animation.startFrame)
-  animation.endFrame      = min(self._length, animation.endFrame)
-  animation.speed         = clamp(animation.speed, 0, MAX_ANIMATION_SPEED)
-  animation.frameDuration = clamp(animation.frameDuration, MIN_FRAME_DURATION, MAX_FRAME_DURATION)
-
-  -- Validate frame range after clamping
-  if animation.endFrame < animation.startFrame then
-    Log.warn("[RoxyAnimation:addAnimation] Invalid frame range after clamping: start=" .. animation.startFrame .. " end=" .. animation.endFrame)
-    return self
-  end
-
-  -- Precompute range for performance
-  animation.range = animation.endFrame - animation.startFrame + 1
-
+  local animation = self:_buildAnimationConfig(opts)
   self.animations[animation.name] = animation
 
+  -- Set as default if this is the first animation
   if not self.defaultName then
     self.defaultName = animation.name
   end
+
+  -- Auto-start if no current animation
   if not self.currentName then
     self:setAnimation(animation.name)
   end
@@ -226,61 +234,77 @@ function RoxyAnimation:addAnimation(opts)
   return self
 end
 
--- ! Get Start Frame
-function RoxyAnimation:getStartFrame(newAnimation, nextContinuity)
-  local currentAnimation = self.currentAnimation
-  if not currentAnimation then
-    return newAnimation.startFrame
+-- ! Validate Animation Options
+-- Validate required parameters for addAnimation
+function RoxyAnimation:_validateAnimationOpts(opts)
+  if not opts or not opts.name or type(opts.name) ~= "string" then
+    error("[RoxyAnimation:addAnimation] Animation name must be a non-empty string")
+    return false
   end
 
-  local range     = currentAnimation.range or (currentAnimation.endFrame - currentAnimation.startFrame + 1)
-  local newRange  = newAnimation.range or (newAnimation.endFrame - newAnimation.startFrame + 1)
-  local frame     = newAnimation.startFrame
-
-  if nextContinuity then
-    -- Handle edge cases for range calculations
-    if range <= 0 or newRange <= 0 then
-      return newAnimation.startFrame
-    end
-
-    -- Ensure current frame is within bounds for robust calculation
-    local current = clamp(self.currentFrame, currentAnimation.startFrame, currentAnimation.endFrame)
-    -- Adjust progress calculation for reversed animations
-    local progress
-    if self.isReversed then
-      progress = (currentAnimation.endFrame - current) / range
-    else
-      progress = (current - currentAnimation.startFrame) / range
-    end
-
-    -- Handle NaN
-    progress = (progress == progress) and progress or 0
-    frame = newAnimation.startFrame + truncateDecimal(progress * newRange)
-    frame = clamp(frame, newAnimation.startFrame, newAnimation.endFrame)
+  if self._length == 0 then
+    error("[RoxyAnimation:addAnimation] Cannot add animation to empty imagetable")
+    return false
   end
 
-  return frame
+  return true
+end
+
+-- ! Build Animation Config
+-- Build animation config with defaults and validation
+function RoxyAnimation:_buildAnimationConfig(opts)
+  local animation = {
+    name                = opts.name,
+    startFrame          = tonumber(opts.startFrame) or 1,
+    endFrame            = tonumber(opts.endFrame) or self._length,
+    loop                = (opts.loop ~= false), -- Default true
+    next                = opts.next,
+    onCompleteCallback  = opts.onCompleteCallback or opts.onComplete,
+    speed               = opts.speed or 1,
+    frameDuration       = opts.frameDuration or FRAME_DURATION_DEFAULT
+  }
+
+  -- Ensure start <= end (swap if needed)
+  if animation.startFrame > animation.endFrame then
+    animation.startFrame, animation.endFrame = animation.endFrame, animation.startFrame
+  end
+
+  -- Clamp to valid ranges
+  animation.startFrame    = clamp(animation.startFrame, 1, self._length)
+  animation.endFrame      = clamp(animation.endFrame, 1, self._length)
+  animation.speed         = clamp(animation.speed, 0, MAX_ANIMATION_SPEED)
+  animation.frameDuration = clamp(animation.frameDuration, MIN_FRAME_DURATION, MAX_FRAME_DURATION)
+
+  animation.exitTime = (opts.exitTime ~= nil) and max(0, min(1, opts.exitTime)) or 1.0
+  animation.nextDelay = (type(opts.nextDelay) == "number" and opts.nextDelay > 0) and opts.nextDelay or 0
+
+  -- Precompute frame count for performance
+  animation.range = animation.endFrame - animation.startFrame + 1
+
+  return animation
 end
 
 -- ! Set Animation
+-- Switch to named animation with optional frame continuity
 function RoxyAnimation:setAnimation(name, nextContinuity, unlessThisAnimation)
-  if self:shouldPreventAnimationChange(unlessThisAnimation) then
+  -- Skip if already playing the excluded animation
+  if self:_shouldPreventAnimationChange(unlessThisAnimation) then
     return self
   end
 
   name = name or self.defaultName
   local animation = self.animations[name]
-  --#DEBUG START
   if not animation then
-    Log.warn("[RoxyAnimation:setAnimation] Animation", tostring(name), "not found; retaining", self.currentName or "<none>")
+    Log.warn("[RoxyAnimation:setAnimation] Animation '" .. tostring(name) .. "' not found") --#DEBUG
     return self
   end
-  --#DEBUG END
 
-  self.currentFrame     = self:getStartFrame(animation, nextContinuity)
+  -- Calculate starting frame (with continuity if requested)
+  self.currentFrame     = self:_getStartFrame(animation, nextContinuity)
   self.currentAnimation = animation
   self.currentName      = name
 
+  -- Reset cycle state unless continuing from previous animation
   if not nextContinuity then
     self:resetAnimationStart()
   end
@@ -288,69 +312,111 @@ function RoxyAnimation:setAnimation(name, nextContinuity, unlessThisAnimation)
   return self
 end
 
--- ! Animation Speed
+-- ! Stop
+-- Stop current animation playback
+function RoxyAnimation:stop()
+  self.currentAnimation = nil
+  self.currentName = nil
+  return self
+end
+
+-- ! Reverse
+-- Toggle playback direction
+function RoxyAnimation:reverse()
+  self.isReversed = not self.isReversed
+  return self
+end
+
+-- ! Reset Animation Start
+-- Reset to beginning of current animation cycle
+function RoxyAnimation:resetAnimationStart()
+  self.isFirstCycle = true
+  self.accumulator = 0
+  return self
+end
+
+--------------------------------------------------------------------------------
+-- Playback Control
+--------------------------------------------------------------------------------
+
+-- ! Get Speed
+-- Get current animation speed multiplier
 function RoxyAnimation:getSpeed()
-  if self.currentAnimation then
-    return self.currentAnimation.speed
-  end
-  Log.warn("[RoxyAnimation:getSpeed] No current animation or speed not set") --#DEBUG
-  return nil
+  return self.currentAnimation and self.currentAnimation.speed or nil
 end
 
 -- ! Set Speed
+-- Set animation speed (affects all animations unless currentOnly=true)
 function RoxyAnimation:setSpeed(speed, currentOnly)
-  if type(speed) ~= "number" then
-    Log.warn("[RoxyAnimation:setSpeed] Expected number for speed, got", type(speed)) --#DEBUG
+  if not self:_validateSpeedInput(speed) then
     return self
   end
+
   speed = clamp(speed, 0, MAX_ANIMATION_SPEED)
 
-  if not currentOnly then
+  if currentOnly and self.currentAnimation then
+    self.currentAnimation.speed = speed
+  else
+    -- Apply to all animations
     for _, animation in pairs(self.animations) do
       animation.speed = speed
     end
-  elseif self.currentAnimation then
-    self.currentAnimation.speed = speed
   end
 
   return self
 end
 
--- ! Frame Duration
-function RoxyAnimation:getFrameDuration()
-  if self.currentAnimation then
-    return self.currentAnimation.frameDuration
+-- ! Validate Speed Input
+-- Validate speed parameter for setSpeed
+function RoxyAnimation:_validateSpeedInput(speed)
+  if type(speed) ~= "number" then
+    Log.warn("[RoxyAnimation:setSpeed] Expected number, got " .. type(speed)) --#DEBUG
+    return false
   end
-  Log.warn("[RoxyAnimation:getFrameDuration] No current animation or frameDuration not set") --#DEBUG
-  return nil
+  return true
+end
+
+-- ! Get Frame Duration
+-- Get current frame duration in seconds
+function RoxyAnimation:getFrameDuration()
+  return self.currentAnimation and self.currentAnimation.frameDuration or nil
 end
 
 -- ! Set Frame Duration
+-- Set frame duration (affects all animations unless currentOnly=true)
 function RoxyAnimation:setFrameDuration(frameDuration, currentOnly)
-  if type(frameDuration) ~= "number" then
-    Log.warn("[RoxyAnimation:setFrameDuration] Expected number for frameDuration, got", type(frameDuration)) --#DEBUG
+  if not self:_validateFrameDurationInput(frameDuration) then
     return self
   end
 
   frameDuration = clamp(frameDuration, MIN_FRAME_DURATION, MAX_FRAME_DURATION)
 
-  if not currentOnly then
+  if currentOnly and self.currentAnimation then
+    self.currentAnimation.frameDuration = frameDuration
+  else
+    -- Apply to all animations
     for _, animation in pairs(self.animations) do
       animation.frameDuration = frameDuration
     end
-  elseif self.currentAnimation then
-    self.currentAnimation.frameDuration = frameDuration
   end
 
   return self
 end
 
+-- ! Validate Frame Duration Input
+-- Validate frameDuration parameter for setFrameDuration
+function RoxyAnimation:_validateFrameDurationInput(frameDuration)
+  if type(frameDuration) ~= "number" then
+    Log.warn("[RoxyAnimation:setFrameDuration] Expected number, got " .. type(frameDuration)) --#DEBUG
+    return false
+  end
+  return true
+end
+
 -- ! Start With Delay
+-- Start animation after specified delay
 function RoxyAnimation:startWithDelay(delay, animationName)
-  -- Add type check for animationName and fallback to defaultName
-  animationName = animationName or self.defaultName
-  if type(delay) ~= "number" or delay <= 0 or not self.animations[animationName] then
-    Log.warn("[RoxyAnimation:startWithDelay] Invalid delay or animation for startWithDelay:", delay, tostring(animationName)) --#DEBUG
+  if not self:_validateDelayedStart(delay, animationName) then
     return self
   end
 
@@ -361,102 +427,222 @@ function RoxyAnimation:startWithDelay(delay, animationName)
   return self
 end
 
--- ! Jump to Specific Frame
-function RoxyAnimation:jumpToSpecificFrame(frame)
+-- ! Validate Delayed Start
+-- Validate parameters for startWithDelay
+function RoxyAnimation:_validateDelayedStart(delay, animationName)
+  animationName = animationName or self.defaultName
+
+  if type(delay) ~= "number" or delay <= 0 then
+    Log.warn("[RoxyAnimation:startWithDelay] Invalid delay: " .. tostring(delay)) --#DEBUG
+    return false
+  end
+
+  if not self.animations[animationName] then
+    Log.warn("[RoxyAnimation:startWithDelay] Animation not found: " .. tostring(animationName)) --#DEBUG
+    return false
+  end
+
+  return true
+end
+
+--------------------------------------------------------------------------------
+-- Frame Control
+--------------------------------------------------------------------------------
+
+-- ! Jump To Frame
+-- Jump to specific frame within current animation range
+function RoxyAnimation:jumpToFrame(frame)
   local currentAnimation = self.currentAnimation
-  if not currentAnimation then return self end
+  if not currentAnimation then
+    Log.warn("[RoxyAnimation:jumpToFrame] No current animation") --#DEBUG
+    return self
+  end
 
-  self.currentFrame = max(currentAnimation.startFrame, min(frame, currentAnimation.endFrame))
-
+  -- Clamp to animation's frame range
+  self.currentFrame = clamp(frame, currentAnimation.startFrame, currentAnimation.endFrame)
   return self
 end
 
 -- ! Step Frame
--- Note: This steps absolute frame indices, not in playback direction
+-- Step forward or backward by one frame with wrapping
 function RoxyAnimation:stepFrame(direction)
   local currentAnimation = self.currentAnimation
-  if not currentAnimation then return self end
+  if not currentAnimation or currentAnimation.range <= 0 then
+    return self
+  end
 
   local step = (direction == -1 or direction == "back") and -1 or 1
-  local range = currentAnimation.range or (currentAnimation.endFrame - currentAnimation.startFrame + 1)
 
-  -- Guard against zero-length animations
-  if range <= 0 then return self end
-
-  -- Compute offset relative to startFrame
+  -- Calculate new frame with wrapping within animation range
   local offset = self.currentFrame + step - currentAnimation.startFrame
-  -- Wrap using fmod, ensure positive
-  local wrapped = fmod(offset, range)
-  if wrapped < 0 then wrapped = wrapped + range end
+  local wrapped = fmod(offset, currentAnimation.range)
+  if wrapped < 0 then
+    wrapped = wrapped + currentAnimation.range
+  end
 
-  -- Translate back into absolute frame index
   self.currentFrame = wrapped + currentAnimation.startFrame
-
   return self
 end
 
--- ! Stop
-function RoxyAnimation:stop()
-  self.currentAnimation = nil
-  return self
+-- ! Get Current Frame
+-- Get current frame number
+function RoxyAnimation:getCurrentFrame()
+  return self.currentFrame
 end
 
--- ! Reverse
-function RoxyAnimation:reverse()
-  self.isReversed = not self.isReversed
-  return self
+-- ! Get Current Animation
+-- Get current animation name
+function RoxyAnimation:getCurrentAnimation()
+  return self.currentName
 end
 
--- ! Reset Animation Start
-function RoxyAnimation:resetAnimationStart()
-  self.isFirstCycle = true
-  return self
+-- ! Is Playing
+-- Check if animation is currently playing
+function RoxyAnimation:isPlaying()
+  return self.currentAnimation ~= nil
 end
+
+--------------------------------------------------------------------------------
+-- Update and Draw
+--------------------------------------------------------------------------------
 
 -- ! Update
-function RoxyAnimation:update()
-  local currentAnimation = self.currentAnimation
-  if not currentAnimation or currentAnimation.speed == 0 then return end
+-- Update animation state (call each frame)
+function RoxyAnimation:update(dt)
+  local animation = self.currentAnimation
+  if not animation or animation.speed == 0 then
+    return
+  end
 
+  dt = dt or r.deltaTime or 0
+
+  -- Handle tail-hold (explicit nextDelay > 0)
+  if self:_handleTailHold(dt) then
+    return
+  end
+
+  -- One-frame defer for next (ensures last frame rendered once)
+  if self:_handleNextTickSwitch() then
+    return
+  end
+
+  -- Advance animation normally
+  self:_updateAnimationFrame(animation, dt)
+
+  -- For non-loop clips, check exitTime & next/nextDelay behavior
+  if not animation.loop then
+    self:_handleNonLoopCompletion(animation)
+  end
+end
+
+-- ! Handle Tail Hold
+-- Handle explicit nextDelay > 0 behavior
+function RoxyAnimation:_handleTailHold(dt)
+  if not self._tailHoldSec or self._tailHoldSec <= 0 then
+    return false
+  end
+
+  self._tailHoldSec = self._tailHoldSec - dt
+
+  -- Pin on last frame while holding
+  local animation = self.currentAnimation
+  if animation then
+    self.currentFrame = self.isReversed and animation.startFrame or animation.endFrame
+  end
+
+  if self._tailHoldSec <= 0 and self._pendingNext then
+    local next = self._pendingNext
+    self._pendingNext, self._tailHoldSec = nil, 0
+    self:setAnimation(next, false)
+  end
+
+  return true
+end
+
+-- ! Handle Next Tick Switch
+-- Handle one-frame defer for next animation
+function RoxyAnimation:_handleNextTickSwitch()
+  if not self._switchNextTick then return false end
+
+  local next = self._pendingNext
+  self._switchNextTick, self._pendingNext = nil, nil
+
+  if next then
+    self:setAnimation(next, false)
+    return true
+  end
+
+  return false
+end
+
+-- ! Update Animation Frame
+-- Core animation frame advancement logic
+function RoxyAnimation:_updateAnimationFrame(animation, dt)
   local newFrame, newIsFirst, newAccumulator = updateAnimation(
     self.currentFrame,
-    currentAnimation.startFrame, currentAnimation.endFrame,
-    currentAnimation.loop and 1 or 0,
+    animation.startFrame,
+    animation.endFrame,
+    animation.loop and 1 or 0,
     self.isReversed and 1 or 0,
     self.isFirstCycle and 1 or 0,
-    currentAnimation.speed,
-    currentAnimation.frameDuration,
-    r.deltaTime,
+    animation.speed,
+    animation.frameDuration,
+    dt,
     self.accumulator
   )
-
-  -- Clamp again after reversal to avoid off-by-one flash
-  newFrame = clamp(newFrame, currentAnimation.startFrame, currentAnimation.endFrame)
 
   self.currentFrame = newFrame
   self.isFirstCycle = (newIsFirst == 1)
   self.accumulator  = newAccumulator
+end
 
-  if not currentAnimation.loop and
-     ((not self.isReversed and newFrame >= currentAnimation.endFrame)  or
-      (self.isReversed   and newFrame <= currentAnimation.startFrame)) then
+-- ! Handle Non-Loop Completion
+-- Handle completion behavior for non-looping animations
+function RoxyAnimation:_handleNonLoopCompletion(animation)
+  local exitTime  = animation.exitTime or 1
+  local nextDelay = animation.nextDelay or 0
 
-    if currentAnimation.next then
-      -- Call completion callback before transitioning if both exist
-      if type(currentAnimation.onCompleteCallback) == "function" then
-        currentAnimation.onCompleteCallback()
-      end
-      self:setAnimation(currentAnimation.next, true) -- Use continuity for smoother chaining
-    elseif type(currentAnimation.onCompleteCallback) == "function" then
-      currentAnimation.onCompleteCallback()
+  -- Compute normalized progress 0..1
+  local range = animation.endFrame - animation.startFrame
+  local denominator = (range ~= 0) and range or 1
+  local progressed = self.isReversed
+    and (animation.endFrame - self.currentFrame)
+    or  (self.currentFrame - animation.startFrame)
+  local progress = progressed / denominator
+
+  if progress >= exitTime then
+    -- Fire onComplete once we reach exitTime
+    if type(animation.onCompleteCallback) == "function" then
+      animation.onCompleteCallback()
     end
+
+    if animation.next then
+      -- Pin on last frame while waiting or deferring the switch
+      self.currentFrame = self.isReversed and animation.startFrame or animation.endFrame
+
+      if nextDelay > 0 then
+        -- Explicit tail hold
+        self._pendingNext = animation.next
+        self._tailHoldSec = nextDelay
+        return
+      else
+        -- Switch on next tick so the final frame renders this frame
+        self._pendingNext     = animation.next
+        self._switchNextTick  = true
+        return
+      end
+    end
+    -- No explicit 'next': leave state as-is; higher layer (e.g. Actor) may handle settle/default
   end
 end
 
 -- ! Draw
+-- Draw current frame at specified position
 function RoxyAnimation:draw(x, y, flip)
-  local currentAnimation = self.currentAnimation
-  if not currentAnimation then return end
+  if not self.currentAnimation then
+    return
+  end
+
   drawImage(
     self.imagetable,
     self.currentFrame,
@@ -466,14 +652,153 @@ function RoxyAnimation:draw(x, y, flip)
   )
 end
 
+--------------------------------------------------------------------------------
+-- Internal Helper Methods
+--------------------------------------------------------------------------------
+
+-- ! Should Prevent Animation Change
+-- Check if animation change should be prevented
+function RoxyAnimation:_shouldPreventAnimationChange(unlessThisAnimation)
+  if not unlessThisAnimation then
+    return false
+  end
+
+  return (type(unlessThisAnimation) == "string" and self.currentName == unlessThisAnimation) or
+         (type(unlessThisAnimation) == "table" and self.currentAnimation == unlessThisAnimation)
+end
+
+-- ! Get Start Frame
+-- Calculate starting frame for animation transition
+function RoxyAnimation:_getStartFrame(newAnimation, nextContinuity)
+  if not nextContinuity or not self.currentAnimation then
+    return newAnimation.startFrame
+  end
+
+  local currentAnimation = self.currentAnimation
+  local currentRange = currentAnimation.range or 1
+  local newRange = newAnimation.range or 1
+
+  -- Guard against division by zero
+  if currentRange <= 0 or newRange <= 0 then
+    return newAnimation.startFrame
+  end
+
+  -- Calculate progress through current animation
+  local current = clamp(self.currentFrame, currentAnimation.startFrame, currentAnimation.endFrame)
+  local progress = self.isReversed
+    and (currentAnimation.endFrame - current) / currentRange
+    or (current - currentAnimation.startFrame) / currentRange
+
+  -- Handle NaN from calculation errors
+  if progress ~= progress then
+    progress = 0
+  end
+
+  -- Apply progress to new animation range
+  local frame = newAnimation.startFrame + truncateDecimal(progress * newRange)
+  return clamp(frame, newAnimation.startFrame, newAnimation.endFrame)
+end
+
+--------------------------------------------------------------------------------
+-- Cleanup
+--------------------------------------------------------------------------------
+
 -- ! Destroy
+-- Clean up resources and break references
 function RoxyAnimation:destroy()
-  if self.currentAnimation then
+  -- Clear callback to prevent retention cycles
+  if self.currentAnimation and self.currentAnimation.onCompleteCallback then
     self.currentAnimation.onCompleteCallback = nil
   end
+
+  -- Clear all animation callbacks
+  for _, animation in pairs(self.animations or {}) do
+    if animation.onCompleteCallback then
+      animation.onCompleteCallback = nil
+    end
+  end
+
+  -- Clear all references
   self.currentAnimation = nil
   self.animations = {}
   self.imagetable = nil
   self._refcount = nil
   self._length = nil
+  self._path = nil
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+-- Basic Usage
+local myAnimation = RoxyAnimation("path/to/spritesheet")
+myAnimation:addAnimation({
+  name = "idle",
+  startFrame = 1,
+  endFrame = 4,
+  loop = true,
+  speed = 1
+})
+
+-- Multiple Animations with Chaining
+myAnimation:addAnimation({
+  name = "walk",
+  startFrame = 5,
+  endFrame = 12,
+  loop = true
+})
+:addAnimation({
+  name = "jump",
+  startFrame = 13,
+  endFrame = 20,
+  loop = false,
+  next = "idle", -- Auto-transition back to idle
+  onComplete = function()
+    Log.debug("Jump completed!") --#DEBUG
+  end
+})
+
+-- Frame Control
+myAnimation:setAnimation("walk")
+myAnimation:jumpToFrame(8)
+myAnimation:stepFrame(1)      -- Step forward
+myAnimation:stepFrame("back") -- Step backward
+
+-- Playback Control
+myAnimation:setSpeed(2)         -- Double speed for all animations
+myAnimation:setSpeed(0.5, true) -- Half speed for current animation only
+myAnimation:reverse()           -- Play backwards
+myAnimation:stop()              -- Stop playback
+
+-- Delayed Start
+myAnimation:startWithDelay(1.5, "jump") -- Start jump animation after 1.5 seconds
+
+-- Animation Queries
+if myAnimation:isPlaying() then
+  Log.debug("Current animation:", myAnimation:getCurrentAnimation())  --#DEBUG
+  Log.debug("Current frame:", myAnimation:getCurrentFrame())          --#DEBUG
+end
+
+-- Factory Methods for Asset Management
+local poolAnimation = RoxyAnimation.fromPool("character_animations")
+local sharedAnimation = RoxyAnimation.fromImagetable(existingImagetable)
+
+-- Reference Counting (for shared resources)
+local myAnimation2 = myAnimation:retain() -- Increment reference count
+myAnimation:release()                     -- Decrement reference count
+myAnimation2:release()                    -- Final release cleans up resources
+
+-- In your update loop
+function MySprite:update()
+  self.animation:update()
+end
+
+-- In your draw method
+function MySprite:draw()
+  self.animation:draw(self.x, self.y, self.flip)
+end
+
+--]]

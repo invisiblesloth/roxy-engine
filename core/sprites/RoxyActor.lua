@@ -1,21 +1,80 @@
 -- core/sprites/RoxyActor.lua
 
-local abs       <const> = math.abs
+-- Math functions
+local abs   <const> = math.abs
+local floor <const> = math.floor
+local max   <const> = math.max
+local min   <const> = math.min
+
+-- Table functions
+local tableInsert <const> = table.insert
+
+-- Core Playdate
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
-local r         <const> = roxy
+
+-- Timer functions
+local performAfterDelay <const> = pd.timer.performAfterDelay
+
+-- Roxy core
+local r <const> = roxy
 
 --------------------------------------------------------------------------------
--- ! Class Definition & Init
+-- Helpers
+--------------------------------------------------------------------------------
+
+-- ! Resolve Terminal
+-- When starting a one-shot, find the last NON-looping clip in the .next chain.
+-- Stops before a loop, on missing next, or on cycles.
+local function _resolveTerminal(self, startName)
+  local seen, prev = {}, nil
+  local name = startName
+  while true do
+    local clip = self.animations and self.animations[name]
+    if not clip then
+      return prev or name -- Missing: return last valid
+    end
+    if clip.loop then
+      return prev or name -- Don't ever return a looping clip
+    end
+    if not clip.next or seen[name] then
+      return name -- Last non-loop or cycle
+    end
+    seen[name] = true
+    prev = name
+    name = clip.next
+  end
+end
+
+--------------------------------------------------------------------------------
+-- Class Definition & Init
 --------------------------------------------------------------------------------
 
 class("RoxyActor").extends(RoxySprite)
 
+-- ! Initialize
 -- Manifest may include:
 --   sheet, rows, frames, loop, next, default, transitions
 -- Sprite options (forwarded to RoxySprite) may include:
 --   name, worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, view, isSheet, singleAnimation, frameDuration
 function RoxyActor:init(manifest, defaultState, opts, scene)
+  self:_parseInitArgs(manifest, defaultState, opts, scene)
+
+  RoxyActor.super.init(self, self._opts, self._scene)
+
+  self:_initializeProperties()
+  self:_setupSheet()
+  self:_buildAnimationsFromRows()
+  self:_finalizeSetup()
+end
+
+--------------------------------------------------------------------------------
+-- Private Init Helpers
+--------------------------------------------------------------------------------
+
+-- ! Parse Init Arguments
+-- Handle flexible argument patterns
+function RoxyActor:_parseInitArgs(manifest, defaultState, opts, scene)
   -- Allow 3-arg form where 2nd arg is actually scene
   if defaultState and type(defaultState) == "table" and defaultState.addSprite and not opts and not scene then
     scene, defaultState = defaultState, nil
@@ -25,26 +84,32 @@ function RoxyActor:init(manifest, defaultState, opts, scene)
     scene, opts = opts, nil
   end
 
-  manifest = manifest or {}
-  opts = opts or {}
+  self._manifest = manifest or {}
+  self._defaultState = defaultState or self._manifest.default
+  self._opts = opts or {}
+  self._scene = scene
+end
 
-  RoxyActor.super.init(self, opts, scene)
-
-  self.manifest     = manifest
-  self.defaultState = defaultState or manifest.default
+-- ! Initialize Properties
+function RoxyActor:_initializeProperties()
+  self.manifest     = self._manifest
+  self.defaultState = self._defaultState
   self.currentState = nil
   self.nextState    = nil
   self.facing       = 1
 
   --#DEBUG START
-  if not self.animation and not manifest.sheet then
+  if not self.animation and not self._manifest.sheet then
     Log.warn("[RoxyActor:init] No spritesheet/imagetable provided in manifest")
   end
   --#DEBUG END
+end
 
+-- ! Setup Sheet
+function RoxyActor:_setupSheet()
   -- Only set view if one isn't already set (respects opts.view or pre-set view)
-  if not self.animation and manifest.sheet then
-    local sheet, sheetType = manifest.sheet, type(manifest.sheet)
+  if not self.animation and self._manifest.sheet then
+    local sheet, sheetType = self._manifest.sheet, type(self._manifest.sheet)
     if sheetType == "string" then
       self:setView(sheet, true, false, false)
     elseif sheetType == "userdata" and sheet.getImage then
@@ -65,24 +130,21 @@ function RoxyActor:init(manifest, defaultState, opts, scene)
     --#DEBUG END
     end
   end
+end
 
-  -- Build animations from manifest.rows if we have an imagetable
+-- ! Build Animations From Rows
+function RoxyActor:_buildAnimationsFromRows()
   local animation = self.animation
   local imagetable = animation and animation.imagetable
-  local rows = manifest.rows
+  local rows = self._manifest.rows
+
   if type(rows) == "table" and imagetable then
-    local perRow = manifest.frames or #imagetable or 1
-    local doLoop = manifest.loop or {}
-    local doNext = manifest.next or {}
+    local perRow = self._manifest.frames or #imagetable or 1
+    local doLoop = self._manifest.loop or {}
+    local doNext = self._manifest.next or {}
+
     for stateName, info in pairs(rows) do
-      local startFrame, endFrame
-      if type(info) == "table" then
-        startFrame = info.start
-        endFrame = info.finish
-      else
-        startFrame = (info - 1) * perRow + 1
-        endFrame = info * perRow
-      end
+      local startFrame, endFrame = self:_calculateFrameRange(info, perRow)
       self:addAnimation{
         name          = stateName,
         startFrame    = startFrame,
@@ -95,23 +157,51 @@ function RoxyActor:init(manifest, defaultState, opts, scene)
       }
     end
   end
+end
 
+-- ! Calculate Frame Range
+function RoxyActor:_calculateFrameRange(info, perRow)
+  if type(info) == "table" then
+    return info.start, info.finish
+  else
+    local startFrame = (info - 1) * perRow + 1
+    local endFrame = info * perRow
+    return startFrame, endFrame
+  end
+end
+
+-- ! Finalize Setup
+function RoxyActor:_finalizeSetup()
   -- Ensure animations table present
-  animation = self.animation
+  local animation = self.animation
   self.animations = (animation and animation.animations) or self.animations or {}
 
+  self:_ensureAnimationCallbacks()
   self:_cacheTransitionRules()
 
   if self.defaultState and self.animations[self.defaultState] then
     self:setState(self.defaultState)
   end
+
+  -- Clean up temporary init properties
+  self._manifest = nil
+  self._defaultState = nil
+  self._opts = nil
+  self._scene = nil
 end
 
 --------------------------------------------------------------------------------
 -- Internal Methods
 --------------------------------------------------------------------------------
 
--- TODO: Should these be local helpers not methods?
+-- ! Finish Play Once
+-- Helper so we centralize finishing semantics
+function RoxyActor:_finishPlayOnce()
+  local fn = self._onPlayOnceFinish
+  self._onPlayOnceFinish = nil
+  self._playOnceTerminal = nil
+  if fn then fn(self) end
+end
 
 -- ! Cache Transition Rules
 -- Cache transition rules to avoid per-frame parsing
@@ -125,37 +215,98 @@ function RoxyActor:_cacheTransitionRules()
   -- Pre-parse condition types for performance
   for _, rule in ipairs(rules) do
     if rule.state then
-      local conds = {}
+      local conditions = {}
       for key, value in pairs(rule) do
         if key ~= "state" then
-          -- Parse condition type once during caching
-          local condType = "eq" -- default to equality
-          local optionName = key
-
-          if key:find("GreaterThan$") then
-            condType = "gt"
-            optionName = key:gsub("GreaterThan$", "")
-          elseif key:find("LessThan$") then
-            condType = "lt"
-            optionName = key:gsub("LessThan$", "")
-          elseif key:find("AtLeast$") then
-            condType = "gte"
-            optionName = key:gsub("AtLeast$", "")
-          elseif key:find("AtMost$") then
-            condType = "lte"
-            optionName = key:gsub("AtMost$", "")
-          end
-
-          table.insert(conds, {
-            type = condType,
-            option = optionName,
-            value = value
-          })
+          local condition = self:_parseCondition(key, value)
+          tableInsert(conditions, condition)
         end
       end
-      table.insert(self._transitionRulesCache, { state = rule.state, conditions = conds })
-    else --#DEBUG
-      Log.warn("[RoxyActor:_cacheTransitionRules] Invalid transition rule: missing state key") --#DEBUG
+      tableInsert(self._transitionRulesCache, { state = rule.state, conditions = conditions })
+    --#DEBUG START
+    else
+      Log.warn("[RoxyActor:_cacheTransitionRules] Invalid transition rule: missing state key")
+    --#DEBUG END
+    end
+  end
+end
+
+-- ! Parse Condition
+-- Extract condition type and option name from rule key
+function RoxyActor:_parseCondition(key, value)
+  local conditionType = "eq" -- Default to equality
+  local optionName = key
+
+  if key:find("GreaterThan$") then
+    conditionType = "gt"
+    optionName = key:gsub("GreaterThan$", "")
+  elseif key:find("LessThan$") then
+    conditionType = "lt"
+    optionName = key:gsub("LessThan$", "")
+  elseif key:find("AtLeast$") then
+    conditionType = "gte"
+    optionName = key:gsub("AtLeast$", "")
+  elseif key:find("AtMost$") then
+    conditionType = "lte"
+    optionName = key:gsub("AtMost$", "")
+  end
+
+  return {
+    type = conditionType,
+    option = optionName,
+    value = value
+  }
+end
+
+-- ! Maybe Settle / Hold
+-- Returns true if a settle timer was scheduled (and we should early-return)
+function RoxyActor:_maybeSettleHold(stateName)
+  local clip = self.animations and self.animations[stateName]
+  if not clip then return false end
+
+  -- Only settle for one-shots that don't chain anywhere
+  if clip.loop then return false end
+  if clip.next then return false end
+
+  self:_settleThenDefault(stateName, clip)
+  return true
+end
+
+-- ! Settle Then Default
+-- Called when a non-loop clip with no next completes.
+function RoxyActor:_settleThenDefault(stateName, clip)
+  local default = self.defaultState or (self.manifest and self.manifest.default)
+  if not (default and self.animations and self.animations[default]) then return end
+
+  -- Derive a small hold from the clip's frameDuration; clamp to a sane range
+  local frameDuration = (clip and clip.frameDuration) or 0.12
+  local holdMS = floor(1000 * max(0.05, min(frameDuration, 0.25)))
+
+  -- Token to cancel stale timers if we settle again quickly
+  local token = (self._settleToken or 0) + 1
+  self._settleToken = token
+
+  performAfterDelay(holdMS, function()
+    -- Abort if another settle was scheduled or state changed meanwhile
+    if self._settleToken ~= token then return end
+    if self.currentState ~= stateName then return end
+    self:setState(default)
+  end)
+end
+
+-- ! Ensure Animation Callbacks
+-- Attach onComplete callbacks to prebuilt clips (if missing)
+function RoxyActor:_ensureAnimationCallbacks()
+  local animation = self.animation
+  local animations = animation and animation.animations
+  if not animations then return end
+
+  for name, clip in pairs(animations) do
+    if clip and clip.onCompleteCallback == nil then
+      local clipName = name -- Capture a unique local per iteration
+      clip.onCompleteCallback = function()
+        self:_onAnimationComplete(clipName)
+      end
     end
   end
 end
@@ -163,6 +314,34 @@ end
 -- ! On Animation Complete
 -- Handle completion callbacks and queued transitions
 function RoxyActor:_onAnimationComplete(stateName)
+  local clip = self.animations and self.animations[stateName]
+
+  -- If we're in a playOnce flow:
+  if self._playOnceTerminal then
+    -- If this clip has an explicit next, finish playOnce now.
+    --    (Animation layer will switch to clip.next; we want to run the
+    --    user callback now to snap + unlock.)
+    if clip and clip.next then
+      self:_finishPlayOnce()
+      return
+    end
+
+    -- Otherwise finish when the resolved terminal (last non-loop) ends.
+    if stateName == self._playOnceTerminal then
+      self:_finishPlayOnce()
+      return
+    end
+
+    -- Not our terminal yet; ignore
+    return
+  end
+
+  -- "Settle" for non-loop, no-next clips (actor-owned return to default)
+  if self:_maybeSettleHold(stateName) then
+    return
+  end
+
+  -- Fallback routing
   if self.nextState then
     local nextState = self.nextState
     self.nextState = nil
@@ -170,11 +349,22 @@ function RoxyActor:_onAnimationComplete(stateName)
   elseif self.manifest.next and self.manifest.next[stateName] then
     self:setState(self.manifest.next[stateName])
   end
+end
 
-  -- Call playOnce callback if present
-  if self._onPlayOnceFinish then
-    self._onPlayOnceFinish(self)
-    self._onPlayOnceFinish = nil
+-- ! Evaluate Condition
+-- Optimized condition evaluation with early exit
+function RoxyActor:_evaluateCondition(condition, opts)
+  local optVal = opts[condition.option]
+  if condition.type == "gt" then
+    return optVal and optVal > condition.value
+  elseif condition.type == "lt" then
+    return optVal and optVal < condition.value
+  elseif condition.type == "gte" then
+    return optVal and optVal >= condition.value
+  elseif condition.type == "lte" then
+    return optVal and optVal <= condition.value
+  else -- equality
+    return optVal == condition.value
   end
 end
 
@@ -183,7 +373,7 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Set State
--- Immediately switch to `stateName`.
+-- Immediately switch to stateName.
 -- If force=true, will restart even if already in that state.
 function RoxyActor:setState(stateName, force)
   --#DEBUG START
@@ -237,19 +427,21 @@ end
 -- ! Play Once
 -- Play a one-shot animation state, then return to the previous/default.
 function RoxyActor:playOnce(stateName, onFinish)
-  if not self.animation or not self.animations then return self end
+  if not self.animation or not self.animations or not self.animations[stateName] then return self end
 
-  if type(stateName) ~= "string" or not self.animations[stateName] then
-    Log.warn("[RoxyActor:playOnce] Unknown one-shot state:" .. tostring(stateName)) --#DEBUG
-    return self
-  end
-  local prev = self.currentState or self.defaultState
-  self:queueState(prev)
-  if type(onFinish) == "function" then
-    self._onPlayOnceFinish = onFinish
+  -- Compute last non-loop terminal
+  self._playOnceTerminal = _resolveTerminal(self, stateName)
+
+  -- Only queue a return if our terminal has no explicit next
+  local terminal = self.animations[self._playOnceTerminal]
+  if terminal and not terminal.next then
+    local prev = self.currentState or self.defaultState
+    self:queueState(prev)
   else
-    self._onPlayOnceFinish = nil
+    self.nextState = nil
   end
+
+  self._onPlayOnceFinish = (type(onFinish) == "function") and onFinish or nil
   return self:setState(stateName, true)
 end
 
@@ -305,14 +497,14 @@ function RoxyActor:updatePhysics(opts)
   opts = opts or {}
 
   -- Provide defaults for commonly used options
-  local vx        = opts.vx        or 0
-  local vy        = opts.vy        or 0
-  local desiredVx = opts.intentVX  or vx
-  local onGround  = opts.onGround ~= nil and opts.onGround or true  -- Fixed: safer default handling
+  local vx        = opts.vx or 0
+  local vy        = opts.vy or 0
+  local desiredVx = opts.intentVX or vx
+  local onGround  = opts.onGround ~= nil and opts.onGround or true
 
   -- Cache frequently accessed values
-  local anim = self.animation
-  local currentAnimation = anim and anim.currentAnimation
+  local animation = self.animation
+  local currentAnimation = animation and animation.currentAnimation
 
   -- Check one-shots first to avoid interruption
   if currentAnimation and not currentAnimation.loop then
@@ -326,42 +518,39 @@ function RoxyActor:updatePhysics(opts)
   local cache = self._transitionRulesCache
   if cache and #cache > 0 then
     for _, rule in ipairs(cache) do
-      local ok = true
-      for _, cond in ipairs(rule.conditions) do
-        local optVal = opts[cond.option]
-        if cond.type == "gt" then
-          if not (optVal and optVal > cond.value) then ok = false break end
-        elseif cond.type == "lt" then
-          if not (optVal and optVal < cond.value) then ok = false break end
-        elseif cond.type == "gte" then
-          if not (optVal and optVal >= cond.value) then ok = false break end
-        elseif cond.type == "lte" then
-          if not (optVal and optVal <= cond.value) then ok = false break end
-        else -- equality
-          if optVal ~= cond.value then ok = false break end
+      local allConditionsMet = true
+      for _, condition in ipairs(rule.conditions) do
+        if not self:_evaluateCondition(condition, opts) then
+          allConditionsMet = false
+          break
         end
       end
-      if ok and rule.state ~= self.currentState then
+      if allConditionsMet and rule.state ~= self.currentState then
         return self:setState(rule.state) -- Matched rule --> switch & exit
       end
     end
   end
 
   -- Generic fallback (idle / run / jump / fall)
-  local targetState
-  if onGround == false then
-    targetState = (vy < 0) and "jump" or "fall"
-  elseif abs(desiredVx) > 0 then
-    targetState = "run"
-  else
-    targetState = "idle"
-  end
+  local targetState = self:_determineDefaultState(desiredVx, vy, onGround)
 
   if self.animations[targetState] and targetState ~= self.currentState then
     self:setState(targetState)
   end
 
   return self
+end
+
+-- ! Determine Default State
+-- Extract default state logic for better testability and clarity
+function RoxyActor:_determineDefaultState(desiredVx, vy, onGround)
+  if onGround == false then
+    return (vy < 0) and "jump" or "fall"
+  elseif abs(desiredVx) > 0 then
+    return "run"
+  else
+    return "idle"
+  end
 end
 
 -- ! Update
@@ -403,3 +592,165 @@ function RoxyActor:destroy()
   self:clearPhysics()
   RoxyActor.super.destroy(self)
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+-- Basic Setup with Manifest
+local playerManifest = {
+  sheet = "images/player-spritesheet", -- Path to spritesheet
+  rows = {
+    idle = 1, -- Row 1 for idle animation
+    run = 2,  -- Row 2 for running
+    jump = 3, -- Row 3 for jumping
+    fall = 4  -- Row 4 for falling
+  },
+  frames = 8, -- 8 frames per row
+  default = "idle", -- Starting state
+  loop = {
+    idle = true,
+    run = true,
+    jump = false, -- One-shot animation
+    fall = false
+  },
+  next = {
+    jump = "fall",  -- Jump chains to fall
+    fall = "idle"   -- Fall returns to idle
+  }
+}
+
+local player = RoxyActor(playerManifest, scene)
+
+-- Advanced Manifest with Transition Rules
+local advancedManifest = {
+  sheet = "images/character",
+  rows = {
+    idle = { start = 1, finish = 4, speed = 1 },
+    run = { start = 9, finish = 16, speed = 2 },
+    jump = { start = 17, finish = 24, frameDuration = 0.05 },
+    attack = { start = 25, finish = 32 }
+  },
+  default = "idle",
+  transitions = {
+    { state = "run", vxGreaterThan = 10, onGround = true },
+    { state = "jump", vy = -50, onGround = false },
+    { state = "fall", vyGreaterThan = 0, onGround = false },
+    { state = "idle", vx = 0, onGround = true }
+  }
+}
+
+-- State Management
+player:setState("run")        -- Immediate state change
+player:queueState("jump")     -- Queue next state
+player:setState("idle", true) -- Force restart even if already idle
+
+-- One-Shot Animations
+player:playOnce("attack", function(actor)
+  Log.debug("Attack animation completed!")
+  -- Automatically returns to previous state
+end)
+
+-- Physics Integration
+local physicsBody = RoxyPhysicsBody({
+  x = 100, y = 100,
+  width = 32, height = 48
+})
+
+player:addPhysics(physicsBody)
+
+-- Custom updatePhysics override
+function player:updatePhysics(opts)
+  -- opts contains: vx, vy, onGround, intentVX, etc.
+  local vx = opts.vx or 0
+  local vy = opts.vy or 0
+  local onGround = opts.onGround
+
+  -- Custom state logic
+  if opts.isAttacking then
+    if self.currentState ~= "attack" then
+      self:playOnce("attack")
+    end
+  else
+    -- Let parent handle default transitions
+    RoxyActor.super.updatePhysics(self, opts)
+  end
+end
+
+-- Manual Physics Updates
+player:updatePhysics({
+  vx = 15,            -- Current horizontal velocity
+  vy = -20,           -- Current vertical velocity
+  intentVX = 25,      -- Desired horizontal velocity (for facing)
+  onGround = false,   -- Ground collision state
+  isSliding = true,   -- Custom condition
+  healthAtLeast = 50  -- Custom condition with suffix
+})
+
+-- Facing Direction
+player:setFacing(velocity.x) -- Positive = right, negative = left
+
+-- Multiple Initialization Patterns
+local actor1 = RoxyActor(manifest, scene)               -- 2-arg
+local actor2 = RoxyActor(manifest, "idle", opts, scene) -- 4-arg
+local actor3 = RoxyActor(manifest, "idle", scene)       -- 3-arg scene
+local actor4 = RoxyActor(manifest, opts, scene)         -- 3-arg opts
+
+-- Asset Pool Integration
+local pooledActor = RoxyActor({
+  sheet = RoxyAnimation.fromPool("shared_character_animations")
+}, scene)
+
+-- Custom Animation Building (without rows)
+local customActor = RoxyActor({}, scene)
+customActor:addAnimation({
+  name = "dance",
+  startFrame = 1,
+  endFrame = 12,
+  loop = true,
+  speed = 1.5,
+  onCompleteCallback = function()
+    Log.debug("Dance loop completed!")
+  end
+})
+
+-- Cleanup
+player:clearPhysics() -- Remove physics integration
+player:remove()       -- Remove from scene
+player:destroy()      -- Full cleanup
+
+-- In your game loop
+function GameScene:update()
+  -- Physics bodies update the actor automatically
+  physicsWorld:update()
+
+  -- Or update manually for non-physics actors
+  for _, actor in ipairs(self.actors) do
+    if not actor.physicsBody then
+      actor:update()
+    end
+  end
+end
+
+-- Querying Actor State
+if player.currentState == "jump" then
+  Log.debug("Player is jumping!")
+end
+
+if player.facing == -1 then
+  Log.debug("Player is facing left")
+end
+
+-- Debug Information
+Log.debug("Current state:", player.currentState)  --#DEBUG
+Log.debug("Queued state:", player.nextState)      --#DEBUG
+Log.debug("Available states:")                    --#DEBUG
+--#DEBUG START
+for name, _ in pairs(player.animations) do
+  Log.debug("  -", name)
+end
+--#DEBUG END
+
+--]]
