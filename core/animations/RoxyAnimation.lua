@@ -33,12 +33,16 @@ local drawImage     <const> = Graphics.imagetable.drawImage
 local r         <const> = roxy
 local Math      <const> = r.Math
 local Assets    <const> = r.Assets
+local Registry  <const> = r.AssetPoolRegistry
 local Animation <const> = r.Animation
 
 -- Roxy framework function aliases
 local clamp           <const> = Math.clamp
 local truncateDecimal <const> = Math.truncateDecimal
 local getAsset        <const> = Assets.getAsset
+local recycleAsset    <const> = Assets.recycleAsset
+local markFromPool    <const> = Registry.markFromPool
+local isFromPool      <const> = Registry.isFromPool
 local updateAnimation <const> = Animation.update -- C Function
 
 --------------------------------------------------------------------------------
@@ -100,12 +104,18 @@ end
 -- ! From Pool
 -- Create animation from Assets pool
 function RoxyAnimation.fromPool(poolKey)
-  local imagetable = getAsset(poolKey)
+  local imagetable = markFromPool(getAsset(poolKey))
   if not imagetable then
     error("[RoxyAnimation.fromPool] No asset for key: ", tostring(poolKey))
     return nil
   end
-  return RoxyAnimation.fromImagetable(imagetable)
+  local animation = RoxyAnimation.fromImagetable(imagetable)
+  if animation then
+    animation._pooledKey = poolKey
+    animation._pooledAsset = imagetable
+    animation._pooledAssetKind = "imagetable"
+  end
+  return animation
 end
 
 --------------------------------------------------------------------------------
@@ -173,6 +183,9 @@ function RoxyAnimation:_initCommon()
   self.isFirstCycle     = true
   self.isReversed       = false
   self.accumulator      = 0
+  self._pooledKey       = nil
+  self._pooledAsset     = nil
+  self._pooledAssetKind = nil
 end
 
 --------------------------------------------------------------------------------
@@ -194,6 +207,7 @@ function RoxyAnimation:release()
   self._refcount -= 1
   if self._refcount <= 0 then
     self:_cleanupCaches()
+    self:_recyclePooledAsset()
     self:destroy()
   end
 end
@@ -206,6 +220,18 @@ function RoxyAnimation:_cleanupCaches()
     _pathCache[self._path] = nil
   end
 end
+
+-- ! Recycle Pooled Asset
+function RoxyAnimation:_recyclePooledAsset()
+  local pooledAsset = self._pooledAsset
+  if pooledAsset and self._pooledKey and isFromPool(pooledAsset) then
+    recycleAsset(self._pooledKey, pooledAsset)
+  end
+  self._pooledAsset = nil
+  self._pooledKey = nil
+  self._pooledAssetKind = nil
+end
+
 
 --------------------------------------------------------------------------------
 -- Animation Management
@@ -707,6 +733,8 @@ end
 -- Clean up resources and break references
 function RoxyAnimation:destroy()
   -- Clear callback to prevent retention cycles
+  self:_recyclePooledAsset()
+
   if self.currentAnimation and self.currentAnimation.onCompleteCallback then
     self.currentAnimation.onCompleteCallback = nil
   end

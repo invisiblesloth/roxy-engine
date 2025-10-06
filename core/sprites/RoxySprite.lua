@@ -485,13 +485,34 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Animation
-function RoxySprite:addAnimation(name, nextContinuity, unlessThisAnimation)
-  if not name or type(name) ~= "string" then
-    assert(type(name) == "string" and name ~= "", "[RoxySprite:addAnimation] Animation name must be a non-empty string")
+-- Accepts either an options table or legacy (name, opts) arguments.
+function RoxySprite:addAnimation(optsOrName, legacyOpts)
+  local animationOpts
+
+  if type(optsOrName) == "table" then
+    animationOpts = optsOrName
+  elseif type(optsOrName) == "string" then
+    local providedOpts = (type(legacyOpts) == "table") and legacyOpts or nil
+
+    if providedOpts then
+      animationOpts = {}
+      for key, value in pairs(providedOpts) do
+        animationOpts[key] = value
+      end
+    else
+      animationOpts = {}
+    end
+
+    animationOpts.name = optsOrName
   end
 
+  local hasValidName = type(animationOpts) == "table"
+    and type(animationOpts.name) == "string"
+    and animationOpts.name ~= ""
+  assert(hasValidName, "[RoxySprite:addAnimation] Animation name must be a non-empty string")
+
   if self.animation then
-    self.animation:addAnimation(name, nextContinuity, unlessThisAnimation)
+    self.animation:addAnimation(animationOpts)
   --#DEBUG START
   else
     Log.warn("[RoxySprite:addAnimation] Sprite has no animation system")
@@ -944,9 +965,20 @@ sprite:setZIndex(10)
 sprite:setCenter(0.5, 1.0) -- Bottom-center anchor
 
 -- Animation control
-animatedSprite:addAnimation("walk", { frames = {1, 2, 3, 4}, loop = true })
-animatedSprite:addAnimation("attack", { frames = {5, 6, 7}, nextAnimation = "walk" })
-animatedSprite:setAnimation("walk")
+animatedSprite:addAnimation({
+  name = "walk",
+  startFrame = 1,
+  endFrame = 4,
+  loop = true
+})
+animatedSprite:addAnimation({
+  name = "attack",
+  startFrame = 5,
+  endFrame = 7,
+  next = "walk"
+})
+-- Legacy signature also works:
+animatedSprite:addAnimation("walk", { loop = true })
 animatedSprite:play()
 
 -- Playback control
