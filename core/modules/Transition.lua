@@ -268,7 +268,7 @@ end
 
 -- ! Clear Transition Screenshot
 -- Fills the current transition's screenshot image with a solid color.
--- This is optional — most transitions fully redraw the frame anyway.
+-- This is optional - most transitions fully redraw the frame anyway.
 function Transition.clearTransitionScreenshot(color)
   local transition = Transition.currentTransition
   if not transition or not transition.newSceneScreenshot then return end

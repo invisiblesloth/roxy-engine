@@ -181,6 +181,7 @@ function Log.assert(condition, msgOrFn, ...)
 end
 
 --[[
+
 GUIDANCE:
 Prefer native Lua 'error()' and 'assert()' at call sites going forward.
 Keep 'Log.warn'/'Log.info'/'Log.debug' for controllable, non-fatal output.
@@ -216,4 +217,5 @@ Log.setLogLevel("warn")
 Log.setLogLevel("info")
 Log.setLogLevel("debug")
 Log.setLogLevel("silent") -- Only native errors/asserts fire; controllable logs suppressed
+
 ]]--

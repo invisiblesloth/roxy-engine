@@ -355,6 +355,134 @@ function RoxyStagTilemap:_hasWarmWork()
   return self._warmQueue and #self._warmQueue > 0
 end
 
+-- ! Render Layer to Image
+function RoxyStagTilemap:_renderLayerToImage(layerName, opts)
+  local primaryLayer = self:_getValidLayer(layerName)
+  if not primaryLayer then return nil end
+
+  local renderQueue = {}
+  local seen = {}
+  local order = 0
+
+  local function enqueueLayer(name, layer)
+    if not layer or seen[layer] then return end
+
+    seen[layer] = true
+    order += 1
+
+    renderQueue[#renderQueue + 1] = {
+      layer = layer,
+      name = name,
+      z = layer.zIndex or 0,
+      order = order,
+    }
+  end
+
+  enqueueLayer(layerName, primaryLayer)
+
+  if opts and opts.compositeLayers then
+    for index = 1, #opts.compositeLayers do
+      local compositeName = opts.compositeLayers[index]
+      if type(compositeName) == "string" then
+        enqueueLayer(compositeName, self:_getValidLayer(compositeName))
+      end
+    end
+  end
+
+  if #renderQueue == 0 then return nil end
+
+  tableSort(renderQueue, function(a, b)
+    if a.z == b.z then return a.order < b.order end
+    return a.z < b.z
+  end)
+
+  local minScreenX, minScreenY = math.huge, math.huge
+  local maxScreenX, maxScreenY = -math.huge, -math.huge
+
+  for index = 1, #renderQueue do
+    local layer = renderQueue[index].layer
+    local mapWidth = layer.mapWidth or 0
+    local mapHeight = layer.mapHeight or 0
+    if mapWidth > 0 and mapHeight > 0 then
+      local tileWidth = layer.tileWidth or 0
+      local tileHeight = layer.tileHeight or 0
+      local halfWidth = layer.halfWidth or tileWidth * 0.5
+      local halfHeight = layer.halfHeight or tileHeight * 0.5
+
+      local maxImageHeight = layer.maxImageHeight or tileHeight
+      if maxImageHeight < tileHeight then
+        maxImageHeight = tileHeight
+      end
+
+      local originX = layer.originX or 0
+      local originY = layer.originY or 0
+
+      local minShift = 0
+      local maxShift = 0
+      if mapHeight > 0 then
+        minShift = math.huge
+        maxShift = -math.huge
+        for row0 = 0, mapHeight - 1 do
+          local shift = _rowShiftX_for_row0(self, row0, halfWidth)
+          if shift < minShift then minShift = shift end
+          if shift > maxShift then maxShift = shift end
+        end
+        if minShift == math.huge then minShift = 0 end
+        if maxShift == -math.huge then maxShift = 0 end
+      end
+
+      local layerMinX = originX + minShift
+      local layerMaxX = originX + (mapWidth - 1) * tileWidth + maxShift + tileWidth
+
+      local layerMinY = originY + tileHeight - maxImageHeight
+      local layerMaxY = originY + (mapHeight - 1) * halfHeight + tileHeight
+
+      if layerMinX < minScreenX then minScreenX = layerMinX end
+      if layerMaxX > maxScreenX then maxScreenX = layerMaxX end
+      if layerMinY < minScreenY then minScreenY = layerMinY end
+      if layerMaxY > maxScreenY then maxScreenY = layerMaxY end
+    end
+  end
+
+  if minScreenX == math.huge or minScreenY == math.huge then
+    return nil
+  end
+
+  local minPixelX = floor(minScreenX)
+  local minPixelY = floor(minScreenY)
+  local maxPixelX = ceil(maxScreenX)
+  local maxPixelY = ceil(maxScreenY)
+
+  local pixelWidth = max(0, maxPixelX - minPixelX)
+  local pixelHeight = max(0, maxPixelY - minPixelY)
+  if pixelWidth <= 0 or pixelHeight <= 0 then return nil end
+
+  local image = newImage(pixelWidth, pixelHeight)
+  if not image then return nil end
+
+  pushContext(image)
+    clear(COLOR_CLEAR)
+    for index = 1, #renderQueue do
+      local layer = renderQueue[index].layer
+      local offsetX = (layer.originX or 0) - minPixelX
+      local offsetY = (layer.originY or 0) - minPixelY
+      self:_renderLayerToBuffer(layer, image, offsetX, offsetY, pixelWidth, pixelHeight)
+    end
+  popContext()
+
+  local anchor = (primaryLayer.anchor or (self._opts and self._opts.anchor)) or "center"
+  local offsetX, offsetY
+  if anchor == "topLeft" then
+    offsetX = (primaryLayer.originX or 0) - minPixelX
+    offsetY = (primaryLayer.originY or 0) - minPixelY
+  else
+    offsetX = (primaryLayer.originX or 0) - (minPixelX + pixelWidth * 0.5)
+    offsetY = (primaryLayer.originY or 0) - (minPixelY + pixelHeight * 0.5)
+  end
+
+  return image, offsetX, offsetY
+end
+
 -- ! Build Chunk
 function RoxyStagTilemap:_buildChunk(layerConfig, chunkX, chunkY)
   local size, overlap = layerConfig.size, layerConfig.overlap
@@ -517,7 +645,7 @@ function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
   local minX, maxX, minY, maxY = chunkIndicesForRect(visibleX, visibleY, visibleWidth, visibleHeight, size)
   local screenX, screenY = self:worldToScreen(0, 0, layer)
 
-  -- First pass — scan for any missing chunks and enqueue builds.
+  -- First pass - scan for any missing chunks and enqueue builds.
   local anyMissing = false
   local toDraw = self._scratchToDraw
   local count = 0
@@ -649,7 +777,7 @@ function RoxyStagTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
   local layer = self.layers and self.layers[layerName]
   if not layer then return end
 
-  -- CHANGE: explicit bounds check to avoid native issues
+  -- Explicit bounds check to avoid native issues
   local mapWidth, mapHeight = layer.mapWidth or 0, layer.mapHeight or 0
   if x < 1 or y < 1 or x > mapWidth or y > mapHeight then
     Log.warn("[RoxyStagTilemap] setTileAt out of bounds (".. x .. ", ".. y .. ") not in [1..".. mapWidth .. ",1.." .. mapHeight .."]") --#DEBUG
@@ -679,6 +807,8 @@ function RoxyStagTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
   if self._staticChunkLayers[layerName] then
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
+
+  self:markLayerImageDirty(layerName)
 
   if updateSprite and layer.imageTable then
     local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
@@ -710,6 +840,8 @@ end
 -- ! Mark Tiles Dirty
 -- Tile edits --> evict overlapping chunks (they will rebuild lazily)
 function RoxyStagTilemap:markTilesDirty(layerName, tileX, tileY, tileCountWidth, tileCountHeight)
+  self:markLayerImageDirty(layerName)
+
   local layerConfig = self._staticChunkLayers[layerName]
   if not layerConfig then return end
 
@@ -820,7 +952,7 @@ function RoxyStagTilemap:drawVisibleInRect(x, y, width, height)
 end
 
 -- ! Force Redraw
--- Request forced redraws for N frames (e.g., 1–2 frames around transition end)
+-- Request forced redraws for N frames (e.g., 1-2 frames around transition end)
 function RoxyStagTilemap:forceRedraw(frames)
   -- Keep the largest pending window; do not shrink an existing request
   local n = max(0, frames or 1)
