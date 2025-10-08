@@ -144,10 +144,10 @@ end
 
 -- ! Utility: Get or Build Chunk
 -- Build or fetch a prerendered chunk image from the cache
-function RoxyOrthoTilemap:_getOrBuildChunk(layerCfg, chunkX, chunkY)
-  local key = layerCfg.keyPrefix .. chunkX .. ":" .. chunkY
+function RoxyOrthoTilemap:_getOrBuildChunk(layerConfig, chunkX, chunkY)
+  local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
   return getOrLoadAsset(self._globalChunkBucket, key, function()
-    local size, overlap = layerCfg.size, layerCfg.overlap
+    local size, overlap = layerConfig.size, layerConfig.overlap
     local width, height = size + 2 * overlap, size + 2 * overlap
     local img = newImage(width, height)
 
@@ -159,7 +159,7 @@ function RoxyOrthoTilemap:_getOrBuildChunk(layerCfg, chunkX, chunkY)
       setClipRect(0, 0, width, height)
       clear(COLOR_CLEAR)
       -- Draw the corresponding source rect from the tilemap into the buffer
-      _drawLayerRegionToBuffer(layerCfg.layer, 0, 0, pixelX, pixelY, width, height)
+      _drawLayerRegionToBuffer(layerConfig.layer, 0, 0, pixelX, pixelY, width, height)
       clearClipRect()
     popContext()
 
@@ -170,11 +170,11 @@ end
 -- ! Utility: Draw Static Layer Chunked
 -- Render a chunked layer using prebuilt chunk images
 function RoxyOrthoTilemap:_drawStaticLayerChunked(layerName)
-  local cfg = self._staticChunkLayers[layerName]
-  if not cfg then return end
+  local config = self._staticChunkLayers[layerName]
+  if not config then return end
 
-  local layerData = cfg.layer
-  local size, overlap = cfg.size, cfg.overlap
+  local layerData = config.layer
+  local size, overlap = config.size, config.overlap
 
   -- Visible rect in layer coordinates (inflate by overlap)
   local visibleX, visibleY, visibleWidth, visibleHeight = visibleLayerRect(self, layerData)
@@ -190,7 +190,7 @@ function RoxyOrthoTilemap:_drawStaticLayerChunked(layerName)
   for chunkY = minChunkY, maxChunkY do
     local rowDestY = chunkY * size - overlap + screenY
     for chunkX = minChunkX, maxChunkX do
-      local img = self:_getOrBuildChunk(cfg, chunkX, chunkY)
+      local img = self:_getOrBuildChunk(config, chunkX, chunkY)
       if img then
         local destX = chunkX * size - overlap + screenX
         local destY = rowDestY
@@ -241,7 +241,7 @@ function RoxyOrthoTilemap:screenToWorld(screenX, screenY, layerData)
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
-  local deltaX = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX) -- (CHANGE) Naming for clarity
+  local deltaX = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
   local deltaY = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
 
   local worldX = deltaX / tileWidth
@@ -278,11 +278,132 @@ function RoxyOrthoTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
 
+  self:markLayerImageDirty(layerName)
+
   if updateSprite then
     local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
     local screenX, screenY = self:worldToScreen(x - 1, y - 1, layerData)
     addDirtyRect(screenX, screenY, tileWidth, tileHeight)
   end
+end
+
+-- ! Render Layer to Image
+function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
+  local primaryLayer = self:_getValidLayer(layerName)
+  if not primaryLayer then return nil end
+
+  local renderQueue = {}
+  local order = 0
+
+  local function enqueueLayer(name, layer)
+    if not layer then return end
+
+    for index = 1, #renderQueue do
+      if renderQueue[index].layer == layer then
+        return
+      end
+    end
+
+    order += 1
+    renderQueue[#renderQueue + 1] = {
+      layer = layer,
+      name = name,
+      z = layer.zIndex or 0,
+      order = order,
+    }
+  end
+
+  enqueueLayer(layerName, primaryLayer)
+
+  if opts and opts.compositeLayers then
+    for index = 1, #opts.compositeLayers do
+      local compositeName = opts.compositeLayers[index]
+      if type(compositeName) == "string" then
+        enqueueLayer(compositeName, self:_getValidLayer(compositeName))
+      end
+    end
+  end
+
+  if #renderQueue == 0 then return nil end
+
+  tableSort(renderQueue, function(a, b)
+    if a.z == b.z then return a.order < b.order end
+    return a.z < b.z
+  end)
+
+  local defaultWidth = primaryLayer.mapPixelWidth or 0
+  local defaultHeight = primaryLayer.mapPixelHeight or 0
+
+  local tileWidth = primaryLayer.tileWidth or 0
+  local tileHeight = primaryLayer.tileHeight or 0
+
+  local sourceX = 0
+  local sourceY = 0
+  local pixelWidth = defaultWidth
+  local pixelHeight = defaultHeight
+
+  if opts then
+    if opts.tileX or opts.tileY then
+      local tileX = tonumber(opts.tileX)
+      local tileY = tonumber(opts.tileY)
+
+      if tileX then sourceX = (tileX - 1) * tileWidth end
+      if tileY then sourceY = (tileY - 1) * tileHeight end
+    end
+
+    if opts.tileWidth or opts.tileHeight then
+      local widthTiles = tonumber(opts.tileWidth)
+      local heightTiles = tonumber(opts.tileHeight)
+
+      if widthTiles then pixelWidth = widthTiles * tileWidth end
+      if heightTiles then pixelHeight = heightTiles * tileHeight end
+    end
+
+    if opts.sourceX ~= nil then sourceX = tonumber(opts.sourceX) or sourceX end
+    if opts.sourceY ~= nil then sourceY = tonumber(opts.sourceY) or sourceY end
+
+    if opts.width ~= nil then pixelWidth = tonumber(opts.width) or pixelWidth end
+    if opts.height ~= nil then pixelHeight = tonumber(opts.height) or pixelHeight end
+
+    if opts.pixelWidth ~= nil then pixelWidth = tonumber(opts.pixelWidth) or pixelWidth end
+    if opts.pixelHeight ~= nil then pixelHeight = tonumber(opts.pixelHeight) or pixelHeight end
+  end
+
+  sourceX = floor(sourceX or 0)
+  sourceY = floor(sourceY or 0)
+  pixelWidth = max(0, floor(pixelWidth or 0))
+  pixelHeight = max(0, floor(pixelHeight or 0))
+
+  if pixelWidth <= 0 or pixelHeight <= 0 then return nil end
+
+  if sourceX < 0 then sourceX = 0 end
+  if sourceY < 0 then sourceY = 0 end
+
+  local image = newImage(pixelWidth, pixelHeight)
+  if not image then return nil end
+
+  pushContext(image)
+    clear(COLOR_CLEAR)
+    for index = 1, #renderQueue do
+      local entry = renderQueue[index]
+      _drawLayerRegionToBuffer(entry.layer, 0, 0, sourceX, sourceY, pixelWidth, pixelHeight)
+    end
+  popContext()
+
+  local originX = primaryLayer.originX or 0
+  local originY = primaryLayer.originY or 0
+  local anchor = (primaryLayer.anchor or (self._opts and self._opts.anchor)) or "center"
+
+  local offsetX, offsetY
+  if anchor == "topLeft" then
+    offsetX = originX - sourceX
+    offsetY = originY - sourceY
+  else
+    offsetX = originX - (sourceX + pixelWidth * 0.5)
+    offsetY = originY - (sourceY + pixelHeight * 0.5)
+  end
+
+  return image, offsetX, offsetY
 end
 
 -- ! Get Row From Screen
@@ -308,6 +429,8 @@ end
 -- ! Mark Tiles Dirty
 -- Evict any chunks overlapped by the edited tile region
 function RoxyOrthoTilemap:markTilesDirty(layerName, tileX, tileY, tileCountWidth, tileCountHeight)
+  self:markLayerImageDirty(layerName)
+
   local config = self._staticChunkLayers[layerName]
   if not config then return end
 
