@@ -261,7 +261,7 @@ function Camera.setDeadZone(width, height)
 end
 
 -- ! Set Friction
--- Sets the default friction factor (0–1) applied when no pan input is active
+-- Sets the default friction factor (0-1) applied when no pan input is active
 function Camera.setFriction(friction)
   --#DEBUG START
   if type(friction) ~= "number" then
