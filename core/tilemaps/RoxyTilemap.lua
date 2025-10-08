@@ -19,7 +19,9 @@ local ceil  <const> = math.ceil
 
 local createTable <const> = table.create
 local tableInsert <const> = table.insert
+local tableRemove <const> = table.remove
 local tableSort   <const> = table.sort
+local tableConcat <const> = table.concat
 
 local loadJSON <const> = r.JSON.loadJson
 
@@ -34,6 +36,7 @@ local getImagetable   <const> = AssetStore.getImagetable
 
 local setCameraBounds   <const> = Camera.setBounds
 
+-- Tile map specific aliases (core/tilemaps/ObjectLayerProcessor.lua)
 local ObjectLayerProcessor  <const> = r.ObjectLayerProcessor
 local processObjectLayer    <const> = ObjectLayerProcessor.processObjectLayer
 local processObjectLayers   <const> = ObjectLayerProcessor.processObjectLayers
@@ -42,15 +45,25 @@ local IMAGE_PATH_PREFIX <const> = "assets/images/"
 
 local SPRITE_DEFAULT_DIMS <const> = 16
 
+local WALL_TAG   <const> = 1
+local OBJECT_TAG <const> = 2
+
+local RESERVED_IMAGE_OPTS <const> = {
+  registerSprite  = true,
+  applyImage      = true,
+  onRefresh       = true,
+  force           = true,
+  cacheKey        = true,
+  compositeLayers = true,
+  layers          = true,
+}
+
+local EMPTY_TABLE <const> = {}
+
 local COLOR_BLACK <const> = Graphics.kColorBlack
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
-
-local WALL_TAG   <const> = 1
-local OBJECT_TAG <const> = 2
-
-local EMPTY_TABLE <const> = {}
 
 -- Shared reference counts for all RoxyTilemap instances.
 -- Be sure to call _retain/_release in pairs so you don't
@@ -134,6 +147,68 @@ local function _validateOptions(opts)
 end
 
 --
+-- Layer Image Handle Helpers
+--
+
+-- ! Clone Table
+local function _cloneTable(source)
+  if not source then return nil end
+  local clone = {}
+  for key, value in pairs(source) do
+    clone[key] = value
+  end
+  return clone
+end
+
+-- ! Normalize Composite List
+local function _normalizeCompositeList(primaryName, opts)
+  if not opts then return nil end
+
+  local list = opts.compositeLayers or opts.layers
+  if type(list) ~= "table" then return nil end
+
+  local normalized = {}
+  for index = 1, #list do
+    local name = list[index]
+    if type(name) == "string" then
+      if name ~= primaryName then
+        tableInsert(normalized, name)
+      end
+    end
+  end
+
+  if #normalized == 0 then return nil end
+
+  tableSort(normalized)
+
+  local deduped = {}
+  local last
+  for i = 1, #normalized do
+    local name = normalized[i]
+    if name ~= last then
+      tableInsert(deduped, name)
+      last = name
+    end
+  end
+
+  if #deduped == 0 then return nil end
+  return deduped
+end
+
+-- ! Build Image Handle Key
+local function _buildImageHandleKey(layerName, compositeLayers, opts)
+  if opts and opts.cacheKey then
+    return tostring(opts.cacheKey)
+  end
+
+  if not compositeLayers or #compositeLayers == 0 then
+    return layerName
+  end
+
+  return layerName .. "::" .. tableConcat(compositeLayers, ",")
+end
+
+--
 -- Parallax System Helpers
 --
 
@@ -173,6 +248,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   self._opts = opts
   self.scene = scene
   self._retainedPaths = {}
+  self._layerImageHandles = {}
 
   local autoAdd = opts.wrapInSprites and (opts.autoAddSprites ~= false)
   local sceneHasAdd = scene and type(scene) == "table" and type(scene.addSprite) == "function" or false
@@ -786,7 +862,12 @@ end
 --   - If a table, remapFn[oldIndex] = newIndex
 --   - If a function, newIndex = remapFn(oldIndex) (return nil to keep oldIndex)
 function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remapFn)
-  return self.layerManager and self.layerManager:setImageTable(name, newImageTableOrPath, remapFn)
+  local updated = self.layerManager and self.layerManager:setImageTable(name, newImageTableOrPath, remapFn)
+  if updated then
+    self:markLayerImageDirty(name)
+  end
+
+  return updated
 end
 
 -- ! Rebuild Layer Collisions
@@ -925,6 +1006,226 @@ function RoxyTilemap:getVisibleTileBounds(layer, extraMargin)
 end
 
 --------------------------------------------------------------------------------
+-- Layer Image Handles
+--------------------------------------------------------------------------------
+
+-- ! Acquire Layer Image Handle
+function RoxyTilemap:_acquireLayerImageHandle(layerName, opts, createIfMissing)
+  if not layerName then return nil end
+
+  if not self._layerImageHandles and createIfMissing then
+    self._layerImageHandles = {}
+  end
+
+  local handles = self._layerImageHandles
+  if not handles then return nil end
+
+  local compositeLayers = _normalizeCompositeList(layerName, opts)
+  local key = _buildImageHandleKey(layerName, compositeLayers, opts)
+  if not key then return nil end
+
+  local handle = handles[key]
+  if not handle and createIfMissing then
+    handle = {
+      key = key,
+      layerName = layerName,
+      compositeLayers = compositeLayers,
+      sprites = {},
+      dirty = true,
+      image = nil,
+      offsetX = 0,
+      offsetY = 0,
+    }
+    handles[key] = handle
+  elseif handle and compositeLayers and not handle.compositeLayers then
+    handle.compositeLayers = compositeLayers
+  end
+
+  return handle
+end
+
+-- ! Prune Layer Image Sprites
+function RoxyTilemap:_pruneLayerImageSprites(handle)
+  if not handle or not handle.sprites then return end
+
+  for index = #handle.sprites, 1, -1 do
+    local entry = handle.sprites[index]
+    local sprite = entry and entry.sprite
+    if sprite == nil then
+      tableRemove(handle.sprites, index)
+    end
+  end
+end
+
+-- ! Apply Handle Image to Sprite
+function RoxyTilemap:_applyHandleImageToSprite(handle, entry)
+  if not handle or not entry then return end
+
+  local sprite = entry.sprite
+  if not sprite then return end
+
+  local image = handle.image
+  if not image then return end
+
+  local offsetX = handle.offsetX or 0
+  local offsetY = handle.offsetY or 0
+
+  if entry.onRefresh then
+    local ok, err = pcall(entry.onRefresh, sprite, image, offsetX, offsetY)
+    if not ok then
+      Log.warn("[RoxyTilemap:_applyHandleImageToSprite] onRefresh error: " .. tostring(err)) --#DEBUG
+    end
+  end
+
+  if entry.applyImage ~= false and sprite.setImage then
+    sprite:setImage(image)
+  end
+end
+
+-- ! Apply Handle Image to Sprites
+function RoxyTilemap:_applyHandleImageToSprites(handle)
+  if not handle or not handle.sprites then return end
+  if not handle.image then return end
+
+  self:_pruneLayerImageSprites(handle)
+
+  for index = 1, #handle.sprites do
+    self:_applyHandleImageToSprite(handle, handle.sprites[index])
+  end
+end
+
+-- ! Register Sprite for Image Handle
+function RoxyTilemap:_registerSpriteForImageHandle(handle, sprite, applyImage, onRefresh)
+  if not handle or not sprite then return nil end
+
+  if not handle.sprites then handle.sprites = {} end
+
+  for index = 1, #handle.sprites do
+    local entry = handle.sprites[index]
+    if entry and entry.sprite == sprite then
+      entry.applyImage = (applyImage ~= false)
+      entry.onRefresh = onRefresh
+      return entry
+    end
+  end
+
+  local entry = {
+    sprite = sprite,
+    applyImage = (applyImage ~= false),
+    onRefresh = onRefresh,
+  }
+
+  tableInsert(handle.sprites, entry)
+  return entry
+end
+
+-- ! Render Layer Image
+function RoxyTilemap:_renderLayerImage(handle, opts)
+  if not handle then return nil end
+
+  if type(self._renderLayerToImage) ~= "function" then
+    Log.error("[RoxyTilemap:_renderLayerImage] Projection is missing _renderLayerToImage implementation") --#DEBUG
+    return nil
+  end
+
+  local renderOpts = nil
+  if opts then
+    for key, value in pairs(opts) do
+      if not RESERVED_IMAGE_OPTS[key] then
+        if not renderOpts then renderOpts = {} end
+        renderOpts[key] = value
+      end
+    end
+  end
+
+  if handle.compositeLayers and #handle.compositeLayers > 0 then
+    renderOpts = renderOpts or {}
+    renderOpts.compositeLayers = handle.compositeLayers
+  end
+
+  local image, offsetX, offsetY = self:_renderLayerToImage(handle.layerName, renderOpts)
+  if not image then return nil end
+
+  return image, offsetX or 0, offsetY or 0
+end
+
+-- ! Mark Layer Image Dirty
+function RoxyTilemap:markLayerImageDirty(layerName)
+  if not self._layerImageHandles or not layerName then return end
+
+  for _, handle in pairs(self._layerImageHandles) do
+    if handle.layerName == layerName then
+      handle.dirty = true
+    elseif handle.compositeLayers then
+      for index = 1, #handle.compositeLayers do
+        if handle.compositeLayers[index] == layerName then
+          handle.dirty = true
+          break
+        end
+      end
+    end
+  end
+end
+
+-- ! Mark All Layer Images Dirty
+function RoxyTilemap:markAllLayerImagesDirty()
+  if not self._layerImageHandles then return end
+
+  for _, handle in pairs(self._layerImageHandles) do
+    handle.dirty = true
+  end
+end
+
+-- ! Get Layer Image
+function RoxyTilemap:getLayerImage(layerName, opts)
+  if not layerName then
+    Log.warn("[RoxyTilemap:getLayerImage] layerName is required") --#DEBUG
+    return nil
+  end
+
+  if not (self.layers and self.layers[layerName]) then
+    Log.warn("[RoxyTilemap:getLayerImage] Unknown layer '" .. tostring(layerName) .. "'") --#DEBUG
+    return nil
+  end
+
+  local handle = self:_acquireLayerImageHandle(layerName, opts, true)
+  if not handle then return nil end
+
+  local shouldRender = handle.dirty or handle.image == nil or (opts and opts.force == true)
+
+  if opts and opts.registerSprite then
+    local entry = self:_registerSpriteForImageHandle(handle, opts.registerSprite, opts.applyImage, opts.onRefresh)
+    if handle.image and entry then
+      self:_applyHandleImageToSprite(handle, entry)
+    end
+  end
+
+  if shouldRender then
+    local image, offsetX, offsetY = self:_renderLayerImage(handle, opts)
+    if not image then
+      return nil
+    end
+
+    handle.image = image
+    handle.offsetX = offsetX
+    handle.offsetY = offsetY
+    handle.dirty = false
+
+    self:_applyHandleImageToSprites(handle)
+  end
+
+  return handle.image, handle.offsetX or 0, handle.offsetY or 0
+end
+
+-- ! Refresh Layer Image
+function RoxyTilemap:refreshLayerImage(layerName, opts)
+  local refreshOpts = opts and _cloneTable(opts) or {}
+  refreshOpts.force = true
+
+  return self:getLayerImage(layerName, refreshOpts)
+end
+
+--------------------------------------------------------------------------------
 -- Coordinate Projection (Abstract Methods)
 -- Methods that must be implemented by projection-specific subclasses
 --------------------------------------------------------------------------------
@@ -964,6 +1265,12 @@ end
 function RoxyTilemap:setTileAt(name, tileX, tileY, tileIndex, updateSprite)
   Log.error("[RoxyTilemap:setTileAt] Abstract method - must be implemented by projection subclass")
 end
+
+-- ! Render Layer to Image
+function RoxyTilemap:_renderLayerToImage(layerName, opts)
+  Log.error("[RoxyTilemap:_renderLayerToImage] Abstract method - must be implemented by projection subclass")
+end
+
 
 --------------------------------------------------------------------------------
 -- Drawing (Abstract Methods)
@@ -1020,6 +1327,27 @@ function RoxyTilemap:destroy()
   if self.layerManager then
     self.layerManager:destroy()
     self.layerManager = nil
+  end
+
+  -- Release cached layer images and sprite bindings
+  if self._layerImageHandles then
+    for _, handle in pairs(self._layerImageHandles) do
+      if handle.sprites then
+        for index = #handle.sprites, 1, -1 do
+          local entry = handle.sprites[index]
+          if entry then
+            entry.sprite = nil
+            entry.onRefresh = nil
+          end
+          handle.sprites[index] = nil
+        end
+      end
+
+      handle.image = nil
+      handle.dirty = true
+      handle.compositeLayers = nil
+    end
+    self._layerImageHandles = nil
   end
 
   -- Remove object sprites (unchanged from your current logic)
