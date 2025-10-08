@@ -193,10 +193,10 @@ function Scene.registerScenes(...)
     for name, table in pairs(sceneTable) do
       -- TODO: Should the if statement be removed from release build or just the error log?
       if type(name) ~= "string" then
-        Log.error("[Scene.registerScenes] Skipping scene — key is not a string.", 2) --#DEBUG
+        Log.error("[Scene.registerScenes] Skipping scene - key is not a string.", 2) --#DEBUG
         return
       elseif type(table) ~= "table" then
-        Log.error("[Scene.registerScenes] Skipping scene '" .. tostring(name) .. "' — value is not a table.", 2) --#DEBUG
+        Log.error("[Scene.registerScenes] Skipping scene '" .. tostring(name) .. "' - value is not a table.", 2) --#DEBUG
         return
       else
         scenes[name] = table
