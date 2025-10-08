@@ -518,7 +518,7 @@ static int roxy_tileRenderer_renderToBuffer(lua_State* L)
         }
     } else {
         // Isometric
-        // Conservative world bounds — these are broad but safe for a stub
+        // Conservative world bounds - these are broad but safe for a stub
         const int overdrawRows = (int)ceilf(fmaxf(0.f, (float)(tileRenderer->maxImageHeight - tileRenderer->tileHeight)) / fmaxf(1.f, (float)tileRenderer->halfTileHeight)) + 1;
 
         const int minColumnZeroBased = roxy_math_clampi(-(bufferWidth / tileRenderer->halfTileWidth) - overdrawRows, 0, tileRenderer->mapWidth  - 1);
