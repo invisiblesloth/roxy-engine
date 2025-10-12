@@ -167,27 +167,13 @@ local function _normalizeCompositeList(primaryName, opts)
   local list = opts.compositeLayers or opts.layers
   if type(list) ~= "table" then return nil end
 
-  local normalized = {}
+  local deduped = {}
+  local seen = {}
   for index = 1, #list do
     local name = list[index]
-    if type(name) == "string" then
-      if name ~= primaryName then
-        tableInsert(normalized, name)
-      end
-    end
-  end
-
-  if #normalized == 0 then return nil end
-
-  tableSort(normalized)
-
-  local deduped = {}
-  local last
-  for i = 1, #normalized do
-    local name = normalized[i]
-    if name ~= last then
+    if type(name) == "string" and name ~= primaryName and not seen[name] then
+      seen[name] = true
       tableInsert(deduped, name)
-      last = name
     end
   end
 
@@ -205,7 +191,13 @@ local function _buildImageHandleKey(layerName, compositeLayers, opts)
     return layerName
   end
 
-  return layerName .. "::" .. tableConcat(compositeLayers, ",")
+  local sorted = {}
+  for index = 1, #compositeLayers do
+    sorted[index] = compositeLayers[index]
+  end
+  tableSort(sorted)
+
+  return layerName .. "::" .. tableConcat(sorted, ",")
 end
 
 --

@@ -4,47 +4,72 @@ roxy = roxy or {}
 roxy.Camera = roxy.Camera or {}
 local Camera <const> = roxy.Camera
 
-local pd        <const> = playdate
-local Graphics  <const> = pd.graphics
-local Sprite    <const> = Graphics.sprite
-local Timer     <const> = pd.timer
+--------------------------------------------------------------------------------
+-- Standard Lua Function Aliases
+--------------------------------------------------------------------------------
 
+-- Math functions
 local abs   <const> = math.abs
 local min   <const> = math.min
 local max   <const> = math.max
 local sin   <const> = math.sin
 local cos   <const> = math.cos
-local clamp <const> = roxy.Math.clamp
 local floor <const> = math.floor
 local ceil  <const> = math.ceil
 local pi    <const> = math.pi
-local lerp  <const> = roxy.Math.lerp
-local round <const> = roxy.Math.roundInt
 
-local performAfterDelay <const> = Timer.performAfterDelay
-
+-- Table functions
 local tableRemove <const> = table.remove
 local tableInsert <const> = table.insert
 
+--------------------------------------------------------------------------------
+-- Playdate SDK Aliases
+--------------------------------------------------------------------------------
+
+-- Core Playdate
+local pd        <const> = playdate
+local Graphics  <const> = pd.graphics
+local Sprite    <const> = Graphics.sprite
+local Timer     <const> = pd.timer
+
+-- Timer functions
+local performAfterDelay <const> = Timer.performAfterDelay
+
+-- Graphics functions
 local setDrawOffset <const> = Graphics.setDrawOffset
 
+-- Sprite functions
 local redrawBackground <const> = Sprite.redrawBackground
 
---
--- Constants
---
+--------------------------------------------------------------------------------
+-- Roxy Utilities Function Aliases
+--------------------------------------------------------------------------------
 
-local CAMERA_SPEED_DEFAULT  <const> = 120   -- Default pan velocity (pixels per second)
-local FRICTION_DEFAULT      <const> = 0.85  -- Default friction factor (0 to 1, higher = slower stop)
+-- Math functions
+local clamp <const> = roxy.Math.clamp
+local lerp  <const> = roxy.Math.lerp
+local round <const> = roxy.Math.roundInt
 
+--------------------------------------------------------------------------------
+-- Graphics Constants
+--------------------------------------------------------------------------------
+
+-- Display dimensions
 local DISPLAY_WIDTH   <const> = roxy.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = roxy.Graphics.displayHeight
 local CENTER_X        <const> = roxy.Graphics.displayWidthCenter
 local CENTER_Y        <const> = roxy.Graphics.displayHeightCenter
 
---
+--------------------------------------------------------------------------------
+-- Default Values
+--------------------------------------------------------------------------------
+
+local CAMERA_SPEED_DEFAULT  <const> = 120   -- Default pan velocity (pixels per second)
+local FRICTION_DEFAULT      <const> = 0.85  -- Default friction factor (0 to 1, higher = slower stop)
+
+--------------------------------------------------------------------------------
 -- Public Variables (externally visible state)
---
+--------------------------------------------------------------------------------
 
 Camera.x              = 0   -- Current x position
 Camera.y              = 0   -- Current y position
@@ -63,9 +88,9 @@ Camera.mode           = "lerp"  -- "lerp" or "spring"
 Camera.springFreq = 4.0 -- Hz, natural frequency
 Camera.springDamp = 0.9 -- 0..1 (1=critical-ish)
 
---
--- Private Variables (internal module state; underscore-reserved)
---
+--------------------------------------------------------------------------------
+-- Private Variables (internal module state)
+--------------------------------------------------------------------------------
 
 Camera._velocityX         = 0     -- Velocity in x direction
 Camera._velocityY         = 0     -- Velocity in y direction
@@ -77,12 +102,13 @@ Camera._screenRight       = DISPLAY_WIDTH   -- Cached screen right boundary
 Camera._screenBottom      = DISPLAY_HEIGHT  -- Cached screen bottom boundary
 Camera._targetX           = 0     -- Target x position
 Camera._targetY           = 0     -- Target y position
-Camera._bounds            = nil   -- { x1, y1, x2, y2 }
+Camera._logicalBounds     = nil   -- { x1, y1, x2, y2 } - developer-set bounds (before bias expansion)
+Camera._bounds            = nil   -- { x1, y1, x2, y2 } - effective bounds (after bias expansion)
 Camera._hasBounds         = false -- Whether bounds are active
-Camera._minX              = 0     -- Minimum x bound
-Camera._minY              = 0     -- Minimum y bound
-Camera._maxX              = 0     -- Maximum x bound
-Camera._maxY              = 0     -- Maximum y bound
+Camera._minX              = 0     -- Minimum x bound (effective)
+Camera._minY              = 0     -- Minimum y bound (effective)
+Camera._maxX              = 0     -- Maximum x bound (effective)
+Camera._maxY              = 0     -- Maximum y bound (effective)
 Camera._shakeAmplitude    = 0     -- Shake intensity (pixels)
 Camera._shakeFrequency    = 0     -- Shake oscillations per second
 Camera._shakeAngularFreq  = 0     -- Cached angular frequency (frequency * 2π)
@@ -144,6 +170,39 @@ local function _commitOffset(dt)
   else
     Camera._isActive = Camera.shakeDuration > 0 or Camera._velocityX ~= 0 or Camera._velocityY ~= 0 or Camera.target ~= nil
   end
+end
+
+-- ! Recalculate Effective Bounds
+-- Expands logical bounds by bias amount so camera can apply bias without hitting bounds
+local function _recalculateEffectiveBounds()
+  if not Camera._logicalBounds then
+    Camera._bounds = nil
+    Camera._hasBounds = false
+    Camera._minX = 0
+    Camera._minY = 0
+    Camera._maxX = 0
+    Camera._maxY = 0
+    return
+  end
+
+  local bounds = Camera._logicalBounds
+  local biasX = abs(Camera.targetBiasX)
+  local biasY = abs(Camera.targetBiasY)
+
+  -- Expand bounds by bias in all directions
+  Camera._bounds = {
+    x1 = bounds.x1 - biasX,
+    y1 = bounds.y1 - biasY,
+    x2 = bounds.x2 + biasX,
+    y2 = bounds.y2 + biasY
+  }
+
+  -- Update cached min/max for clamping
+  Camera._minX = min(Camera._bounds.x1, Camera._bounds.x2)
+  Camera._maxX = max(Camera._bounds.x1, Camera._bounds.x2)
+  Camera._minY = min(Camera._bounds.y1, Camera._bounds.y2)
+  Camera._maxY = max(Camera._bounds.y1, Camera._bounds.y2)
+  Camera._hasBounds = true
 end
 
 --------------------------------------------------------------------------------
@@ -273,9 +332,11 @@ end
 
 -- ! Set Bounds
 -- Clamps the camera to a rectangle {x1, y1, x2, y2}
+-- Bounds are automatically expanded by camera bias to prevent conflicts
 function Camera.setBounds(bounds)
   if not bounds or type(bounds.x1) ~= "number" or type(bounds.y1) ~= "number" or type(bounds.x2) ~= "number" or type(bounds.y2) ~= "number" then
     Log.error("[Camera.setBounds] Invalid bounds: expected {x1, y1, x2, y2} with numbers", 2) --#DEBUG
+    Camera._logicalBounds = nil
     Camera._bounds = nil
     Camera._hasBounds = false
     Camera._minX, Camera._minY = 0, 0
@@ -283,17 +344,14 @@ function Camera.setBounds(bounds)
     return
   end
 
-  Camera._bounds = bounds
-  Camera._hasBounds = true
-  Camera._minX = min(bounds.x1, bounds.x2)
-  Camera._maxX = max(bounds.x1, bounds.x2)
-  Camera._minY = min(bounds.y1, bounds.y2)
-  Camera._maxY = max(bounds.y1, bounds.y2)
+  Camera._logicalBounds = bounds
+  _recalculateEffectiveBounds()
 end
 
 -- ! Clear Bounds
 -- Clears the camera bounds
 function Camera.clearBounds()
+  Camera._logicalBounds = nil
   Camera._bounds = nil
   Camera._hasBounds = false
   Camera._minX = 0
@@ -318,6 +376,7 @@ function Camera.reset()
   Camera._targetX           = 0
   Camera._targetY           = 0
   Camera.target             = nil
+  Camera._logicalBounds     = nil
   Camera._bounds            = nil
   Camera._hasBounds         = false
   Camera._minX              = 0
@@ -346,7 +405,7 @@ function Camera.reset()
   Camera.springDamp         = 0.9
   Camera._onOffsetChanged   = {}
 
-  -- Immediate screen‑space reset
+  -- Immediate screen-space reset
   setDrawOffset(0, 0)
   redrawBackground()
 
@@ -356,6 +415,10 @@ end
 -- ! Set Bias
 function Camera.setBias(x, y)
   Camera.targetBiasX, Camera.targetBiasY = x or 0, y or 0
+  -- Recalculate bounds to account for new bias
+  if Camera._logicalBounds then
+    _recalculateEffectiveBounds()
+  end
 end
 
 -- ! Add Offset Listener
@@ -554,35 +617,35 @@ function Camera.getPosition()
 end
 
 -- ! Get Bounds
--- Returns the current bounds table if set, or nil
+-- Returns the logical bounds (as set by developer, before bias expansion) or nil
 function Camera.getBounds()
-  if not Camera._hasBounds then return nil end
+  if not Camera._logicalBounds then return nil end
   return {
-    x1 = Camera._minX,
-    y1 = Camera._minY,
-    x2 = Camera._maxX,
-    y2 = Camera._maxY
+    x1 = Camera._logicalBounds.x1,
+    y1 = Camera._logicalBounds.y1,
+    x2 = Camera._logicalBounds.x2,
+    y2 = Camera._logicalBounds.y2
   }
 end
 
 -- ! Get Bound X1
 function Camera.getBoundX1()
-  return Camera._hasBounds and Camera._minX or nil
+  return Camera._logicalBounds and Camera._logicalBounds.x1 or nil
 end
 
 -- ! Get Bound X2
 function Camera.getBoundX2()
-  return Camera._hasBounds and Camera._maxX or nil
+  return Camera._logicalBounds and Camera._logicalBounds.x2 or nil
 end
 
 -- ! Get Bound Y1
 function Camera.getBoundY1()
-  return Camera._hasBounds and Camera._minY or nil
+  return Camera._logicalBounds and Camera._logicalBounds.y1 or nil
 end
 
 -- ! Get Bound Y2
 function Camera.getBoundY2()
-  return Camera._hasBounds and Camera._maxY or nil
+  return Camera._logicalBounds and Camera._logicalBounds.y2 or nil
 end
 
 -- ! Get Draw Offset
