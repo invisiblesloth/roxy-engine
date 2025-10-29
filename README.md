@@ -1,8 +1,30 @@
 # Roxy Engine for Playdate
 
-Roxy is a performance-focused, open-source game engine for Playdate.
+A performance-focused, open-source game engine for Playdate. With C-acceleration 🚀
 
 > **Note:** Roxy is currently in pre-release. Features and APIs may evolve before version 1.0.
+
+---
+
+## Features
+
+**Core Systems**
+- Scene management with stacking and transitions
+- Camera with smoothing, shake, and parallax
+- Input handling (buttons and crank)
+- Audio system (music and sound effects)
+- Save/load with multiple slots
+
+**Graphics & Animation**
+- Sprite and actor systems with state machines
+- C-accelerated particle system
+- Multiple tilemap formats (orthogonal, isometric, staggered)
+- 50+ easing functions for tweening
+
+**Performance**
+- C-optimized critical systems
+- Asset pooling and caching
+- Automatic culling and dirty rect optimization
 
 ---
 
