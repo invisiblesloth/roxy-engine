@@ -186,15 +186,13 @@ local function _recalculateEffectiveBounds()
   end
 
   local bounds = Camera._logicalBounds
-  local biasX = abs(Camera.targetBiasX)
-  local biasY = abs(Camera.targetBiasY)
 
-  -- Expand bounds by bias in all directions
+  -- Shift bounds by bias to maintain symmetric movement range
   Camera._bounds = {
-    x1 = bounds.x1 - biasX,
-    y1 = bounds.y1 - biasY,
-    x2 = bounds.x2 + biasX,
-    y2 = bounds.y2 + biasY
+    x1 = bounds.x1 + Camera.targetBiasX,
+    y1 = bounds.y1 + Camera.targetBiasY,
+    x2 = bounds.x2 + Camera.targetBiasX,
+    y2 = bounds.y2 + Camera.targetBiasY
   }
 
   -- Update cached min/max for clamping
