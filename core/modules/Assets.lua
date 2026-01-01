@@ -1,14 +1,60 @@
 -- core/modules/Assets.lua
 
+--------------------------------------------------------------------------------
+-- Assets - Roxy Asset Pool Management System
+--------------------------------------------------------------------------------
+--
+-- Provides object pooling for efficient reuse of expensive game assets like
+-- sprites, images, and other resources. Reduces garbage collection pressure
+-- and improves performance by pre-allocating and recycling objects.
+--
+-- Key Features:
+--  - Dynamic pool registration with custom loader functions
+--  - Automatic pool growth up to configurable max size
+--  - Configurable initial size, max size, and growth factor
+--  - Asset recycling to minimize allocations
+--  - Pool availability and capacity tracking
+--  - Integration with AssetPoolRegistry for declarative setup
+--
+-- Usage Pattern:
+--  1. Register pool with Assets.registerPool(key, count, loader, options)
+--  2. Acquire asset with Assets.getAsset(key)
+--  3. Use asset in game logic
+--  4. Return asset with Assets.recycleAsset(key, asset)
+--
+--------------------------------------------------------------------------------
+
 roxy = roxy or {}
 roxy.Assets = roxy.Assets or {}
 local Assets <const> = roxy.Assets
 
+--------------------------------------------------------------------------------
+-- Standard Lua Function Aliases
+--------------------------------------------------------------------------------
+
+-- Math functions
 local min <const> = math.min
 
+--------------------------------------------------------------------------------
+-- Local State Variables
+--------------------------------------------------------------------------------
+
+-- Asset pool registry (indexed by pool key)
 local pools = {}
 
+--------------------------------------------------------------------------------
+-- Public API
+--------------------------------------------------------------------------------
+
 -- ! Register Pool
+-- Registers a new asset pool with initial allocation and growth configuration
+--  @param key            Unique identifier for this pool
+--  @param initialCount   Number of assets to pre-allocate (default 1)
+--  @param loaderFunction Function that creates and returns a new asset instance
+--  @param options        Optional table with maxSize and growthFactor fields
+--
+--  @return Boolean true if registration succeeded, false if pool already exists or loader invalid
+
 function Assets.registerPool(key, initialCount, loaderFunction, options)
   if type(loaderFunction) ~= "function" then
     Log.warn("[Assets.registerPool] loaderFunction is not callable for key '" .. tostring(key) .. "'. Expected a function.") --#DEBUG
@@ -20,21 +66,46 @@ function Assets.registerPool(key, initialCount, loaderFunction, options)
     return false
   end
 
+  local initialCountValue = tonumber(initialCount) or 1
+  local maxSizeValue = options and tonumber(options.maxSize) or nil
+  local growthFactorValue = options and tonumber(options.growthFactor) or 1
+
+  if initialCountValue < 0 then
+    Log.warn("[Assets.registerPool] initialCount (" .. tostring(initialCountValue) .. ") must be >= 0 for pool '" .. tostring(key) .. "'. Clamping to 0.") --#DEBUG
+    initialCountValue = 0
+  end
+
+  if maxSizeValue == nil then
+    maxSizeValue = initialCountValue * 2
+  end
+  if maxSizeValue < 1 then
+    Log.warn("[Assets.registerPool] maxSize (" .. tostring(maxSizeValue) .. ") must be >= 1 for pool '" .. tostring(key) .. "'. Clamping to 1.") --#DEBUG
+    maxSizeValue = 1
+  end
+
+  if growthFactorValue < 1 then
+    Log.warn("[Assets.registerPool] growthFactor (" .. tostring(growthFactorValue) .. ") must be >= 1 for pool '" .. tostring(key) .. "'. Clamping to 1.") --#DEBUG
+    growthFactorValue = 1
+  end
+
+  -- Create pool metadata structure
   local pool = {
-    assets = {},
-    loader = loaderFunction,
-    availableCount = 0,
-    totalSize = 0,
-    initialCount = initialCount or 1,
-    maxSize = (options and options.maxSize) or ((initialCount or 1) * 2),
-    growthFactor = (options and options.growthFactor) or 1,
+    assets = {},                -- Array of available assets
+    loader = loaderFunction,    -- Factory function for new assets
+    availableCount = 0,         -- Number of assets currently available
+    totalSize = 0,              -- Total allocated assets (in-use + available)
+    initialCount = initialCountValue,
+    maxSize = maxSizeValue,
+    growthFactor = growthFactorValue,
   }
 
+  -- Validate and clamp initialCount
   if pool.initialCount > pool.maxSize then
     Log.warn("[Assets.registerPool] initialCount (" .. pool.initialCount .. ") exceeds maxSize (" .. pool.maxSize .. ") for pool '" .. tostring(key) .. "'. Clamping to maxSize.") --#DEBUG
     pool.initialCount = pool.maxSize
   end
 
+  -- Pre-allocate initial assets
   local assets = pool.assets
   local loader = pool.loader
   for i = 1, pool.initialCount do
@@ -56,6 +127,11 @@ function Assets.registerPool(key, initialCount, loaderFunction, options)
 end
 
 -- ! Get Asset
+-- Retrieves an available asset from the pool, growing the pool if needed
+--  @param key Unique identifier for the pool
+--
+--  @return Asset instance if available, nil if pool exhausted or unregistered
+
 function Assets.getAsset(key)
   local pool = pools[key]
   if not pool then
@@ -64,14 +140,17 @@ function Assets.getAsset(key)
   end
 
   local assets = pool.assets
+
+  -- Fast path: return available asset from pool
   if pool.availableCount > 0 then
     local i = #assets
     local asset = assets[i]
     assets[i] = nil
 
     pool.availableCount -= 1
-    return asset
+    return roxy.AssetPoolRegistry.markFromPool(asset)
   else
+    -- Pool exhausted, attempt to grow if under max capacity
     if pool.totalSize < pool.maxSize then
       local needed = min(pool.growthFactor, pool.maxSize - pool.totalSize)
       local loader = pool.loader
@@ -86,13 +165,14 @@ function Assets.getAsset(key)
         end
       end
 
+      -- Retry retrieval after growth
       if pool.availableCount > 0 then
         local i = #assets
         local asset = assets[i]
         assets[i] = nil
 
         pool.availableCount -= 1
-        return asset
+        return roxy.AssetPoolRegistry.markFromPool(asset)
       else
         Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
@@ -105,6 +185,12 @@ function Assets.getAsset(key)
 end
 
 -- ! Recycle Asset
+-- Returns an asset to the pool for reuse
+--  @param key   Unique identifier for the pool
+--  @param asset Asset instance to return to the pool
+--
+--  @return Boolean true if recycled successfully, false if pool unregistered or asset nil
+
 function Assets.recycleAsset(key, asset)
   local pool = pools[key]
   if not pool then
@@ -116,6 +202,12 @@ function Assets.recycleAsset(key, asset)
     Log.warn("[Assets.recycleAsset] Attempted to recycle a nil asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
+  -- Prevent double-recycle and foreign assets from entering the pool.
+  if not roxy.AssetPoolRegistry.isFromPool(asset) then
+    Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
+    return false
+  end
+  roxy.AssetPoolRegistry.clearFromPool(asset)
 
   local assets = pool.assets
   assets[#assets + 1] = asset
@@ -124,9 +216,18 @@ function Assets.recycleAsset(key, asset)
 end
 
 -- ! Get Is Pool Registered
+-- Checks if a pool with the given key exists
+--  @param key Unique identifier for the pool
+--
+--  @return Boolean true if pool is registered, false otherwise
+
 function Assets.getIsPoolRegistered(key)
   return pools[key] ~= nil
 end
 
--- Load the Asset Pool Registry helper
+--------------------------------------------------------------------------------
+-- Roxy Framework Imports
+--------------------------------------------------------------------------------
+
+-- Asset Pool Registry helper
 import "libraries/roxy/core/modules/AssetPoolRegistry"

@@ -81,8 +81,12 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
 
   -- Try to load the image (optional)
   local img = getImageCached(imagePath) or nil
+  local didRetain = false
   if img then
-    retain(imagePath, img)
+    didRetain = retain(imagePath, img)
+    if not didRetain then
+      Log.warn("[ObjectLayerProcessor] Failed to retain image: " .. tostring(imagePath)) --#DEBUG
+    end
   end
 
   -- Create appropriate sprite type
@@ -117,7 +121,7 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
   end
 
   -- Track retained imagePath for cleanup
-  sprite._retainedImagePath = img and imagePath or nil
+  sprite._retainedImagePath = didRetain and imagePath or nil
 
   -- Store object properties on sprite for reference
   sprite.objectProps = objectProperties
