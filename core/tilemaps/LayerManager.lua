@@ -258,8 +258,11 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
   -- update retention (for swap paths only)
   if newPath then
     if not self._retainedPaths[newPath] then
-      retain(newPath, newTable)
-      self._retainedPaths[newPath] = true
+      if retain(newPath, newTable) then
+        self._retainedPaths[newPath] = true
+      else
+        Log.warn("[LayerManager:setImageTable] Failed to retain image table: " .. tostring(newPath)) --#DEBUG
+      end
     end
     local oldPath = layer.imagePath
     if oldPath and oldPath ~= newPath and self._retainedPaths[oldPath] then

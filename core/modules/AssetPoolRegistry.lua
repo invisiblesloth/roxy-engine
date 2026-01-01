@@ -61,6 +61,17 @@ function Registry.isFromPool(asset)
   return asset and poolTag[asset] or false
 end
 
+-- ! Clear From Pool
+-- Clears the pool tag for an asset (used after recycling)
+--  @param asset Asset instance to untag (any type)
+--
+--  @return The asset instance (for chaining)
+
+function Registry.clearFromPool(asset)
+  if asset then poolTag[asset] = nil end
+  return asset
+end
+
 -- ! Register
 -- Registers a pool for any asset type if not already registered
 --  @param key    Unique identifier string for the pool

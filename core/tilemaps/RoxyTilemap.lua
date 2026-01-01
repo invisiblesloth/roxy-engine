@@ -342,7 +342,11 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
     tileset.imagePath  = normalizedPath
     tileset.imageTable = getImagetable(normalizedPath)
-    retain(normalizedPath, tileset.imageTable)
+    if tileset.imageTable then
+      if not retain(normalizedPath, tileset.imageTable) then
+        Log.warn("[RoxyTilemap:init] Failed to retain tileset image: " .. tostring(normalizedPath)) --#DEBUG
+      end
+    end
 
     -- Precompute once per tileset
     local maxImageHeight = 0
