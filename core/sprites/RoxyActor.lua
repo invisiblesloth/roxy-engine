@@ -622,7 +622,7 @@ local playerManifest = {
   }
 }
 
-local player = RoxyActor(playerManifest, scene)
+local player = RoxyActor(playerManifest)
 
 -- Advanced Manifest with Transition Rules
 local advancedManifest = {
@@ -641,6 +641,7 @@ local advancedManifest = {
     { state = "idle", vx = 0, onGround = true }
   }
 }
+local advancedActor = RoxyActor(advancedManifest)
 
 -- State Management
 player:setState("run")        -- Immediate state change
@@ -654,7 +655,7 @@ player:playOnce("attack", function(actor)
 end)
 
 -- Physics Integration
-local physicsBody = RoxyPhysicsBody({
+local physicsBody = RoxyPhysicsBody({ -- placeholder: provided by caller
   x = 100, y = 100,
   width = 32, height = 48
 })
@@ -663,19 +664,15 @@ player:addPhysics(physicsBody)
 
 -- Custom updatePhysics override
 function player:updatePhysics(opts)
-  -- opts contains: vx, vy, onGround, intentVX, etc.
-  local vx = opts.vx or 0
-  local vy = opts.vy or 0
-  local onGround = opts.onGround
+  opts = opts or {}
 
-  -- Custom state logic
   if opts.isAttacking then
     if self.currentState ~= "attack" then
       self:playOnce("attack")
     end
   else
-    -- Let parent handle default transitions
-    RoxyActor.super.updatePhysics(self, opts)
+    -- Reuse the built-in transition logic from RoxyActor
+    RoxyActor.updatePhysics(self, opts)
   end
 end
 
@@ -690,67 +687,29 @@ player:updatePhysics({
 })
 
 -- Facing Direction
-player:setFacing(velocity.x) -- Positive = right, negative = left
+player:setFacing(20) -- Positive = right, negative = left
 
 -- Multiple Initialization Patterns
+local manifest = playerManifest
+local scene = currentScene -- placeholder: provided by caller
+local opts = { worldX = 120, worldY = 80 }
 local actor1 = RoxyActor(manifest, scene)               -- 2-arg
 local actor2 = RoxyActor(manifest, "idle", opts, scene) -- 4-arg
-local actor3 = RoxyActor(manifest, "idle", scene)       -- 3-arg scene
-local actor4 = RoxyActor(manifest, opts, scene)         -- 3-arg opts
+local actor3 = RoxyActor(manifest, "idle", scene)       -- 3-arg
 
 -- Asset Pool Integration
 local pooledActor = RoxyActor({
   sheet = RoxyAnimation.fromPool("shared_character_animations")
 }, scene)
 
--- Custom Animation Building (without rows)
-local customActor = RoxyActor({}, scene)
-customActor:addAnimation({
-  name = "dance",
-  startFrame = 1,
-  endFrame = 12,
-  loop = true,
-  speed = 1.5,
-  onCompleteCallback = function()
-    Log.debug("Dance loop completed!")
-  end
-})
-
 -- Cleanup
 player:clearPhysics() -- Remove physics integration
 player:remove()       -- Remove from scene
 player:destroy()      -- Full cleanup
 
--- In your game loop
-function GameScene:update()
-  -- Physics bodies update the actor automatically
-  physicsWorld:update()
-
-  -- Or update manually for non-physics actors
-  for _, actor in ipairs(self.actors) do
-    if not actor.physicsBody then
-      actor:update()
-    end
-  end
-end
-
 -- Querying Actor State
 if player.currentState == "jump" then
   Log.debug("Player is jumping!")
 end
-
-if player.facing == -1 then
-  Log.debug("Player is facing left")
-end
-
--- Debug Information
-Log.debug("Current state:", player.currentState)  --#DEBUG
-Log.debug("Queued state:", player.nextState)      --#DEBUG
-Log.debug("Available states:")                    --#DEBUG
---#DEBUG START
-for name, _ in pairs(player.animations) do
-  Log.debug("  -", name)
-end
---#DEBUG END
 
 --]]

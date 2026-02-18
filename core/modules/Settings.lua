@@ -202,3 +202,42 @@ function Settings.save()
   end
   return true
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Settings stores typed game/user preferences with optional persistence.
+
+-- Basic Setup
+Settings.setup({
+  soundOn = true,
+  musicVolume = 0.8,
+  gameVariant = "classic",
+}, true)
+
+-- Read Settings
+local soundOn = Settings.get("soundOn")
+local subset = Settings.get({ "soundOn", "gameVariant" })
+local all = Settings.getAllSettings()
+local defaults = Settings.getDefaultSettings()
+
+-- Update Settings
+Settings.set("musicVolume", 0.6)
+Settings.set({
+  soundOn = false,
+  gameVariant = "notakto",
+})
+Settings.setAndSave("soundOn", true)
+
+-- Revert to Defaults
+Settings.remove("gameVariant")                 -- Reverts this key to default
+Settings.remove({ "soundOn", "musicVolume" }) -- Reverts multiple keys
+Settings.resetAll()                            -- Reverts all keys to defaults
+
+-- Persist Explicitly
+Settings.save()
+
+--]]

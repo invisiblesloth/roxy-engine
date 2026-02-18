@@ -186,7 +186,8 @@ local image = AssetStore.getImageCached("images/background")
 local sheet = AssetStore.getImagetable("images/player-sheet")
 
 -- Retain/Release Pattern
-AssetStore.retain("images/texture", playdate.graphics.image.new("images/texture"))
+local texture = playdate.graphics.image.new("images/texture")
+AssetStore.retain("images/texture", texture)
 AssetStore.retain("images/texture", texture) -- Count = 2
 AssetStore.release("images/texture")         -- Count = 1
 AssetStore.release("images/texture")         -- Evicted from cache
@@ -208,6 +209,9 @@ function MyScene:cleanup()
 end
 
 -- Shared Assets (multiple retains keep asset cached until all release)
+local loader = function()
+  return playdate.graphics.image.new("images/particle")
+end
 AssetStore.retain("images/particle", loader) -- SpriteA retains
 AssetStore.retain("images/particle", loader) -- SpriteB retains (count = 2)
 AssetStore.release("images/particle")        -- SpriteA releases (count = 1)
