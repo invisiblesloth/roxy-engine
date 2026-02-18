@@ -500,7 +500,8 @@ function RoxyActor:updatePhysics(opts)
   local vx        = opts.vx or 0
   local vy        = opts.vy or 0
   local desiredVx = opts.intentVX or vx
-  local onGround  = opts.onGround ~= nil and opts.onGround or true
+  local onGround  = opts.onGround
+  if onGround == nil then onGround = true end
 
   -- Cache frequently accessed values
   local animation = self.animation
