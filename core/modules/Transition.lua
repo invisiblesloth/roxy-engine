@@ -1,13 +1,18 @@
 -- core/modules/Transition.lua
 
+roxy = roxy or {}
+roxy.Transition = roxy.Transition or {}
+
+if roxy.Transition.STACK_OP_REPLACE == nil then roxy.Transition.STACK_OP_REPLACE = 0 end
+if roxy.Transition.STACK_OP_PUSH == nil then roxy.Transition.STACK_OP_PUSH = 1 end
+if roxy.Transition.STACK_OP_POP == nil then roxy.Transition.STACK_OP_POP = 2 end
+
 import "libraries/roxy/core/transitions/RoxyTransition"
 import "libraries/roxy/core/transitions/Cut"
 import "libraries/roxy/core/transitions/FadeToColor"
 import "libraries/roxy/core/transitions/CrossDissolve"
 import "libraries/roxy/core/transitions/ImageTable"
 
-roxy = roxy or {}
-roxy.Transition = roxy.Transition or {}
 local Transition <const> = roxy.Transition
 
 local pd        <const> = playdate
