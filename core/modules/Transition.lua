@@ -1,13 +1,18 @@
 -- core/modules/Transition.lua
 
+roxy = roxy or {}
+roxy.Transition = roxy.Transition or {}
+
+if roxy.Transition.STACK_OP_REPLACE == nil then roxy.Transition.STACK_OP_REPLACE = 0 end
+if roxy.Transition.STACK_OP_PUSH == nil then roxy.Transition.STACK_OP_PUSH = 1 end
+if roxy.Transition.STACK_OP_POP == nil then roxy.Transition.STACK_OP_POP = 2 end
+
 import "libraries/roxy/core/transitions/RoxyTransition"
 import "libraries/roxy/core/transitions/Cut"
 import "libraries/roxy/core/transitions/FadeToColor"
 import "libraries/roxy/core/transitions/CrossDissolve"
 import "libraries/roxy/core/transitions/ImageTable"
 
-roxy = roxy or {}
-roxy.Transition = roxy.Transition or {}
 local Transition <const> = roxy.Transition
 
 local pd        <const> = playdate
@@ -65,11 +70,20 @@ Transition.STACK_OP_PUSH      = STACK_OP_PUSH
 Transition.STACK_OP_POP       = STACK_OP_POP
 
 -- Local
-local transitions = {}
+local transitions         = {}
+local busyWarnedOnce      = false
+local busySuppressedCount = 0
+local activeTransitionKey = nil
 
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
+
+local function _resetBusyWarnState()
+  busyWarnedOnce = false
+  busySuppressedCount = 0
+  activeTransitionKey = nil
+end
 
 -- ! Helper: Foce Scene Tilemaps Redraw
 -- Nudge all tilemaps in a scene to repaint for a few frames
@@ -88,6 +102,18 @@ local function _forceSceneTilemapsRedraw(scene, frames)
   end
 end
 
+function Transition._flushBusyTransitionSummary(completedName)
+  local suppressedCount = busySuppressedCount
+  local transitionName = completedName or activeTransitionKey or "unknown"
+  _resetBusyWarnState()
+
+  --#DEBUG START
+  if suppressedCount > 0 then
+    Log.warn("[Transition.transitionToScene] Suppressed " .. suppressedCount .. " additional transition request(s) while '" .. tostring(transitionName) .. "' was in progress.")
+  end
+  --#DEBUG END
+end
+
 --------------------------------------------------------------------------------
 -- ! Initialize Transition module
 --------------------------------------------------------------------------------
@@ -97,6 +123,7 @@ function Transition.init()
   Transition.currentTransition = nil
   Transition.isTransitioning   = false
   Transition.stackOp           = STACK_OP_REPLACE
+  _resetBusyWarnState()
 
   -- Clear out any previously loaded classes
   transitions = {}
@@ -202,9 +229,19 @@ end
 -- Initiates a scene transition using the specified effect and timing.
 function Transition.transitionToScene(newSceneClass, transitionName, opts)
   if Transition.isTransitioning then
-    Log.warn("[Transition.transitionToScene] Transition already in progress.") --#DEBUG
+    if not busyWarnedOnce then
+      --#DEBUG START
+      local transitionNameInProgress = activeTransitionKey or "unknown"
+      Log.warn("[Transition.transitionToScene] Transition '" .. tostring(transitionNameInProgress) .. "' already in progress; suppressing repeated warnings until completion.")
+      --#DEBUG END
+      busyWarnedOnce = true
+    else
+      busySuppressedCount += 1
+    end
     return
   end
+
+  _resetBusyWarnState()
 
   local stackOp = Transition.stackOp
   local newScene = nil
@@ -217,17 +254,21 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
     --#DEBUG END
   end
 
-  Transition.isTransitioning = true
-  local scene = Scene.currentScene
-
   -- Use transition or fallback to default
   local config = getConfig("transitions") or EMPTY_TABLE
-  local transition = config.defaultTransition or TRANSITION_DEFAULT
-  local transitionClass = transitions[(transitionName or transition)]
+  local defaultTransition = config.defaultTransition or TRANSITION_DEFAULT
+  local requestedTransition = transitionName or defaultTransition
+  local transitionClass = transitions[requestedTransition]
+  local resolvedTransitionKey = requestedTransition
   if not transitionClass then
-    Log.warn("[Transition.transitionToScene] Unknown transition " .. transitionName .. ", falling back to " .. transition) --#DEBUG
-    transitionClass = transitions[transition]
+    Log.warn("[Transition.transitionToScene] Unknown transition " .. tostring(transitionName) .. ", falling back to " .. defaultTransition) --#DEBUG
+    resolvedTransitionKey = defaultTransition
+    transitionClass = transitions[resolvedTransitionKey]
   end
+
+  activeTransitionKey = resolvedTransitionKey
+  Transition.isTransitioning = true
+  local scene = Scene.currentScene
 
   -- Merge options (arguments take precedence)
   local transitionOpts = mergeImmutable(opts or {}, { stackOp = stackOp })

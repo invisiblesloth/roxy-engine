@@ -7,16 +7,19 @@ local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
 -- Graphics helpers
-local getDisplayImage       <const> = Graphics.getDisplayImage
+local getDisplayImage <const> = Graphics.getDisplayImage
 
 -- Roxy Framework
-local r           <const> = roxy
-local Scene       <const> = r.Scene
-local Transition  <const> = r.Transition
+local r     <const> = roxy
+local Scene <const> = r.Scene
 
 -- Sprite helpers used during scene switching
 local redrawBackground      <const> = Sprite.redrawBackground
 local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
+
+local STACK_OP_REPLACE  <const> = 0
+local STACK_OP_PUSH     <const> = 1
+local STACK_OP_POP      <const> = 2
 
 -- Scene management
 local pushRaw     <const> = Scene.pushRaw
@@ -24,8 +27,8 @@ local popRaw      <const> = Scene.popRaw
 local replaceRaw  <const> = Scene.replaceRaw
 
 -- Bit-flags that track where we are in the life-cycle
-local STATE_MIDPOINT_REACHED <const> = 1
-local STATE_HOLD_ELAPSED     <const> = 2
+local STATE_MIDPOINT_REACHED  <const> = 1
+local STATE_HOLD_ELAPSED      <const> = 2
 
 --------------------------------------------------------------------------------
 -- ! Class Definition & Initialization
@@ -39,7 +42,7 @@ function RoxyTransition:init(opts)
   -- Basic properties
   self.name = opts.name or "UnnamedTransition"
   self.type = opts.type or "Base"
-  self.stackOp  = opts.stackOp or Transition.STACK_OP_REPLACE
+  self.stackOp  = opts.stackOp or STACK_OP_REPLACE
 
   -- bookkeeping
   self.state = 0
@@ -61,7 +64,7 @@ end
 function RoxyTransition:_onStart()
   Log.debug("Transition '" .. self.name .. "' started") --#DEBUG
 
-  if self.stackOp == Transition.STACK_OP_REPLACE and self._currentScene then
+  if self.stackOp == STACK_OP_REPLACE and self._currentScene then
     self._currentScene:exit()
   end
 end
@@ -78,9 +81,9 @@ function RoxyTransition:_onMidpoint()
   local oldScene = self._currentScene
 
   -- Perform stack operation
-  if stackOp == Transition.STACK_OP_PUSH then
+  if stackOp == STACK_OP_PUSH then
     pushRaw(newScene)
-  elseif stackOp == Transition.STACK_OP_POP then
+  elseif stackOp == STACK_OP_POP then
     popRaw()
     newScene = Scene.currentScene
   else -- Replace
@@ -88,14 +91,14 @@ function RoxyTransition:_onMidpoint()
   end
 
   -- Handle scene lifecycle
-  if stackOp == Transition.STACK_OP_POP then
+  if stackOp == STACK_OP_POP then
     if oldScene then
       oldScene:cleanup()
     end
     if newScene then
       newScene:resume()
     end
-  elseif stackOp == Transition.STACK_OP_PUSH then
+  elseif stackOp == STACK_OP_PUSH then
     if oldScene then
       oldScene:pause()
     end
@@ -139,13 +142,22 @@ end
 -- ! On Complete
 function RoxyTransition:_onComplete()
   local scene = self._newScene
+  local completedName = self.name
 
   if scene and scene.start then
     scene:start()
   end
 
-  Transition.isTransitioning = false
-  Transition.currentTransition = nil
+  local transition = roxy and roxy.Transition
+  assert(type(transition) == "table", "[RoxyTransition] missing roxy.Transition during completion")
+  transition.isTransitioning = false
+  transition.currentTransition = nil
+
+  local flushBusySummary = transition._flushBusyTransitionSummary
+  if type(flushBusySummary) == "function" then
+    flushBusySummary(completedName)
+  end
+
   self:cleanup()
   Log.debug("Transition '" .. self.name .. "' completed") --#DEBUG
 end
@@ -172,12 +184,12 @@ function RoxyTransition:cleanup()
   self._newScene     = nil
   self._currentScene = nil
   self.state         = 0
-  self._capturedScreenshot   = nil
+  self._capturedScreenshot  = nil
 end
 
 -- Re-export constants so children can reference them via RoxyTransition
 RoxyTransition.STATE_MIDPOINT_REACHED = STATE_MIDPOINT_REACHED
 RoxyTransition.STATE_HOLD_ELAPSED     = STATE_HOLD_ELAPSED
-RoxyTransition.STACK_OP_REPLACE       = Transition.STACK_OP_REPLACE
-RoxyTransition.STACK_OP_PUSH          = Transition.STACK_OP_PUSH
-RoxyTransition.STACK_OP_POP           = Transition.STACK_OP_POP
+RoxyTransition.STACK_OP_REPLACE       = STACK_OP_REPLACE
+RoxyTransition.STACK_OP_PUSH          = STACK_OP_PUSH
+RoxyTransition.STACK_OP_POP           = STACK_OP_POP

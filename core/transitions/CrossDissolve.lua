@@ -6,23 +6,22 @@ local Graphics  <const> = pd.graphics
 local Image     <const> = Graphics.image
 
 -- Roxy Framework
-local r           <const> = roxy
-local Config      <const> = r.Config
-local Assets      <const> = r.Assets
-local Registry    <const> = r.AssetPoolRegistry
-local Ease        <const> = r.EasingFunctions
-local Scene       <const> = r.Scene
-local Transition  <const> = r.Transition
+local r         <const> = roxy
+local Config    <const> = r.Config
+local Assets    <const> = r.Assets
+local Registry  <const> = r.AssetPoolRegistry
+local Ease      <const> = r.EasingFunctions
+local Scene     <const> = r.Scene
 
 -- Config
 local getTransitionConfig <const> = Config.getTransitionConfig
 
 -- Assets
-local getAsset            <const> = Assets.getAsset
-local recycleAsset        <const> = Assets.recycleAsset
-local ensurePool          <const> = Registry.ensurePool
-local markFromPool        <const> = Registry.markFromPool
-local isFromPool          <const> = Registry.isFromPool
+local getAsset      <const> = Assets.getAsset
+local recycleAsset  <const> = Assets.recycleAsset
+local ensurePool    <const> = Registry.ensurePool
+local markFromPool  <const> = Registry.markFromPool
+local isFromPool    <const> = Registry.isFromPool
 
 -- Math
 local min   <const> = math.min
@@ -39,13 +38,24 @@ local getDisplayImage   <const> = Graphics.getDisplayImage
 local fillRect          <const> = Graphics.fillRect
 local newImage          <const> = Image.new
 
--- C-side binding
-local drawFrame_C <const> = Transition.crossDissolveDrawFrame
-
 -- Stack operations
-local STACK_OP_REPLACE <const> = Transition.STACK_OP_REPLACE
-local STACK_OP_PUSH    <const> = Transition.STACK_OP_PUSH
-local STACK_OP_POP     <const> = Transition.STACK_OP_POP
+local STACK_OP_REPLACE  <const> = RoxyTransition.STACK_OP_REPLACE
+local STACK_OP_PUSH     <const> = RoxyTransition.STACK_OP_PUSH
+local STACK_OP_POP      <const> = RoxyTransition.STACK_OP_POP
+
+-- Transition binding cache
+local transitionBindingCache = {}
+
+local function resolveTransitionBinding(bindingName)
+  local fn = transitionBindingCache[bindingName]
+  if fn then return fn end
+
+  local transition = roxy and roxy.Transition
+  fn = transition and transition[bindingName]
+  assert(type(fn) == "function", "[TransitionBinding] missing roxy.Transition." .. bindingName)
+  transitionBindingCache[bindingName] = fn
+  return fn
+end
 
 -- Graphics constants
 local COLOR_BLACK       <const> = Graphics.kColorBlack
@@ -54,7 +64,7 @@ local DITHER_BAYER_8X8  <const> = Image.kDitherTypeBayer8x8
 
 -- Easing constants
 local FLAT_EASING    <const> = Ease.flat
-local LINEAR_EASING  <const> = Ease.linear
+local LINEAR_EASING <const> = Ease.linear
 
 -- Defaults
 local DURATION_DEFAULT    <const> = 1.5
@@ -281,7 +291,8 @@ function CrossDissolve:draw()
   -- Calculate pattern index based on alpha value
   local idx = min(fadeSteps, floor(alpha * fadeStepsMinus1) + 1)
   local pattern = patterns[idx]
-  drawFrame_C(screenshot, pattern)
+  local drawFrame = resolveTransitionBinding("crossDissolveDrawFrame")
+  drawFrame(screenshot, pattern)
 end
 
 -- ! Cleanup
