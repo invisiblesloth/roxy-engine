@@ -6,22 +6,21 @@ local Graphics  <const> = pd.graphics
 local Image     <const> = Graphics.image
 
 -- Roxy Framework
-local r           <const> = roxy
-local Config      <const> = r.Config
-local Assets      <const> = r.Assets
-local Registry    <const> = r.AssetPoolRegistry
-local Ease        <const> = r.EasingFunctions
-local Transition  <const> = r.Transition
+local r         <const> = roxy
+local Config    <const> = r.Config
+local Assets    <const> = r.Assets
+local Registry  <const> = r.AssetPoolRegistry
+local Ease      <const> = r.EasingFunctions
 
 -- Config
 local getTransitionConfig <const> = Config.getTransitionConfig
 
 -- Assets
-local getAsset            <const> = Assets.getAsset
-local recycleAsset        <const> = Assets.recycleAsset
-local ensurePool          <const> = Registry.ensurePool
-local markFromPool        <const> = Registry.markFromPool
-local isFromPool          <const> = Registry.isFromPool
+local getAsset      <const> = Assets.getAsset
+local recycleAsset  <const> = Assets.recycleAsset
+local ensurePool    <const> = Registry.ensurePool
+local markFromPool  <const> = Registry.markFromPool
+local isFromPool    <const> = Registry.isFromPool
 
 -- Math
 local min   <const> = math.min
@@ -39,13 +38,24 @@ local newImage          <const> = Image.new
 local getEaseEnter  <const> = Ease.enter
 local getEaseExit   <const> = Ease.exit
 
--- C-side binding
-local drawTiled_C <const> = Transition.fadeToColorDrawFrame
-
 -- Stack operations
-local STACK_OP_REPLACE <const> = Transition.STACK_OP_REPLACE
-local STACK_OP_PUSH    <const> = Transition.STACK_OP_PUSH
-local STACK_OP_POP     <const> = Transition.STACK_OP_POP
+local STACK_OP_REPLACE  <const> = RoxyTransition.STACK_OP_REPLACE
+local STACK_OP_PUSH     <const> = RoxyTransition.STACK_OP_PUSH
+local STACK_OP_POP      <const> = RoxyTransition.STACK_OP_POP
+
+-- Transition binding cache
+local transitionBindingCache = {}
+
+local function resolveTransitionBinding(bindingName)
+  local fn = transitionBindingCache[bindingName]
+  if fn then return fn end
+
+  local transition = roxy and roxy.Transition
+  fn = transition and transition[bindingName]
+  assert(type(fn) == "function", "[TransitionBinding] missing roxy.Transition." .. bindingName)
+  transitionBindingCache[bindingName] = fn
+  return fn
+end
 
 -- Graphics constants
 local COLOR_BLACK       <const> = Graphics.kColorBlack
@@ -275,7 +285,8 @@ function FadeToColor:draw()
   local idx = min(fadeSteps, floor(alpha * fadeStepsMinus1) + 1)
   -- patterns[idx]:drawTiled(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
   local pattern = patterns[idx]
-  drawTiled_C(pattern)
+  local drawFrame = resolveTransitionBinding("fadeToColorDrawFrame")
+  drawFrame(pattern)
 end
 
 -- ! Cleanup
