@@ -802,7 +802,7 @@ myAnimation:reverse()           -- Play backwards
 myAnimation:stop()              -- Stop playback
 
 -- Delayed Start
-myAnimation:startWithDelay(1.5, "jump") -- Start jump animation after 1.5 seconds
+myAnimation:startWithDelay(1500, "jump") -- Start jump animation after 1500 ms
 
 -- Animation Queries
 if myAnimation:isPlaying() then
@@ -812,6 +812,7 @@ end
 
 -- Factory Methods for Asset Management
 local poolAnimation = RoxyAnimation.fromPool("character_animations")
+local existingImagetable = playdate.graphics.imagetable.new("images/shared-sheet")
 local sharedAnimation = RoxyAnimation.fromImagetable(existingImagetable)
 
 -- Reference Counting (for shared resources)
