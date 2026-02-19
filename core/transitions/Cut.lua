@@ -4,17 +4,16 @@
 local pd <const> = playdate
 
 -- Roxy Framework
-local r           <const> = roxy
-local Config      <const> = r.Config
-local Transition  <const> = r.Transition
+local r       <const> = roxy
+local Config  <const> = r.Config
 
 -- Config
 local getTransitionConfig <const> = Config.getTransitionConfig
 
 -- Expose stack-op constants so children don't need to re-require them
-local STACK_OP_REPLACE <const> = Transition.STACK_OP_REPLACE
-local STACK_OP_PUSH    <const> = Transition.STACK_OP_PUSH
-local STACK_OP_POP     <const> = Transition.STACK_OP_POP
+local STACK_OP_REPLACE  <const> = RoxyTransition.STACK_OP_REPLACE
+local STACK_OP_PUSH     <const> = RoxyTransition.STACK_OP_PUSH
+local STACK_OP_POP      <const> = RoxyTransition.STACK_OP_POP
 
 -- Utility constants
 local EMPTY_TABLE <const> = {}
