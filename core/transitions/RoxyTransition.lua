@@ -142,6 +142,7 @@ end
 -- ! On Complete
 function RoxyTransition:_onComplete()
   local scene = self._newScene
+  local completedName = self.name
 
   if scene and scene.start then
     scene:start()
@@ -151,6 +152,12 @@ function RoxyTransition:_onComplete()
   assert(type(transition) == "table", "[RoxyTransition] missing roxy.Transition during completion")
   transition.isTransitioning = false
   transition.currentTransition = nil
+
+  local flushBusySummary = transition._flushBusyTransitionSummary
+  if type(flushBusySummary) == "function" then
+    flushBusySummary(completedName)
+  end
+
   self:cleanup()
   Log.debug("Transition '" .. self.name .. "' completed") --#DEBUG
 end
