@@ -18,7 +18,6 @@ local getTransitionConfig <const> = Config.getTransitionConfig
 local getAsset      <const> = Assets.getAsset
 local recycleAsset  <const> = Assets.recycleAsset
 local ensurePool    <const> = Registry.ensurePool
-local markFromPool  <const> = Registry.markFromPool
 local isFromPool    <const> = Registry.isFromPool
 
 -- Graphics
@@ -242,8 +241,8 @@ function ImageTable:_acquireImageTableEnter(userImageTableEnter)
   if userImageTableEnter then
     imageTableEnter = userImageTableEnter -- One-off or caller-managed
   else
-    -- Pull from pool (tagged), or nil if empty
-    imageTableEnter = markFromPool(getAsset(IMAGETABLE_ENTER_POOL_KEY))
+    -- Pull from pool, or nil if empty
+    imageTableEnter = getAsset(IMAGETABLE_ENTER_POOL_KEY)
   end
 
   if not imageTableEnter then
@@ -277,8 +276,8 @@ function ImageTable:_acquireImageTableExit(userImageTableExit)
   if userImageTableExit then
     imageTableExit = userImageTableExit -- One-off or caller-managed
   else
-    -- Pull from pool (tagged), or nil if empty
-    imageTableExit = markFromPool(getAsset(IMAGETABLE_EXIT_POOL_KEY))
+    -- Pull from pool, or nil if empty
+    imageTableExit = getAsset(IMAGETABLE_EXIT_POOL_KEY)
   end
 
   if not imageTableExit then
@@ -308,8 +307,8 @@ end
 function ImageTable:_acquireSequence()
   if self.sequence then return end
 
-  -- Pull from pool (tagged), or nil if empty
-  local sequence = markFromPool(getAsset(SEQUENCE_POOL_KEY))
+  -- Pull from pool, or nil if empty
+  local sequence = getAsset(SEQUENCE_POOL_KEY)
   if not sequence then
     sequence = RoxySequence() -- Fallback
   end

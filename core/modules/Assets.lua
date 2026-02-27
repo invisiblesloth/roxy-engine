@@ -22,6 +22,10 @@
 --  3. Use asset in game logic
 --  4. Return asset with Assets.recycleAsset(key, asset)
 --
+-- Pool Key Contract:
+--  - key must be a non-empty string
+--  - key cannot have leading/trailing whitespace
+--
 --------------------------------------------------------------------------------
 
 roxy = roxy or {}
@@ -35,6 +39,9 @@ local Assets <const> = roxy.Assets
 -- Math functions
 local min <const> = math.min
 
+-- String functions
+local stringFormat <const> = string.format
+
 --------------------------------------------------------------------------------
 -- Local State Variables
 --------------------------------------------------------------------------------
@@ -43,19 +50,39 @@ local min <const> = math.min
 local pools = {}
 
 --------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+local function formatPoolKeyValue(key)
+  return stringFormat("%q", tostring(key))
+end
+
+local function isValidPoolKey(key)
+  if type(key) ~= "string" then return false end
+  if not key:match("%S") then return false end
+  if key:match("^%s") or key:match("%s$") then return false end
+  return true
+end
+
+--------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
 
 -- ! Register Pool
 -- Registers a new asset pool with initial allocation and growth configuration
---  @param key            Unique identifier for this pool
+--  @param key            Non-empty string key (no leading/trailing whitespace)
 --  @param initialCount   Number of assets to pre-allocate (default 1)
 --  @param loaderFunction Function that creates and returns a new asset instance
 --  @param options        Optional table with maxSize and growthFactor fields
 --
---  @return Boolean true if registration succeeded, false if pool already exists or loader invalid
+--  @return Boolean true if registration succeeded, false on invalid key/duplicate/invalid loader
 
 function Assets.registerPool(key, initialCount, loaderFunction, options)
+  if not isValidPoolKey(key) then
+    Log.warn("[Assets.registerPool] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+    return false
+  end
+
   if type(loaderFunction) ~= "function" then
     Log.warn("[Assets.registerPool] loaderFunction is not callable for key '" .. tostring(key) .. "'. Expected a function.") --#DEBUG
     return false
@@ -128,11 +155,16 @@ end
 
 -- ! Get Asset
 -- Retrieves an available asset from the pool, growing the pool if needed
---  @param key Unique identifier for the pool
+--  @param key Non-empty string key for the pool (no leading/trailing whitespace)
 --
---  @return Asset instance if available, nil if pool exhausted or unregistered
+--  @return Asset instance if available, nil if key invalid/pool exhausted/unregistered
 
 function Assets.getAsset(key)
+  if not isValidPoolKey(key) then
+    Log.warn("[Assets.getAsset] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+    return nil
+  end
+
   local pool = pools[key]
   if not pool then
     Log.warn("[Assets.getAsset] Attempted to get asset from unregistered pool: " .. tostring(key)) --#DEBUG
@@ -148,7 +180,7 @@ function Assets.getAsset(key)
     assets[i] = nil
 
     pool.availableCount -= 1
-    return roxy.AssetPoolRegistry.markFromPool(asset)
+    return roxy.AssetPoolRegistry.markFromPool(asset, key)
   else
     -- Pool exhausted, attempt to grow if under max capacity
     if pool.totalSize < pool.maxSize then
@@ -172,7 +204,7 @@ function Assets.getAsset(key)
         assets[i] = nil
 
         pool.availableCount -= 1
-        return roxy.AssetPoolRegistry.markFromPool(asset)
+        return roxy.AssetPoolRegistry.markFromPool(asset, key)
       else
         Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
@@ -186,12 +218,17 @@ end
 
 -- ! Recycle Asset
 -- Returns an asset to the pool for reuse
---  @param key   Unique identifier for the pool
+--  @param key   Non-empty string key for the pool (no leading/trailing whitespace)
 --  @param asset Asset instance to return to the pool
 --
---  @return Boolean true if recycled successfully, false if pool unregistered or asset nil
+--  @return Boolean true if recycled successfully, false on invalid key/reject conditions
 
 function Assets.recycleAsset(key, asset)
+  if not isValidPoolKey(key) then
+    Log.warn("[Assets.recycleAsset] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+    return false
+  end
+
   local pool = pools[key]
   if not pool then
     Log.warn("[Assets.recycleAsset] Attempted to recycle asset to unregistered pool: " .. tostring(key)) --#DEBUG
@@ -202,11 +239,18 @@ function Assets.recycleAsset(key, asset)
     Log.warn("[Assets.recycleAsset] Attempted to recycle a nil asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
-  -- Prevent double-recycle and foreign assets from entering the pool.
+  -- Prevent double-recycle and foreign assets from entering the wrong pool.
   if not roxy.AssetPoolRegistry.isFromPool(asset) then
     Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
+
+  local originKey = roxy.AssetPoolRegistry.getPoolKey(asset)
+  if originKey ~= key then
+    Log.warn("[Assets.recycleAsset] Attempted to recycle asset owned by pool '" .. tostring(originKey) .. "' into pool: " .. tostring(key)) --#DEBUG
+    return false
+  end
+
   roxy.AssetPoolRegistry.clearFromPool(asset)
 
   local assets = pool.assets
@@ -217,7 +261,7 @@ end
 
 -- ! Get Is Pool Registered
 -- Checks if a pool with the given key exists
---  @param key Unique identifier for the pool
+--  @param key Non-empty string key for the pool (no leading/trailing whitespace)
 --
 --  @return Boolean true if pool is registered, false otherwise
 
