@@ -53,11 +53,11 @@ local pools = {}
 -- Helpers
 --------------------------------------------------------------------------------
 
-local function formatPoolKeyValue(key)
+local function _formatPoolKeyValue(key)
   return stringFormat("%q", tostring(key))
 end
 
-local function isValidPoolKey(key)
+local function _isValidPoolKey(key)
   if type(key) ~= "string" then return false end
   if not key:match("%S") then return false end
   if key:match("^%s") or key:match("%s$") then return false end
@@ -78,8 +78,8 @@ end
 --  @return Boolean true if registration succeeded, false on invalid key/duplicate/invalid loader
 
 function Assets.registerPool(key, initialCount, loaderFunction, options)
-  if not isValidPoolKey(key) then
-    Log.warn("[Assets.registerPool] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+  if not _isValidPoolKey(key) then
+    Log.warn("[Assets.registerPool] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return false
   end
 
@@ -160,8 +160,8 @@ end
 --  @return Asset instance if available, nil if key invalid/pool exhausted/unregistered
 
 function Assets.getAsset(key)
-  if not isValidPoolKey(key) then
-    Log.warn("[Assets.getAsset] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+  if not _isValidPoolKey(key) then
+    Log.warn("[Assets.getAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return nil
   end
 
@@ -224,8 +224,8 @@ end
 --  @return Boolean true if recycled successfully, false on invalid key/reject conditions
 
 function Assets.recycleAsset(key, asset)
-  if not isValidPoolKey(key) then
-    Log.warn("[Assets.recycleAsset] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+  if not _isValidPoolKey(key) then
+    Log.warn("[Assets.recycleAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return false
   end
 

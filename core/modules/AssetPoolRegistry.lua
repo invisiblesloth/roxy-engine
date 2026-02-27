@@ -49,11 +49,11 @@ local poolTag = setmetatable({}, { __mode = "k" })
 -- Helpers
 --------------------------------------------------------------------------------
 
-local function formatPoolKeyValue(key)
+local function _formatPoolKeyValue(key)
   return stringFormat("%q", tostring(key))
 end
 
-local function isValidPoolKey(key)
+local function _isValidPoolKey(key)
   if type(key) ~= "string" then return false end
   if not key:match("%S") then return false end
   if key:match("^%s") or key:match("%s$") then return false end
@@ -83,8 +83,8 @@ function Registry.markFromPool(asset, key)
     return asset
   end
 
-  if not isValidPoolKey(key) then
-    Log.warn("[AssetPoolRegistry.markFromPool] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+  if not _isValidPoolKey(key) then
+    Log.warn("[AssetPoolRegistry.markFromPool] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return asset
   end
 
@@ -138,8 +138,8 @@ end
 --  @return The pool key string, or nil on invalid key
 
 function Registry.register(key, loader, opts)
-  if not isValidPoolKey(key) then
-    Log.warn("[AssetPoolRegistry.register] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+  if not _isValidPoolKey(key) then
+    Log.warn("[AssetPoolRegistry.register] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return nil
   end
 
@@ -160,8 +160,8 @@ end
 --  @return The pool key string, or nil on invalid key
 
 function Registry.ensurePool(key, initialCount, loader, options)
-  if not isValidPoolKey(key) then
-    Log.warn("[AssetPoolRegistry.ensurePool] invalid pool key: " .. formatPoolKeyValue(key)) --#DEBUG
+  if not _isValidPoolKey(key) then
+    Log.warn("[AssetPoolRegistry.ensurePool] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return nil
   end
 
