@@ -180,7 +180,7 @@ function Assets.getAsset(key)
     assets[i] = nil
 
     pool.availableCount -= 1
-    return roxy.AssetPoolRegistry.markFromPool(asset, key)
+    return roxy.AssetPoolRegistry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
   else
     -- Pool exhausted, attempt to grow if under max capacity
     if pool.totalSize < pool.maxSize then
@@ -204,7 +204,7 @@ function Assets.getAsset(key)
         assets[i] = nil
 
         pool.availableCount -= 1
-        return roxy.AssetPoolRegistry.markFromPool(asset, key)
+        return roxy.AssetPoolRegistry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
       else
         Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
@@ -240,18 +240,19 @@ function Assets.recycleAsset(key, asset)
     return false
   end
   -- Prevent double-recycle and foreign assets from entering the wrong pool.
-  if not roxy.AssetPoolRegistry.isFromPool(asset) then
+  -- INTERNAL: single-lookup replaces isFromPool + getPoolKey + clearFromPool sequence
+  local originKey, isPooled = roxy.AssetPoolRegistry.getOriginKey(asset)
+  if not isPooled then
     Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
 
-  local originKey = roxy.AssetPoolRegistry.getPoolKey(asset)
   if originKey ~= key then
     Log.warn("[Assets.recycleAsset] Attempted to recycle asset owned by pool '" .. tostring(originKey) .. "' into pool: " .. tostring(key)) --#DEBUG
     return false
   end
 
-  roxy.AssetPoolRegistry.clearFromPool(asset)
+  roxy.AssetPoolRegistry.clearFromPoolDirect(asset)
 
   local assets = pool.assets
   assets[#assets + 1] = asset

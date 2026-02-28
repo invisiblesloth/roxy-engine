@@ -129,6 +129,55 @@ function Registry.clearFromPool(asset)
   return asset
 end
 
+--------------------------------------------------------------------------------
+-- Internal API (pre-validated fast paths)
+--------------------------------------------------------------------------------
+--
+-- Used only by roxy.Assets. External code should use the public API above.
+--
+
+-- ! Mark From Pool Direct
+-- Fast-path pool tagging. Skips all validation.
+-- Caller contract: asset ~= nil, key is a validated non-empty string.
+--  @param asset Asset instance to tag
+--  @param key   Validated pool key string
+--
+--  @return The asset instance
+
+function Registry.markFromPoolDirect(asset, key)
+  poolTag[asset] = key
+  return asset
+end
+
+-- ! Get Origin Key
+-- Single-lookup ownership query. Replaces isFromPool + getPoolKey sequence.
+--  @param asset Asset instance to check
+--
+--  @return originKey, isPooled (two values)
+--    (string, true)  — asset is owned by the named pool
+--    (nil,    true)  — asset has a legacy pool tag (no key)
+--    (nil,    false) — asset is not tagged at all
+
+function Registry.getOriginKey(asset)
+  local tag = poolTag[asset]
+  if tag == nil then return nil, false end
+  if type(tag) == "string" then return tag, true end
+  return nil, true
+end
+
+-- ! Clear From Pool Direct
+-- Fast-path tag removal. Skips nil-asset guard.
+-- Caller contract: asset ~= nil.
+--  @param asset Asset instance to untag
+
+function Registry.clearFromPoolDirect(asset)
+  poolTag[asset] = nil
+end
+
+--------------------------------------------------------------------------------
+-- Pool Registration API
+--------------------------------------------------------------------------------
+
 -- ! Register
 -- Registers a pool for any asset type if not already registered
 --  @param key    Non-empty string key for the pool (no leading/trailing whitespace)
