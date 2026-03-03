@@ -19,6 +19,7 @@ local getAsset      <const> = Assets.getAsset
 local recycleAsset  <const> = Assets.recycleAsset
 local ensurePool    <const> = Registry.ensurePool
 local isFromPool    <const> = Registry.isFromPool
+local getPoolKey    <const> = Registry.getPoolKey
 
 -- Graphics
 local newImageTable <const> = Graphics.imagetable.new
@@ -102,6 +103,13 @@ local function initializeAssetPool(userImageTableEnter, userImageTableExit)
       maxSize = 4,
       growthFactor = 1
     })
+end
+
+-- ! Recycle To Origin Pool
+-- Recycles a pooled asset back to its owner key, with a fallback for legacy tags.
+local function recycleToOriginPool(asset, fallbackKey)
+  if not asset or not isFromPool(asset) then return end
+  recycleAsset(getPoolKey(asset) or fallbackKey, asset)
 end
 
 --------------------------------------------------------------------------------
@@ -259,10 +267,7 @@ function ImageTable:_releaseImageTableEnter()
   local imageTableEnter = self.imageTableEnter
   if not imageTableEnter then return end
 
-  -- Only recycle if it came from the pool
-  if isFromPool(imageTableEnter) then
-    recycleAsset(IMAGETABLE_ENTER_POOL_KEY, imageTableEnter)
-  end
+  recycleToOriginPool(imageTableEnter, IMAGETABLE_ENTER_POOL_KEY)
 
   self.imageTableEnter = nil
 end
@@ -294,10 +299,7 @@ function ImageTable:_releaseImageTableExit()
   local imageTableExit = self.imageTableExit
   if not imageTableExit then return end
 
-  -- Only recycle if it came from the pool
-  if isFromPool(imageTableExit) then
-    recycleAsset(IMAGETABLE_EXIT_POOL_KEY, imageTableExit)
-  end
+  recycleToOriginPool(imageTableExit, IMAGETABLE_EXIT_POOL_KEY)
 
   self.imageTableExit = nil
 end
@@ -324,10 +326,7 @@ function ImageTable:_releaseSequence()
 
   sequence:clear(true)
 
-  -- Only recycle if it came from the pool
-  if isFromPool(sequence) then
-    recycleAsset(SEQUENCE_POOL_KEY, sequence)
-  end
+  recycleToOriginPool(sequence, SEQUENCE_POOL_KEY)
 
   self.sequence = nil
 end
