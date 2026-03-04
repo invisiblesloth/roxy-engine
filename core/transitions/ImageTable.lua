@@ -18,8 +18,7 @@ local getTransitionConfig <const> = Config.getTransitionConfig
 local getAsset      <const> = Assets.getAsset
 local recycleAsset  <const> = Assets.recycleAsset
 local ensurePool    <const> = Registry.ensurePool
-local isFromPool    <const> = Registry.isFromPool
-local getPoolKey    <const> = Registry.getPoolKey
+local getOriginKey  <const> = Registry.getOriginKey
 
 -- Graphics
 local newImageTable <const> = Graphics.imagetable.new
@@ -106,10 +105,14 @@ local function initializeAssetPool(userImageTableEnter, userImageTableExit)
 end
 
 -- ! Recycle To Origin Pool
--- Recycles a pooled asset back to its owner key, with a fallback for legacy tags.
-local function recycleToOriginPool(asset, fallbackKey)
-  if not asset or not isFromPool(asset) then return end
-  recycleAsset(getPoolKey(asset) or fallbackKey, asset)
+-- Recycles a pooled asset back to its explicit owner key.
+local function recycleToOriginPool(asset)
+  if not asset then return end
+
+  local originKey, isPooled = getOriginKey(asset)
+  if not isPooled or originKey == nil then return end
+
+  recycleAsset(originKey, asset)
 end
 
 --------------------------------------------------------------------------------
@@ -267,7 +270,7 @@ function ImageTable:_releaseImageTableEnter()
   local imageTableEnter = self.imageTableEnter
   if not imageTableEnter then return end
 
-  recycleToOriginPool(imageTableEnter, IMAGETABLE_ENTER_POOL_KEY)
+  recycleToOriginPool(imageTableEnter)
 
   self.imageTableEnter = nil
 end
@@ -299,7 +302,7 @@ function ImageTable:_releaseImageTableExit()
   local imageTableExit = self.imageTableExit
   if not imageTableExit then return end
 
-  recycleToOriginPool(imageTableExit, IMAGETABLE_EXIT_POOL_KEY)
+  recycleToOriginPool(imageTableExit)
 
   self.imageTableExit = nil
 end
@@ -326,7 +329,7 @@ function ImageTable:_releaseSequence()
 
   sequence:clear(true)
 
-  recycleToOriginPool(sequence, SEQUENCE_POOL_KEY)
+  recycleToOriginPool(sequence)
 
   self.sequence = nil
 end

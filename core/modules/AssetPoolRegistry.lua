@@ -41,8 +41,8 @@ local stringFormat        <const> = string.format
 -- Local State Variables
 --------------------------------------------------------------------------------
 
--- Weak-key map to remember pooled state and origin pool ownership
--- value: string pool key (owned) | true (legacy pooled tag)
+-- Weak-key map to remember pooled ownership by origin pool key.
+-- value: string pool key (owned)
 local poolTag = setmetatable({}, { __mode = "k" })
 
 --------------------------------------------------------------------------------
@@ -67,21 +67,12 @@ end
 -- ! Mark From Pool
 -- Tags an asset as originating from a pool using weak-reference tracking
 --  @param asset Asset instance to tag (any type)
---  @param key   Optional pool key (non-empty string, no leading/trailing whitespace)
+--  @param key   Pool key (non-empty string, no leading/trailing whitespace)
 --
 --  @return The asset instance (for chaining)
 
 function Registry.markFromPool(asset, key)
   if not asset then return asset end
-
-  local existing = poolTag[asset]
-
-  if key == nil then
-    if existing == nil then
-      poolTag[asset] = true
-    end
-    return asset
-  end
 
   if not _isValidPoolKey(key) then
     Log.warn("[AssetPoolRegistry.markFromPool] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
@@ -99,14 +90,14 @@ end
 --  @return Boolean true if asset came from a pool
 
 function Registry.isFromPool(asset)
-  return asset and poolTag[asset] ~= nil or false
+  return asset and type(poolTag[asset]) == "string" or false
 end
 
 -- ! Get Pool Key
 -- Returns the owned pool key for an asset (if available)
 --  @param asset Asset instance to check (any type)
 --
---  @return String pool key or nil if untagged/legacy-tagged
+--  @return String pool key or nil if untagged
 
 function Registry.getPoolKey(asset)
   if not asset then return nil end
@@ -145,6 +136,13 @@ end
 --  @return The asset instance
 
 function Registry.markFromPoolDirect(asset, key)
+  --#DEBUG START
+  if type(key) ~= "string" then
+    Log.warn("[AssetPoolRegistry.markFromPoolDirect] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    return asset
+  end
+  --#DEBUG END
+
   poolTag[asset] = key
   return asset
 end
@@ -155,14 +153,12 @@ end
 --
 --  @return originKey, isPooled (two values)
 --    (string, true)  — asset is owned by the named pool
---    (nil,    true)  — asset has a legacy pool tag (no key)
 --    (nil,    false) — asset is not tagged at all
 
 function Registry.getOriginKey(asset)
   local tag = poolTag[asset]
-  if tag == nil then return nil, false end
   if type(tag) == "string" then return tag, true end
-  return nil, true
+  return nil, false
 end
 
 -- ! Clear From Pool Direct

@@ -242,12 +242,12 @@ function Assets.recycleAsset(key, asset)
   -- Prevent double-recycle and foreign assets from entering the wrong pool.
   -- INTERNAL: single-lookup replaces isFromPool + getPoolKey + clearFromPool sequence
   local originKey, isPooled = roxy.AssetPoolRegistry.getOriginKey(asset)
-  if not isPooled then
+  if not isPooled or originKey == nil then
     Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
 
-  if originKey ~= nil and originKey ~= key then
+  if originKey ~= key then
     Log.warn("[Assets.recycleAsset] Attempted to recycle asset owned by pool '" .. tostring(originKey) .. "' into pool: " .. tostring(key)) --#DEBUG
     return false
   end
