@@ -247,7 +247,7 @@ function Assets.recycleAsset(key, asset)
     return false
   end
 
-  if originKey ~= key then
+  if originKey ~= nil and originKey ~= key then
     Log.warn("[Assets.recycleAsset] Attempted to recycle asset owned by pool '" .. tostring(originKey) .. "' into pool: " .. tostring(key)) --#DEBUG
     return false
   end
