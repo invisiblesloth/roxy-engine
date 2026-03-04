@@ -85,6 +85,28 @@ local function _resetBusyWarnState()
   activeTransitionKey = nil
 end
 
+local function _asNonEmptyLabel(value)
+  if type(value) ~= "string" or value == "" then
+    return nil
+  end
+  return value
+end
+
+local function _resolveBusyTransitionLabel(completedName)
+  local label = _asNonEmptyLabel(completedName)
+  if label then return label end
+
+  label = _asNonEmptyLabel(activeTransitionKey)
+  if label then return label end
+
+  local currentTransition = Transition.currentTransition
+  if type(currentTransition) ~= "table" then
+    return nil
+  end
+
+  return _asNonEmptyLabel(currentTransition.name)
+end
+
 -- ! Helper: Foce Scene Tilemaps Redraw
 -- Nudge all tilemaps in a scene to repaint for a few frames
 local function _forceSceneTilemapsRedraw(scene, frames)
@@ -104,12 +126,19 @@ end
 
 function Transition._flushBusyTransitionSummary(completedName)
   local suppressedCount = busySuppressedCount
-  local transitionName = completedName or activeTransitionKey or "unknown"
+  local transitionName = _resolveBusyTransitionLabel(completedName)
   _resetBusyWarnState()
 
   --#DEBUG START
   if suppressedCount > 0 then
-    Log.warn("[Transition.transitionToScene] Suppressed " .. suppressedCount .. " additional transition request(s) while '" .. tostring(transitionName) .. "' was in progress.")
+    if transitionName then
+      Log.warn("[Transition.transitionToScene] Suppressed %d additional transition request(s) while '%s' was in progress.",
+               suppressedCount,
+               transitionName)
+    else
+      Log.warn("[Transition.transitionToScene] Suppressed %d additional transition request(s) while a transition was in progress.",
+               suppressedCount)
+    end
   end
   --#DEBUG END
 end
@@ -231,8 +260,13 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   if Transition.isTransitioning then
     if not busyWarnedOnce then
       --#DEBUG START
-      local transitionNameInProgress = activeTransitionKey or "unknown"
-      Log.warn("[Transition.transitionToScene] Transition '" .. tostring(transitionNameInProgress) .. "' already in progress; suppressing repeated warnings until completion.")
+      local transitionNameInProgress = _resolveBusyTransitionLabel(nil)
+      if transitionNameInProgress then
+        Log.warn("[Transition.transitionToScene] Transition '%s' already in progress; suppressing repeated warnings until completion.",
+                 transitionNameInProgress)
+      else
+        Log.warn("[Transition.transitionToScene] A transition is already in progress; suppressing repeated warnings until completion.")
+      end
       --#DEBUG END
       busyWarnedOnce = true
     else
