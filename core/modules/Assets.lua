@@ -25,6 +25,8 @@
 -- Pool Key Contract:
 --  - key must be a non-empty string
 --  - key cannot have leading/trailing whitespace
+--  - key-shape validation in getAsset/recycleAsset is debug-only in stripped
+--    release builds; production still fails soft via pool lookup/ownership checks
 --
 --------------------------------------------------------------------------------
 
@@ -48,6 +50,10 @@ local stringFormat <const> = string.format
 
 -- Asset pool registry (indexed by pool key)
 local pools = {}
+-- Static alias for hot paths. Tradeoff: does not see full table replacement of
+-- roxy.AssetPoolRegistry after module load, but does see method monkey-patching
+-- on the same table.
+local Registry
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -160,10 +166,12 @@ end
 --  @return Asset instance if available, nil if key invalid/pool exhausted/unregistered
 
 function Assets.getAsset(key)
+  --#DEBUG START
   if not _isValidPoolKey(key) then
     Log.warn("[Assets.getAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return nil
   end
+  --#DEBUG END
 
   local pool = pools[key]
   if not pool then
@@ -180,7 +188,7 @@ function Assets.getAsset(key)
     assets[i] = nil
 
     pool.availableCount -= 1
-    return roxy.AssetPoolRegistry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
+    return Registry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
   else
     -- Pool exhausted, attempt to grow if under max capacity
     if pool.totalSize < pool.maxSize then
@@ -204,7 +212,7 @@ function Assets.getAsset(key)
         assets[i] = nil
 
         pool.availableCount -= 1
-        return roxy.AssetPoolRegistry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
+        return Registry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
       else
         Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
@@ -224,10 +232,12 @@ end
 --  @return Boolean true if recycled successfully, false on invalid key/reject conditions
 
 function Assets.recycleAsset(key, asset)
+  --#DEBUG START
   if not _isValidPoolKey(key) then
     Log.warn("[Assets.recycleAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
     return false
   end
+  --#DEBUG END
 
   local pool = pools[key]
   if not pool then
@@ -241,7 +251,7 @@ function Assets.recycleAsset(key, asset)
   end
   -- Prevent double-recycle and foreign assets from entering the wrong pool.
   -- INTERNAL: single-lookup replaces isFromPool + getPoolKey + clearFromPool sequence
-  local originKey, isPooled = roxy.AssetPoolRegistry.getOriginKey(asset)
+  local originKey, isPooled = Registry.getOriginKey(asset)
   if not isPooled or originKey == nil then
     Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
     return false
@@ -252,7 +262,7 @@ function Assets.recycleAsset(key, asset)
     return false
   end
 
-  roxy.AssetPoolRegistry.clearFromPoolDirect(asset)
+  Registry.clearFromPoolDirect(asset)
 
   local assets = pool.assets
   assets[#assets + 1] = asset
@@ -276,3 +286,4 @@ end
 
 -- Asset Pool Registry helper
 import "libraries/roxy/core/modules/AssetPoolRegistry"
+Registry = roxy.AssetPoolRegistry
