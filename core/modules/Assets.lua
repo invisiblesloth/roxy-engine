@@ -287,3 +287,64 @@ end
 -- Asset Pool Registry helper
 import "libraries/roxy/core/modules/AssetPoolRegistry"
 Registry = roxy.AssetPoolRegistry
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Assets provides reusable object pools with lazy growth and ownership checks.
+
+-- Register and Reuse a Pool
+Assets.registerPool("particles/smoke", 2, function()
+  return playdate.graphics.image.new("images/particle-smoke")
+end, {
+  maxSize = 6,
+  growthFactor = 2,
+})
+
+local smokeA = Assets.getAsset("particles/smoke")
+local smokeB = Assets.getAsset("particles/smoke")
+Assets.recycleAsset("particles/smoke", smokeA)
+Assets.recycleAsset("particles/smoke", smokeB)
+
+-- Growth and Exhaustion
+Assets.registerPool("enemies/basic", 1, function()
+  return playdate.graphics.image.new("images/enemy")
+end, {
+  maxSize = 2,
+  growthFactor = 1,
+})
+
+local enemyA = Assets.getAsset("enemies/basic")
+local enemyB = Assets.getAsset("enemies/basic") -- Pool grows to maxSize
+local enemyC = Assets.getAsset("enemies/basic") -- nil once pool is exhausted
+
+-- Scene Lifecycle
+function CombatScene:init()
+  if not Assets.getIsPoolRegistered("combat/hit-flash") then
+    Assets.registerPool("combat/hit-flash", 2, function()
+      return playdate.graphics.image.new("images/hit-flash")
+    end, {
+      maxSize = 4,
+      growthFactor = 1,
+    })
+  end
+
+  self.hitFlash = Assets.getAsset("combat/hit-flash")
+end
+
+function CombatScene:cleanup()
+  if self.hitFlash then
+    Assets.recycleAsset("combat/hit-flash", self.hitFlash)
+    self.hitFlash = nil
+  end
+end
+
+-- Ownership Safety
+local pooledSmoke = Assets.getAsset("particles/smoke")
+local recycledWrongPool = Assets.recycleAsset("enemies/basic", pooledSmoke) -- false
+local recycledRightPool = Assets.recycleAsset("particles/smoke", pooledSmoke)
+
+--]]
