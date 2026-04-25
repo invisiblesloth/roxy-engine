@@ -20,6 +20,7 @@ import "CoreLibs/ui/gridview"
 -- Logging and debugging
 import "libraries/roxy/core/modules/Log"
 import "libraries/roxy/core/modules/Debug" --#DEBUG
+import "libraries/roxy/core/modules/TilemapPerf" --#DEBUG
 
 -- Utilities
 import "libraries/roxy/utilities/Table"

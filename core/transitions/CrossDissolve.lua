@@ -20,7 +20,6 @@ local getTransitionConfig <const> = Config.getTransitionConfig
 local getAsset      <const> = Assets.getAsset
 local recycleAsset  <const> = Assets.recycleAsset
 local ensurePool    <const> = Registry.ensurePool
-local markFromPool  <const> = Registry.markFromPool
 local isFromPool    <const> = Registry.isFromPool
 
 -- Math
@@ -216,8 +215,8 @@ end
 function CrossDissolve:_acquireSequence()
   if self.sequence then return end
 
-  -- Pull from pool (tagged), or nil if empty
-  local sequence = markFromPool(getAsset(SEQUENCE_POOL_KEY))
+  -- Pull from pool, or nil if empty
+  local sequence = getAsset(SEQUENCE_POOL_KEY)
   if not sequence then
     sequence = RoxySequence() -- Fallback
   end

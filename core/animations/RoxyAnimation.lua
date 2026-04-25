@@ -41,7 +41,6 @@ local clamp           <const> = Math.clamp
 local truncateDecimal <const> = Math.truncateDecimal
 local getAsset        <const> = Assets.getAsset
 local recycleAsset    <const> = Assets.recycleAsset
-local markFromPool    <const> = Registry.markFromPool
 local isFromPool      <const> = Registry.isFromPool
 local updateAnimation <const> = Animation.update -- C Function
 
@@ -104,7 +103,7 @@ end
 -- ! From Pool
 -- Create animation from Assets pool
 function RoxyAnimation.fromPool(poolKey)
-  local imagetable = markFromPool(getAsset(poolKey))
+  local imagetable = getAsset(poolKey)
   if not imagetable then
     error("[RoxyAnimation.fromPool] No asset for key: ", tostring(poolKey))
     return nil

@@ -22,6 +22,12 @@
 --  3. Use asset in game logic
 --  4. Return asset with Assets.recycleAsset(key, asset)
 --
+-- Pool Key Contract:
+--  - key must be a non-empty string
+--  - key cannot have leading/trailing whitespace
+--  - key-shape validation in getAsset/recycleAsset is debug-only in stripped
+--    release builds; production still fails soft via pool lookup/ownership checks
+--
 --------------------------------------------------------------------------------
 
 roxy = roxy or {}
@@ -35,12 +41,34 @@ local Assets <const> = roxy.Assets
 -- Math functions
 local min <const> = math.min
 
+-- String functions
+local stringFormat <const> = string.format
+
 --------------------------------------------------------------------------------
 -- Local State Variables
 --------------------------------------------------------------------------------
 
 -- Asset pool registry (indexed by pool key)
 local pools = {}
+-- Static alias for hot paths. Tradeoff: does not see full table replacement of
+-- roxy.AssetPoolRegistry after module load, but does see method monkey-patching
+-- on the same table.
+local Registry
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+local function _formatPoolKeyValue(key)
+  return stringFormat("%q", tostring(key))
+end
+
+local function _isValidPoolKey(key)
+  if type(key) ~= "string" then return false end
+  if not key:match("%S") then return false end
+  if key:match("^%s") or key:match("%s$") then return false end
+  return true
+end
 
 --------------------------------------------------------------------------------
 -- Public API
@@ -48,14 +76,19 @@ local pools = {}
 
 -- ! Register Pool
 -- Registers a new asset pool with initial allocation and growth configuration
---  @param key            Unique identifier for this pool
+--  @param key            Non-empty string key (no leading/trailing whitespace)
 --  @param initialCount   Number of assets to pre-allocate (default 1)
 --  @param loaderFunction Function that creates and returns a new asset instance
 --  @param options        Optional table with maxSize and growthFactor fields
 --
---  @return Boolean true if registration succeeded, false if pool already exists or loader invalid
+--  @return Boolean true if registration succeeded, false on invalid key/duplicate/invalid loader
 
 function Assets.registerPool(key, initialCount, loaderFunction, options)
+  if not _isValidPoolKey(key) then
+    Log.warn("[Assets.registerPool] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    return false
+  end
+
   if type(loaderFunction) ~= "function" then
     Log.warn("[Assets.registerPool] loaderFunction is not callable for key '" .. tostring(key) .. "'. Expected a function.") --#DEBUG
     return false
@@ -128,11 +161,18 @@ end
 
 -- ! Get Asset
 -- Retrieves an available asset from the pool, growing the pool if needed
---  @param key Unique identifier for the pool
+--  @param key Non-empty string key for the pool (no leading/trailing whitespace)
 --
---  @return Asset instance if available, nil if pool exhausted or unregistered
+--  @return Asset instance if available, nil if key invalid/pool exhausted/unregistered
 
 function Assets.getAsset(key)
+  --#DEBUG START
+  if not _isValidPoolKey(key) then
+    Log.warn("[Assets.getAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    return nil
+  end
+  --#DEBUG END
+
   local pool = pools[key]
   if not pool then
     Log.warn("[Assets.getAsset] Attempted to get asset from unregistered pool: " .. tostring(key)) --#DEBUG
@@ -148,7 +188,7 @@ function Assets.getAsset(key)
     assets[i] = nil
 
     pool.availableCount -= 1
-    return roxy.AssetPoolRegistry.markFromPool(asset)
+    return Registry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
   else
     -- Pool exhausted, attempt to grow if under max capacity
     if pool.totalSize < pool.maxSize then
@@ -172,7 +212,7 @@ function Assets.getAsset(key)
         assets[i] = nil
 
         pool.availableCount -= 1
-        return roxy.AssetPoolRegistry.markFromPool(asset)
+        return Registry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
       else
         Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
@@ -186,12 +226,19 @@ end
 
 -- ! Recycle Asset
 -- Returns an asset to the pool for reuse
---  @param key   Unique identifier for the pool
+--  @param key   Non-empty string key for the pool (no leading/trailing whitespace)
 --  @param asset Asset instance to return to the pool
 --
---  @return Boolean true if recycled successfully, false if pool unregistered or asset nil
+--  @return Boolean true if recycled successfully, false on invalid key/reject conditions
 
 function Assets.recycleAsset(key, asset)
+  --#DEBUG START
+  if not _isValidPoolKey(key) then
+    Log.warn("[Assets.recycleAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    return false
+  end
+  --#DEBUG END
+
   local pool = pools[key]
   if not pool then
     Log.warn("[Assets.recycleAsset] Attempted to recycle asset to unregistered pool: " .. tostring(key)) --#DEBUG
@@ -202,12 +249,20 @@ function Assets.recycleAsset(key, asset)
     Log.warn("[Assets.recycleAsset] Attempted to recycle a nil asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
-  -- Prevent double-recycle and foreign assets from entering the pool.
-  if not roxy.AssetPoolRegistry.isFromPool(asset) then
+  -- Prevent double-recycle and foreign assets from entering the wrong pool.
+  -- INTERNAL: single-lookup replaces isFromPool + getPoolKey + clearFromPool sequence
+  local originKey, isPooled = Registry.getOriginKey(asset)
+  if not isPooled or originKey == nil then
     Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
-  roxy.AssetPoolRegistry.clearFromPool(asset)
+
+  if originKey ~= key then
+    Log.warn("[Assets.recycleAsset] Attempted to recycle asset owned by pool '" .. tostring(originKey) .. "' into pool: " .. tostring(key)) --#DEBUG
+    return false
+  end
+
+  Registry.clearFromPoolDirect(asset)
 
   local assets = pool.assets
   assets[#assets + 1] = asset
@@ -217,7 +272,7 @@ end
 
 -- ! Get Is Pool Registered
 -- Checks if a pool with the given key exists
---  @param key Unique identifier for the pool
+--  @param key Non-empty string key for the pool (no leading/trailing whitespace)
 --
 --  @return Boolean true if pool is registered, false otherwise
 
@@ -231,3 +286,65 @@ end
 
 -- Asset Pool Registry helper
 import "libraries/roxy/core/modules/AssetPoolRegistry"
+Registry = roxy.AssetPoolRegistry
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Assets provides reusable object pools with lazy growth and ownership checks.
+
+-- Register and Reuse a Pool
+Assets.registerPool("particles/smoke", 2, function()
+  return playdate.graphics.image.new("images/particle-smoke")
+end, {
+  maxSize = 6,
+  growthFactor = 2,
+})
+
+local smokeA = Assets.getAsset("particles/smoke")
+local smokeB = Assets.getAsset("particles/smoke")
+Assets.recycleAsset("particles/smoke", smokeA)
+Assets.recycleAsset("particles/smoke", smokeB)
+
+-- Growth and Exhaustion
+Assets.registerPool("enemies/basic", 1, function()
+  return playdate.graphics.image.new("images/enemy")
+end, {
+  maxSize = 2,
+  growthFactor = 1,
+})
+
+local enemyA = Assets.getAsset("enemies/basic")
+local enemyB = Assets.getAsset("enemies/basic") -- Pool grows to maxSize
+local enemyC = Assets.getAsset("enemies/basic") -- nil once pool is exhausted
+
+-- Scene Lifecycle
+function CombatScene:init()
+  if not Assets.getIsPoolRegistered("combat/hit-flash") then
+    Assets.registerPool("combat/hit-flash", 2, function()
+      return playdate.graphics.image.new("images/hit-flash")
+    end, {
+      maxSize = 4,
+      growthFactor = 1,
+    })
+  end
+
+  self.hitFlash = Assets.getAsset("combat/hit-flash")
+end
+
+function CombatScene:cleanup()
+  if self.hitFlash then
+    Assets.recycleAsset("combat/hit-flash", self.hitFlash)
+    self.hitFlash = nil
+  end
+end
+
+-- Ownership Safety
+local pooledSmoke = Assets.getAsset("particles/smoke")
+local recycledWrongPool = Assets.recycleAsset("enemies/basic", pooledSmoke) -- false
+local recycledRightPool = Assets.recycleAsset("particles/smoke", pooledSmoke)
+
+--]]

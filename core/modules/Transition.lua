@@ -4,8 +4,8 @@ roxy = roxy or {}
 roxy.Transition = roxy.Transition or {}
 
 if roxy.Transition.STACK_OP_REPLACE == nil then roxy.Transition.STACK_OP_REPLACE = 0 end
-if roxy.Transition.STACK_OP_PUSH == nil then roxy.Transition.STACK_OP_PUSH = 1 end
-if roxy.Transition.STACK_OP_POP == nil then roxy.Transition.STACK_OP_POP = 2 end
+if roxy.Transition.STACK_OP_PUSH    == nil then roxy.Transition.STACK_OP_PUSH    = 1 end
+if roxy.Transition.STACK_OP_POP     == nil then roxy.Transition.STACK_OP_POP     = 2 end
 
 import "libraries/roxy/core/transitions/RoxyTransition"
 import "libraries/roxy/core/transitions/Cut"
@@ -38,7 +38,7 @@ local getDrawMode       <const> = Graphics.getImageDrawMode
 local setDrawMode       <const> = Graphics.setImageDrawMode
 local redrawBackground  <const> = Graphics.sprite.redrawBackground
 
-local EMPTY_TABLE   <const> = {}
+local EMPTY_TABLE <const> = {}
 
 local COLOR_WHITE     <const> = Graphics.kColorWhite
 local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
@@ -46,9 +46,9 @@ local DRAW_MODE_COPY  <const> = Graphics.kDrawModeCopy
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 
-local STACK_OP_REPLACE <const> = 0
-local STACK_OP_PUSH    <const> = 1
-local STACK_OP_POP     <const> = 2
+local STACK_OP_REPLACE  <const> = 0
+local STACK_OP_PUSH     <const> = 1
+local STACK_OP_POP      <const> = 2
 
 local TRANSITION_DEFAULT          <const> = "Cut"
 local TRANSITION_DURATION_DEFAULT <const> = 1.5
@@ -85,6 +85,28 @@ local function _resetBusyWarnState()
   activeTransitionKey = nil
 end
 
+local function _asNonEmptyLabel(value)
+  if type(value) ~= "string" or value == "" then
+    return nil
+  end
+  return value
+end
+
+local function _resolveBusyTransitionLabel(completedName)
+  local label = _asNonEmptyLabel(completedName)
+  if label then return label end
+
+  label = _asNonEmptyLabel(activeTransitionKey)
+  if label then return label end
+
+  local currentTransition = Transition.currentTransition
+  if type(currentTransition) ~= "table" then
+    return nil
+  end
+
+  return _asNonEmptyLabel(currentTransition.name)
+end
+
 -- ! Helper: Foce Scene Tilemaps Redraw
 -- Nudge all tilemaps in a scene to repaint for a few frames
 local function _forceSceneTilemapsRedraw(scene, frames)
@@ -104,12 +126,19 @@ end
 
 function Transition._flushBusyTransitionSummary(completedName)
   local suppressedCount = busySuppressedCount
-  local transitionName = completedName or activeTransitionKey or "unknown"
+  local transitionName = _resolveBusyTransitionLabel(completedName)
   _resetBusyWarnState()
 
   --#DEBUG START
   if suppressedCount > 0 then
-    Log.warn("[Transition.transitionToScene] Suppressed " .. suppressedCount .. " additional transition request(s) while '" .. tostring(transitionName) .. "' was in progress.")
+    if transitionName then
+      Log.warn("[Transition.transitionToScene] Suppressed %d additional transition request(s) while '%s' was in progress.",
+               suppressedCount,
+               transitionName)
+    else
+      Log.warn("[Transition.transitionToScene] Suppressed %d additional transition request(s) while a transition was in progress.",
+               suppressedCount)
+    end
   end
   --#DEBUG END
 end
@@ -231,8 +260,13 @@ function Transition.transitionToScene(newSceneClass, transitionName, opts)
   if Transition.isTransitioning then
     if not busyWarnedOnce then
       --#DEBUG START
-      local transitionNameInProgress = activeTransitionKey or "unknown"
-      Log.warn("[Transition.transitionToScene] Transition '" .. tostring(transitionNameInProgress) .. "' already in progress; suppressing repeated warnings until completion.")
+      local transitionNameInProgress = _resolveBusyTransitionLabel(nil)
+      if transitionNameInProgress then
+        Log.warn("[Transition.transitionToScene] Transition '%s' already in progress; suppressing repeated warnings until completion.",
+                 transitionNameInProgress)
+      else
+        Log.warn("[Transition.transitionToScene] A transition is already in progress; suppressing repeated warnings until completion.")
+      end
       --#DEBUG END
       busyWarnedOnce = true
     else
@@ -356,3 +390,65 @@ function Transition.executeTransitionDrawing()
     setDrawMode(prevMode)
   end
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Transition coordinates scene swaps, stack operations, and render hooks.
+
+-- Basic Scene Changes
+Transition.init()
+Transition.replaceScene(TitleScene) -- Uses the configured default transition or Cut
+Transition.replaceScene(GameplayScene, "FadeToColor", {
+  duration = 0.4,
+  holdTime = 0.1,
+  captureScreenshot = true,
+})
+
+-- Push / Pop Flow
+Transition.pushScene(PauseScene, "CrossDissolve", {
+  duration = 0.25,
+  dither = playdate.graphics.image.kDitherTypeBayer4x4,
+})
+Transition.popScene("CrossDissolve", { duration = 0.25 })
+
+-- Register a Custom Transition
+Transition.loadTransitions({
+  Spotlight = Spotlight,
+})
+Transition.replaceScene(BossScene, "Spotlight", {
+  duration = 0.6,
+})
+
+-- Refresh Config-Driven Defaults
+Config.applyOverrides({
+  transitions = {
+    defaultTransition = "FadeToColor",
+    duration = 0.5,
+    holdTime = 0.1,
+    overrides = {
+      ImageTable = {
+        duration = 0.8,
+        imageTable = playdate.graphics.imagetable.new("images/transitions/curtain"),
+        reverseExit = false,
+      },
+    },
+  },
+})
+Transition.reloadTransitionsWithNewConfig()
+
+-- Manual Render Loop Integration
+if Transition.isTransitioning then
+  Transition.prepareTransitionScreenshot()
+end
+
+playdate.graphics.sprite.update()
+
+if Transition.isTransitioning then
+  Transition.executeTransitionDrawing()
+end
+
+--]]
