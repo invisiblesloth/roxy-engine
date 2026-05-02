@@ -11,6 +11,7 @@ local Graphics  <const> = pd.graphics
 local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
 local Camera      <const> = r.Camera
+local Cache       <const> = r.Cache
 
 local min   <const> = math.min
 local max   <const> = math.max
@@ -30,9 +31,10 @@ local setDrawOffset   <const> = Graphics.setDrawOffset
 local newTilemap      <const> = Graphics.tilemap.new
 local addWallSprites  <const> = Graphics.sprite.addWallSprites
 
-local retain          <const> = AssetStore.retain
-local release         <const> = AssetStore.release
-local getImagetable   <const> = AssetStore.getImagetable
+local retain        <const> = AssetStore.retain
+local release       <const> = AssetStore.release
+local getImagetable <const> = AssetStore.getImagetable
+local evictAsset    <const> = Cache.evictAsset
 
 local setCameraBounds   <const> = Camera.setBounds
 
@@ -43,10 +45,13 @@ local processObjectLayers   <const> = ObjectLayerProcessor.processObjectLayers
 
 local IMAGE_PATH_PREFIX <const> = "assets/images/"
 
+local TILED_GID_MASK        <const> = 0x0FFFFFFF
+local TILED_TRANSFORM_MASK  <const> = 0xF0000000
+
 local SPRITE_DEFAULT_DIMS <const> = 16
 
-local WALL_TAG   <const> = 1
-local OBJECT_TAG <const> = 2
+local WALL_TAG    <const> = 1
+local OBJECT_TAG  <const> = 2
 
 local RESERVED_IMAGE_OPTS <const> = {
   registerSprite  = true,
@@ -74,6 +79,24 @@ local referenceCount = {}
 -- Helpers
 --------------------------------------------------------------------------------
 
+-- ! Helper: Remove Sprites From Scene
+-- Uses the scene batch unregister path when available; otherwise removes directly.
+local function _removeSpritesFromScene(scene, sprites)
+  if not sprites or #sprites == 0 then return end
+
+  if scene and scene._unregisterSprites then
+    scene:_unregisterSprites(sprites, true)
+  elseif scene and scene.removeSprite then
+    for i = 1, #sprites do
+      scene:removeSprite(sprites[i])
+    end
+  else
+    for i = 1, #sprites do
+      sprites[i]:remove()
+    end
+  end
+end
+
 --
 -- Asset Management Helpers
 --
@@ -95,6 +118,80 @@ local function _normalizeImagePath(tiledImagePath)
   end
 
   return IMAGE_PATH_PREFIX .. base
+end
+
+-- ! Helper: Clean Tiled GID
+-- Strips Tiled transform bits and returns the raw tile GID.
+local function _cleanTiledGid(rawGid)
+  return (rawGid or 0) & TILED_GID_MASK
+end
+
+-- ! Helper: Has Tiled Transform Flags
+-- Returns true when a Tiled GID includes unsupported transform flags.
+local function _hasTiledTransformFlags(rawGid)
+  return rawGid ~= nil and ((rawGid & TILED_TRANSFORM_MASK) ~= 0)
+end
+
+-- ! Helper: Build Layer Tile Indices
+-- Rejects unsupported Tiled data while converting GIDs in a single pass.
+local function _buildLayerTileIndices(layer, tilesetForGid)
+  local data = layer.data or EMPTY_TABLE
+  local indices = createTable(#data, 0)
+  local usedTileset = nil
+  local firstgid = nil
+  local lastgid = nil
+  local isEmpty = true
+
+  for index = 1, #data do
+    local rawGid = data[index] or 0
+    local tileIndex = 0
+
+    if _hasTiledTransformFlags(rawGid) then
+      error("[RoxyTilemap:init] Unsupported Tiled transform flags in layer '" .. tostring(layer.name) .. "' at tile " .. tostring(index), 2)
+    end
+
+    local gid = _cleanTiledGid(rawGid)
+    if gid ~= 0 then
+      isEmpty = false
+
+      if not usedTileset then
+        usedTileset = tilesetForGid(gid)
+        if usedTileset then
+          firstgid = usedTileset.firstgid
+          lastgid = firstgid + (usedTileset.tilecount or 0) - 1
+        end
+      end
+
+      if usedTileset then
+        if gid < firstgid or gid > lastgid then
+          error("[RoxyTilemap:init] Unsupported mixed tilesets in tile layer '" .. tostring(layer.name) .. "'", 2)
+        end
+        tileIndex = gid - firstgid + 1
+      end
+    end
+
+    indices[index] = tileIndex
+  end
+
+  return usedTileset, indices, isEmpty
+end
+
+-- ! Helper: Remove Keys With Prefix
+-- Evicts every cached asset whose key starts with the layer chunk prefix.
+local function _evictCacheKeysWithPrefix(bucket, prefix)
+  if not bucket or not bucket.cache or not prefix then return end
+
+  local keys = {}
+  local prefixLength = #prefix
+  for key, _ in pairs(bucket.cache) do
+    if tostring(key):sub(1, prefixLength) == prefix then
+      keys[#keys + 1] = key
+    end
+  end
+
+  for index = 1, #keys do
+    evictAsset(bucket, keys[index])
+  end
 end
 
 --
@@ -241,6 +338,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   self.scene = scene
   self._retainedPaths = {}
   self._layerImageHandles = {}
+  self._destroying = false
+  self._destroyed = false
 
   local autoAdd = opts.wrapInSprites and (opts.autoAddSprites ~= false)
   local sceneHasAdd = scene and type(scene) == "table" and type(scene.addSprite) == "function" or false
@@ -389,34 +488,13 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   for _, layer in ipairs(mapData.layers or {}) do
     if layer.type == "tilelayer" and (processAllLayers or opts.layers[layer.name]) then
       local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or {}
-      local data = layer.data or {}
 
-      -- Find first nonzero GID and cache the tileset
-      -- We break early for the first non-empty tile to avoid O(n) on dense layers
-      -- For very sparse/empty layers the scan is still O(n); consider precomputing a
-      -- layer->tileset mapping at export time in Tiled for true O(1)
-      local usedTileset = nil
-      for index = 1, #data do
-        local rawGid = data[index]
-        local gid = rawGid & 0x1FFFFFFF -- Remove flip flags
-        if gid ~= 0 then
-          usedTileset = _tilesetForGid(gid)
-          break
-        end
-      end
+      -- Reject unsupported Tiled features before converting GIDs to tile indices
+      local usedTileset, indices, isEmpty = _buildLayerTileIndices(layer, _tilesetForGid)
 
       if not usedTileset then
         Log.warn("[RoxyTilemap:init] Layer '"..layer.name.."' has no matching tileset") --#DEBUG
         goto continueLayer -- Skip this layer if no valid tileset
-      end
-
-      -- Check if layer is non-empty
-      local isEmpty = true
-      for index = 1, #data do
-        if data[index] ~= 0 then
-          isEmpty = false
-          break
-        end
       end
 
       --#DEBUG START
@@ -430,21 +508,11 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
       -- Only process layers with valid tilesets and non-empty data
       if usedTileset and not isEmpty and usedTileset.imageTable then
-        local firstgid = usedTileset.firstgid
         local tilemap = newTilemap()
         tilemap:setSize(layer.width, layer.height)
         tilemap:setImageTable(usedTileset.imageTable)
 
-        -- Convert GIDs to tilemap indices
-        local indices = createTable(#data, 0)
-        for index = 1, #data do
-          local rawGid = data[index]
-          local gid = rawGid & 0x1FFFFFFF -- Remove flip flags
-          -- Use cached usedTileset instead of calling _tilesetForGid for each tile
-          indices[index] = (gid ~= 0) and (gid - firstgid + 1) or 0
-        end
         tilemap:setTiles(indices, layer.width)
-        local tiles, stride = tilemap:getTiles()
 
         -- Use logical map tile size (e.g., 64x32) for iso math/culling
         -- Actual image size (e.g., 64x64) is handled via per-image offsets
@@ -473,8 +541,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
           tileHeight = tileHeight,
           halfWidth = tileWidth * 0.5,
           halfHeight = tileHeight * 0.5,
-          tilesFlat  = tiles,
-          tilesStride = stride or layer.width,
+          tilesFlat  = indices,
+          tilesStride = layer.width,
           maxImageHeight = maxImageHeight,
           zIndex = (layerOptions.zIndex or opts.zIndices[layer.name] or 0),
           visible = (layerOptions.visible ~= false),
@@ -709,7 +777,8 @@ end
 -- ! Get Objects
 -- Returns the raw Tiled object data for the specified object layer
 function RoxyTilemap:getObjects(name)
-  return self.objectLayers and self.objectLayers[name]
+  local entry = self.objectLayers and self.objectLayers[name]
+  return entry and entry.objects or nil
 end
 
 -- ! Get Object Sprites
@@ -751,17 +820,35 @@ end
 -- ! Find Object Sprites By Type
 -- Returns all sprites from the layer whose Tiled objects have the specified type
 function RoxyTilemap:findObjectSpritesByType(layerName, objectType)
-  return self:findObjectSprites(layerName, function(object)
-    return object.type == objectType
-  end)
+  local sprites = self:getObjectSprites(layerName)
+  local matches = {}
+
+  for index = 1, #sprites do
+    local sprite = sprites[index]
+    local object = sprite.tiledObject
+    if object and object.type == objectType then
+      matches[#matches + 1] = sprite
+    end
+  end
+
+  return matches
 end
 
 -- ! Find Object Sprites By Name
 -- Returns all sprites from the layer whose Tiled objects have the specified name
 function RoxyTilemap:findObjectSpritesByName(layerName, objectName)
-  return self:findObjectSprites(layerName, function(object)
-    return object.name == objectName
-  end)
+  local sprites = self:getObjectSprites(layerName)
+  local matches = {}
+
+  for index = 1, #sprites do
+    local sprite = sprites[index]
+    local object = sprite.tiledObject
+    if object and object.name == objectName then
+      matches[#matches + 1] = sprite
+    end
+  end
+
+  return matches
 end
 
 -- ! Find Object Sprites
@@ -781,17 +868,18 @@ end
 -- Removes all sprites from an object layer and cleans up references
 function RoxyTilemap:removeObjectLayer(layerName)
   local sprites = self:getObjectSprites(layerName)
+
+  -- Release retained images before unregistering sprites
   for _, sprite in ipairs(sprites) do
     if sprite._retainedImagePath then
       release(sprite._retainedImagePath)
       sprite._retainedImagePath = nil
     end
-    if self.scene and self.scene.removeSprite then
-      self.scene:removeSprite(sprite)
-    else
-      sprite:remove()
-    end
   end
+
+  -- Remove from scene/display in one batch
+  _removeSpritesFromScene(self.scene, sprites)
+
   if self.objectSprites then
     self.objectSprites[layerName] = nil
   end
@@ -805,22 +893,160 @@ end
 -- Returns the tile index at the given tile coordinates (x, y) on the specified layer
 -- Note: Coordinates are in tile units, not pixels
 function RoxyTilemap:getTileAt(name, tileX, tileY)
-  local tilemap = self:getTilemap(name)
-  return tilemap and tilemap:getTileAtPosition(tileX, tileY) or nil
+  local layerData = self.layers and self.layers[name]
+  if not layerData then return nil end
+
+  local tiles = layerData.tilesFlat
+  local stride = layerData.tilesStride or layerData.mapWidth
+  local mapWidth = layerData.mapWidth
+  local mapHeight = layerData.mapHeight
+  if tiles and stride and mapWidth and mapHeight then
+    if tileX < 1 or tileY < 1 or tileX > mapWidth or tileY > mapHeight then return nil end
+    local tileIndex = tiles[(tileY - 1) * stride + tileX]
+    return tileIndex ~= 0 and tileIndex or nil
+  end
+
+  local tilemap = layerData.tilemap
+  local tileIndex = tilemap and tilemap:getTileAtPosition(tileX, tileY) or nil
+  return tileIndex ~= 0 and tileIndex or nil
 end
 
 -- ! For Each Tile
 -- Iterates over each tile on the specified layer, calling the provided function
 -- Note: Coordinates passed to the function are in tile units.
 function RoxyTilemap:forEachTile(name, fn)
-  local tilemap = self:getTilemap(name)
-  if not tilemap or type(fn) ~= "function" then return end
+  local layerData = self.layers and self.layers[name]
+  if not layerData or type(fn) ~= "function" then return end
 
+  local tiles = layerData.tilesFlat
+  local stride = layerData.tilesStride or layerData.mapWidth
+  local width = layerData.mapWidth
+  local height = layerData.mapHeight
+  if tiles and stride and width and height then
+    for tileY = 1, height do
+      local rowOffset = (tileY - 1) * stride
+      for tileX = 1, width do
+        fn(tileX, tileY, tiles[rowOffset + tileX])
+      end
+    end
+    return
+  end
+
+  local tilemap = layerData.tilemap
+  if not tilemap then return end
   local width, height = tilemap:getSize()
   for tileY = 1, height do
     for tileX = 1, width do
       fn(tileX, tileY, tilemap:getTileAtPosition(tileX, tileY))
     end
+  end
+end
+
+-- ! Sync Layer Tiles
+-- Sanitizes cached tile indices and writes them back to the Playdate tilemap.
+function RoxyTilemap:_syncLayerTilesFromTilemap(layerData)
+  if not layerData or not layerData.tilemap then return end
+
+  local tiles, stride = nil, nil
+  if layerData.tilemap.getTiles then
+    tiles, stride = layerData.tilemap:getTiles()
+  end
+  if not tiles then
+    tiles = layerData.tilesFlat
+    stride = layerData.tilesStride or layerData.mapWidth
+  end
+  if not tiles then return end
+
+  local imageCount = layerData.imageCount or 0
+  for index = 1, #tiles do
+    local tileIndex = tiles[index]
+    if tileIndex == nil or tileIndex == 0 then
+      tiles[index] = 0
+    else
+      tiles[index] = (tileIndex >= 1 and tileIndex <= imageCount) and tileIndex or 0
+    end
+  end
+
+  layerData.tilemap:setTiles(tiles, stride or layerData.mapWidth)
+  layerData.tilesFlat = tiles
+  layerData.tilesStride = stride or layerData.mapWidth
+end
+
+-- ! Clear Layer Chunk State
+-- Evicts cached chunks and pending warm jobs for a layer.
+function RoxyTilemap:_clearLayerChunkState(layerName, removeConfig)
+  local staticLayers = self._staticChunkLayers
+  local layerConfig = staticLayers and staticLayers[layerName] or nil
+  if not layerConfig then return end
+
+  local prefix = layerConfig.keyPrefix
+  if prefix then
+    _evictCacheKeysWithPrefix(self._globalChunkBucket, prefix)
+
+    if self._warmQueue then
+      local prefixLength = #prefix
+      for index = #self._warmQueue, 1, -1 do
+        local job = self._warmQueue[index]
+        if job and job.key and tostring(job.key):sub(1, prefixLength) == prefix then
+          tableRemove(self._warmQueue, index)
+        end
+      end
+    end
+
+    if self._warmSet then
+      local prefixLength = #prefix
+      for key, _ in pairs(self._warmSet) do
+        if tostring(key):sub(1, prefixLength) == prefix then
+          self._warmSet[key] = nil
+        end
+      end
+    end
+  end
+
+  layerConfig._dirty = true
+  layerConfig._lastRingBounds = nil
+
+  if removeConfig and staticLayers then
+    staticLayers[layerName] = nil
+  end
+
+  self._didPrimeVisible = false
+  self._frameDirty = true
+end
+
+-- ! Layer Structure Changed
+-- Invalidates ordered layers and render state after hide/show/remove.
+function RoxyTilemap:_onLayerStructureChanged(layerName, reason, layerData)
+  self:markLayerImageDirty(layerName)
+  self._frameDirty = true
+  self._didPrimeVisible = false
+
+  if reason == "remove" then
+    self:_clearLayerChunkState(layerName, true)
+  end
+
+  if type(self._rebuildOrderedLayers) == "function" then
+    self:_rebuildOrderedLayers()
+  end
+end
+
+-- ! Layer Render Resources Changed
+-- Refreshes cached/native render state after image table changes.
+function RoxyTilemap:_onLayerRenderResourcesChanged(layerName)
+  local layerData = self.layers and self.layers[layerName]
+  if not layerData or not layerData.tilemap then return end
+
+  self:_syncLayerTilesFromTilemap(layerData)
+
+  layerData._imageCache = {}
+  layerData._offsetCache = {}
+
+  self:_clearLayerChunkState(layerName, false)
+  self:markLayerImageDirty(layerName)
+  self._frameDirty = true
+
+  if type(self._refreshProjectionLayerRenderResources) == "function" then
+    self:_refreshProjectionLayerRenderResources(layerName, layerData)
   end
 end
 
@@ -831,36 +1057,46 @@ end
 -- ! Hide Layer
 -- Hides a tile layer from rendering (affects both sprites and direct drawing)
 function RoxyTilemap:hideLayer(name)
-  if self.layerManager then self.layerManager:hide(name) end
+  local layerData = self.layers and self.layers[name]
+  if self.layerManager and self.layerManager:hide(name) then
+    self:_onLayerStructureChanged(name, "hide", layerData)
+  end
 end
 
 -- ! Show Layer
 -- Shows a previously hidden tile layer
 function RoxyTilemap:showLayer(name)
-  if self.layerManager then self.layerManager:show(name) end
+  local layerData = self.layers and self.layers[name]
+  if self.layerManager and self.layerManager:show(name) then
+    self:_onLayerStructureChanged(name, "show", layerData)
+  end
 end
 
 
 -- ! Remove Layer
 -- Completely removes a tile layer and cleans up all associated resources
 function RoxyTilemap:removeLayer(name)
-  if self.layerManager then self.layerManager:remove(name) end
+  local layerData = self.layers and self.layers[name]
+  if self.layerManager and self.layerManager:remove(name) then
+    self:_onLayerStructureChanged(name, "remove", layerData)
+  end
 end
 
 --------------------------------------------------------------------------------
 -- Dynamic Layer Modification
 --------------------------------------------------------------------------------
 
--- ! Set Layer ImageTable
--- Swap the imagetable used by a tile layer at runtime
--- newImageTableOrPath: a playdate.graphics.imagetable or a string path (Tiled/normalized)
+-- ! Set Layer Image Table
+-- Swap the image table used by a tile layer at runtime
+-- newImageTableOrPath: a Playdate image table object or a string path (Tiled/normalized)
 -- remapFn: optional table or function to remap tile indices (oldIndex --> newIndex)
 --   - If a table, remapFn[oldIndex] = newIndex
 --   - If a function, newIndex = remapFn(oldIndex) (return nil to keep oldIndex)
+-- Does not rebuild collision sprites; call rebuildLayerCollisions if passability changes
 function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remapFn)
   local updated = self.layerManager and self.layerManager:setImageTable(name, newImageTableOrPath, remapFn)
   if updated then
-    self:markLayerImageDirty(name)
+    self:_onLayerRenderResourcesChanged(name)
   end
 
   return updated
@@ -1308,17 +1544,27 @@ end
 -- ! Detach Sprites
 function RoxyTilemap:detachSprites()
   if self.layerManager then self.layerManager:detach() end
+
+  -- Collect object sprites so the scene can unregister them in one batch
+  local objectSprites = nil
   for _, sprites in pairs(self.objectSprites or {}) do
     for _, sprite in ipairs(sprites) do
-      if self.scene and self.scene.removeSprite then self.scene:removeSprite(sprite) else sprite:remove() end
+      objectSprites = objectSprites or {}
+      tableInsert(objectSprites, sprite)
     end
   end
+  _removeSpritesFromScene(self.scene, objectSprites)
   self.objectSprites = {}
 end
 
 -- ! Destroy
 -- Cleans up all resources and removes sprites from display
 function RoxyTilemap:destroy()
+  if self._destroyed or self._destroying then return end
+  self._destroying = true
+
+  local scene = self.scene
+
   -- Manager handles layer sprites, collisions, and swap-retained paths
   if self.layerManager then
     self.layerManager:destroy()
@@ -1346,33 +1592,96 @@ function RoxyTilemap:destroy()
     self._layerImageHandles = nil
   end
 
-  -- Remove object sprites (unchanged from your current logic)
+  -- Release retained images, then unregister object sprites in one batch
+  local objectSprites = nil
   for _, sprites in pairs(self.objectSprites or {}) do
     for _, sprite in ipairs(sprites) do
       if sprite._retainedImagePath then
         release(sprite._retainedImagePath)
         sprite._retainedImagePath = nil
       end
-      -- Always remove the sprite directly;
-      -- the scene will remove the tilemap itself
-      sprite:remove()
+      objectSprites = objectSprites or {}
+      tableInsert(objectSprites, sprite)
     end
   end
+  _removeSpritesFromScene(scene, objectSprites)
 
-  -- Clean up tilesets retained at initialization (unchanged)
+  -- Clean up tilesets retained at initialization
   for _, tileset in pairs(self.tilesets or {}) do
     if tileset.imagePath then
       release(tileset.imagePath)
     end
   end
 
-  -- Clear refs + detach from scene (unchanged)
+  -- Clear refs and detach from scene
   self.layers = {}
   self.sprites = {}
   self.objectSprites = {}
   self.tilesets = nil
   self.objectLayers = nil
 
-  -- Just clear the back-pointer; do not call back into the scene
+  if scene and scene._unregisterTilemap then
+    scene:_unregisterTilemap(self)
+  end
+
   self.scene = nil
+  self._destroyed = true
+  self._destroying = false
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+local Graphics <const> = playdate.graphics
+
+local scene = RoxyScene()
+
+-- RoxyTilemap is usually instantiated through a projection subclass.
+local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
+  cameraBounds = true,
+  deferCameraBounds = true,
+  wrapInSprites = true,
+  layerOptions = {
+    Ground = {
+      preRenderChunked = true,
+      chunkSizePx = 320,
+      overlapPx = 32,
+    },
+    Walls = {
+      collidable = true,
+      emptyIDs = { 0 },
+      wallSpriteGroup = 1,
+      wallCollidesWithGroups = { 2 },
+    },
+    Objects = {
+      collidable = true,
+      spriteGroup = 2,
+    },
+  },
+}, scene)
+
+map:applyCameraBounds()
+local worldWidth, worldHeight = map:getWorldSize()
+
+map:hideLayer("Decor")
+map:showLayer("Decor")
+map:setLayerOrigin("Ground", 0, 16)
+
+local winterTiles = Graphics.imagetable.new("images/terrain-winter")
+map:setLayerImageTable("Ground", winterTiles, {
+  [1] = 2,
+  [2] = 1,
+})
+map:rebuildLayerCollisions("Walls", { 0 })
+
+map:processObjectLayers({ Objects = true })
+local pickups = map:findObjectSpritesByType("Objects", "pickup")
+
+map:removeObjectLayer("Objects")
+map:removeLayer("Decor")
+map:destroy()
+
+]]

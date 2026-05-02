@@ -147,41 +147,7 @@ function RoxyIsoTilemap:init(jsonPath, opts, scene)
   for _, layerData in pairs(self.layers) do
     if layerData.tilemap then
       self:_preloadLayerCaches(layerData)
-
-      -- Create native renderer instance for this layer
-      if layerData.imageTable and newTileRenderer_C then
-        -- Sanitize tiles once on load so the native blob never sees out-of-range values
-        sanitizeTilesInPlace(layerData.tilesFlat, layerData.imageCount)
-
-        local isIsometric = 1
-        local staggerIndexOdd = 0
-        local staggerDirectionRight = 0
-
-        --#DEBUG START
-        if (layerData.tileWidth or 0) <= 0 or (layerData.tileHeight or 0) <= 0
-           or (layerData.halfWidth or 0) <= 0 or (layerData.halfHeight or 0) <= 0 then
-          Log.error("[RoxyIsoTilemap] Invalid tile metrics; width/height/halves must be > 0")
-        end
-        --#DEBUG END
-
-        layerData._nativeRenderer = newTileRenderer_C(
-          isIsometric,
-          staggerIndexOdd,
-          staggerDirectionRight,
-          layerData.mapWidth,       -- Tiles
-          layerData.mapHeight,      -- Tiles
-          layerData.tileWidth,      -- px
-          layerData.tileHeight,     -- px
-          layerData.halfWidth,      -- px
-          layerData.halfHeight,     -- px
-          layerData.maxImageHeight, -- Tall art overdraw
-          layerData.imageTable,     -- LCDBitmapTable
-          layerData.imageCount,     -- Frames in table
-          nil                       -- Optional tiles blob
-        )
-        layerData.ownerTilemap = self
-        syncNativeTiles(layerData)
-      end
+      self:_createNativeRenderer(layerData)
     end
   end
 
@@ -191,6 +157,112 @@ end
 --------------------------------------------------------------------------------
 -- Internal API
 --------------------------------------------------------------------------------
+
+-- ! Auto Chunk Overlap
+local function _autoChunkOverlap(layer)
+  local tileWidth = layer.tileWidth or 0
+  local halfWidth = layer.halfWidth or floor(tileWidth * 0.5)
+  local tileHeight = layer.tileHeight or 0
+  local maxImageHeight = layer.maxImageHeight or tileHeight
+  local tallOverdraw = max(0, ceil(maxImageHeight - tileHeight))
+
+  return max(halfWidth, tallOverdraw, DEFAULT_CHUNK_OVERLAP)
+end
+
+-- ! Create Native Renderer
+function RoxyIsoTilemap:_createNativeRenderer(layerData)
+  if not layerData or not layerData.imageTable or not newTileRenderer_C then return end
+
+  sanitizeTilesInPlace(layerData.tilesFlat, layerData.imageCount)
+
+  --#DEBUG START
+  if (layerData.tileWidth or 0) <= 0 or (layerData.tileHeight or 0) <= 0
+     or (layerData.halfWidth or 0) <= 0 or (layerData.halfHeight or 0) <= 0 then
+    Log.error("[RoxyIsoTilemap] Invalid tile metrics; width/height/halves must be > 0")
+  end
+  --#DEBUG END
+
+  layerData._nativeRenderer = newTileRenderer_C(
+    1,                        -- Isometric
+    0,                        -- staggerIndexOdd
+    0,                        -- staggerDirectionRight
+    layerData.mapWidth,       -- Tiles
+    layerData.mapHeight,      -- Tiles
+    layerData.tileWidth,      -- px
+    layerData.tileHeight,     -- px
+    layerData.halfWidth,      -- px
+    layerData.halfHeight,     -- px
+    layerData.maxImageHeight, -- Tall art overdraw
+    layerData.imageTable,     -- LCDBitmapTable
+    layerData.imageCount,     -- Frames in table
+    nil                       -- Optional tiles blob
+  )
+  layerData.ownerTilemap = self
+  syncNativeTiles(layerData)
+end
+
+-- ! Refresh Projection Layer Render Resources
+function RoxyIsoTilemap:_refreshProjectionLayerRenderResources(layerName, layerData)
+  if not layerData then return end
+
+  if layerData._nativeRenderer then
+    layerData._nativeRenderer:destroy()
+    layerData._nativeRenderer = nil
+  end
+
+  local layerConfig = self._staticChunkLayers and self._staticChunkLayers[layerName]
+  if layerConfig then
+    if not layerConfig._explicitOverlap then
+      layerConfig.overlap = _autoChunkOverlap(layerData)
+    end
+    layerConfig.bufferWidth = layerConfig.size + 2 * layerConfig.overlap
+    layerConfig.bufferHeight = layerConfig.bufferWidth
+    layerConfig._dirty = true
+  end
+
+  self:_preloadLayerCaches(layerData)
+  self:_createNativeRenderer(layerData)
+end
+
+-- ! Project Dirty Tile Rect
+function RoxyIsoTilemap:_projectDirtyTileRect(layerConfig, tileX, tileY, tileCountWidth, tileCountHeight)
+  local layer = layerConfig and layerConfig.layer
+  if not layer then return 0, 0, 0, 0 end
+
+  local halfWidth = layer.halfWidth or ((layer.tileWidth or 0) * 0.5)
+  local halfHeight = layer.halfHeight or ((layer.tileHeight or 0) * 0.5)
+  local tileWidth = layer.tileWidth or 0
+  local tileHeight = layer.tileHeight or 0
+  local tallOverdraw = max(0, (layer.maxImageHeight or tileHeight) - tileHeight)
+
+  local minColumn = (tileX or 1) - 1
+  local minRow = (tileY or 1) - 1
+  local maxColumn = minColumn + (tileCountWidth or 1)
+  local maxRow = minRow + (tileCountHeight or 1)
+
+  local minX, minY = math.huge, math.huge
+  local maxX, maxY = -math.huge, -math.huge
+
+  local function include(column, row)
+    local screenX = (column - row) * halfWidth
+    local screenY = (column + row) * halfHeight
+    if screenX < minX then minX = screenX end
+    if screenX > maxX then maxX = screenX end
+    if screenY < minY then minY = screenY end
+    if screenY > maxY then maxY = screenY end
+  end
+
+  include(minColumn, minRow)
+  include(maxColumn, minRow)
+  include(minColumn, maxRow)
+  include(maxColumn, maxRow)
+
+  minX -= tileWidth
+  maxX += tileWidth
+  minY -= tallOverdraw
+
+  return minX, minY, max(1, maxX - minX), max(1, maxY - minY + tallOverdraw)
+end
 
 --
 -- Static Layer Configuration
@@ -207,23 +279,20 @@ function RoxyIsoTilemap:_initializeStaticLayers(opts)
   for layerName, layer in pairs(self.layers) do
     local layerOpts = layerOptions[layerName] or {}
     if layerOpts.preRenderChunked then
-      local tileWidth = layer.tileWidth or 0
-      local halfWidth = layer.halfWidth or floor(tileWidth * 0.5)
-
-      local tallOverdraw = 0
-      if layer.maxImageHeight and layer.tileHeight then
-        tallOverdraw = max(0, ceil((layer.maxImageHeight - layer.tileHeight) * 0.5))
-      end
-
-      local overlap = layerOpts.overlapPx or max(halfWidth, tallOverdraw, DEFAULT_CHUNK_OVERLAP)
+      local overlap = layerOpts.overlapPx or _autoChunkOverlap(layer)
+      local size = max(1, layerOpts.chunkSizePx or DEFAULT_CHUNK_SIZE)
+      local bufferSize = size + 2 * overlap
 
       self._staticChunkLayers[layerName] = {
-        name      = layerName,
-        layer     = layer,
-        size      = max(1, layerOpts.chunkSizePx or DEFAULT_CHUNK_SIZE),
-        overlap   = overlap,
-        keyPrefix = "chunk:" .. (self._mapCacheId or "map") .. ":" .. tostring(layer.tiledId or layerName) .. ":",
-        _dirty    = true, -- Per-layer dirty bit
+        name         = layerName,
+        layer        = layer,
+        size         = size,
+        overlap      = overlap,
+        bufferWidth  = bufferSize,
+        bufferHeight = bufferSize,
+        keyPrefix    = "chunk:" .. (self._mapCacheId or "map") .. ":" .. tostring(layer.tiledId or layerName) .. ":",
+        _dirty       = true, -- Per-layer dirty bit
+        _explicitOverlap = layerOpts.overlapPx ~= nil,
       }
     end
   end
@@ -435,7 +504,7 @@ end
 -- ! Build Chunk
 function RoxyIsoTilemap:_buildChunk(layerConfig, chunkX, chunkY)
   local size, overlap = layerConfig.size, layerConfig.overlap
-  local width, height = size + 2 * overlap, size + 2 * overlap
+  local width, height = layerConfig.bufferWidth, layerConfig.bufferHeight
   local img = newImage(width, height)
   if not img then
     -- Low-memory guard
@@ -599,8 +668,15 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
 
   -- First pass - scan for any missing chunks and enqueue builds.
   local anyMissing = false
-  local toDraw = {} -- {img, dx, dy, imageWidth, imageHeight}
-  local imageWidth, imageHeight = size + 2 * overlap, size + 2 * overlap
+  local imageWidth, imageHeight = layerConfig.bufferWidth, layerConfig.bufferHeight
+
+  local scratch = self._chunkDrawScratch
+  if not scratch then
+    scratch = { images = {}, xs = {}, ys = {} }
+    self._chunkDrawScratch = scratch
+  end
+  local images, xs, ys = scratch.images, scratch.xs, scratch.ys
+  local drawCount = 0
 
   for chunkY = minY, maxY do
     local rowDeltaY = chunkY * size - overlap + screenY
@@ -612,7 +688,10 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
         local dy = rowDeltaY
         -- Offscreen culling
         if dx < DISPLAY_WIDTH and dy < DISPLAY_HEIGHT and (dx + imageWidth) > 0 and (dy + imageHeight) > 0 then
-          toDraw[#toDraw + 1] = { img = img, dx = dx, dy = dy } -- ints already
+          drawCount += 1
+          images[drawCount] = img
+          xs[drawCount] = dx
+          ys[drawCount] = dy
         end
       else
         anyMissing = true
@@ -622,6 +701,9 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
   end
 
   if anyMissing then
+    for index = 1, drawCount do
+      images[index] = nil
+    end
     -- Single-pass fallback - render the layer once (native rows or Lua), not per-miss.
     -- Clip to screen to be safe.
     setClipRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
@@ -631,10 +713,10 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
   end
 
   -- All chunks available - draw them.
-  for index = 1, #toDraw do
-    local element = toDraw[index]
+  for index = 1, drawCount do
     -- dx/dy are already integers; removed floor() for tiny win.
-    element.img:draw(element.dx, element.dy)
+    images[index]:draw(xs[index], ys[index])
+    images[index] = nil
   end
 end
 
@@ -782,11 +864,8 @@ function RoxyIsoTilemap:markTilesDirty(layerName, tileX, tileY, tileCountWidth, 
 
   self._frameDirty = true
 
-  local tileWidth, tileHeight = layerConfig.layer.tileWidth, layerConfig.layer.tileHeight
-  local pixelX = (tileX - 1) * (tileWidth * 0.5) * 2
-  local pixelY = (tileY - 1) * (tileHeight * 0.5)
-  local pixelWidth = (tileCountWidth or 1) * tileWidth
-  local pixelHeight = (tileCountHeight or 1) * (tileHeight * 0.5)
+  local pixelX, pixelY, pixelWidth, pixelHeight =
+    self:_projectDirtyTileRect(layerConfig, tileX, tileY, tileCountWidth, tileCountHeight)
 
   local minChunkX, maxChunkX, minChunkY, maxChunkY =
     chunkIndicesForRect(pixelX, pixelY, pixelWidth, pixelHeight, layerConfig.size)
@@ -804,14 +883,14 @@ end
 -- ! Draw
 -- Draw a single layer (chunked or dynamic fallback)
 function RoxyIsoTilemap:draw(layerName)
+  local layerData = self.layers and self.layers[layerName]
+  if not layerData or not layerData.tilemap or layerData.visible == false then return end
+
   if self._staticChunkLayers[layerName] then
     self:_drawStaticLayerChunked(layerName); return
   end
 
-  -- Dynamic fallback (rare): draw only visible rows/cols with coarse margin
-  local layerData = self.layers and self.layers[layerName]
-  if not layerData or not layerData.tilemap or layerData.visible == false then return end
-
+  -- Dynamic fallback (rare): draw only visible rows and columns with coarse margin
   local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
 
   self:drawLayerRows(layerName, minTileY, maxTileY, minTileX, maxTileX)
@@ -1022,6 +1101,8 @@ end
 -- ! Destroy
 -- Clean up static layer resources
 function RoxyIsoTilemap:destroy()
+  if self._destroyed or self._destroying then return end
+
   -- Destroy native renderers first
   for _, layerData in pairs(self.layers or {}) do
     if layerData._nativeRenderer then
@@ -1040,3 +1121,58 @@ function RoxyIsoTilemap:destroy()
 
   RoxyIsoTilemap.super.destroy(self)
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+local scene = RoxyScene()
+
+local map = RoxyIsoTilemap("assets/maps/isometric-test-3.json", {
+  cameraBounds = true,
+  deferCameraBounds = true,
+  wrapInSprites = false,
+  layerOptions = {
+    ground = {
+      preRenderChunked = true,
+      chunkSizePx = 96,
+      overlapPx = 32,
+    },
+    blocks = {
+      preRenderChunked = true,
+      chunkSizePx = 96,
+      overlapPx = 32,
+      zIndex = 10,
+    },
+  },
+}, scene)
+
+function scene:start()
+  map:applyCameraBounds()
+  map:forceRedraw(2)
+end
+
+function scene:draw()
+  map:drawVisible()
+end
+
+map:setTileAt("blocks", 4, 6, 2, true)
+map:markTilesDirty("blocks", 4, 6, 2, 2)
+
+local row = map:getRowFromScreen(200, 120, "blocks")
+map:drawLayerRows("blocks", 1, row, 1, 12)
+
+local previewImage, offsetX, offsetY = map:getLayerImage("ground", {
+  tileX = 1,
+  tileY = 1,
+  tileWidth = 6,
+  tileHeight = 6,
+  compositeLayers = { "blocks" },
+})
+
+map:drawVisibleInRect(0, 0, 400, 240)
+map:destroy()
+
+]]
