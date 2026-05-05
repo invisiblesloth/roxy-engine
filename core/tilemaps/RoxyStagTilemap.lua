@@ -116,6 +116,7 @@ end
 
 class("RoxyStagTilemap").extends(RoxyTilemap)
 
+-- ! Initialize
 function RoxyStagTilemap:init(jsonPath, opts, scene)
   opts = opts or {}
   opts.wrapInSprites = false
@@ -153,16 +154,9 @@ function RoxyStagTilemap:init(jsonPath, opts, scene)
   end
   self.worldHeight = worldHeightBase + maxOverdrawPx
 
-  -- Refresh camera bounds if requested
+  -- Store camera bounds for attach/apply time; constructors are load-only.
   if opts and opts.cameraBounds then
-    local x2 = max(0, self.worldWidth - DISPLAY_WIDTH)
-    local y2 = max(0, self.worldHeight - DISPLAY_HEIGHT)
-
-    if type(self.setCameraBounds) == "function" then
-      pcall(function() self:setCameraBounds(0, 0, x2, y2) end)
-    elseif Camera and type(setCameraBounds) == "function" then
-      pcall(function() setCameraBounds({ x1 = 0, y1 = 0, x2 = x2, y2 = y2 }) end)
-    end
+    self:updateCameraBounds(false)
   end
 
   self._projection = "staggered-y"
@@ -330,15 +324,7 @@ end
 -- ! Rebuild Ordered Layers
 -- Build a stable, z-sorted draw list (rarely changes)
 function RoxyStagTilemap:_rebuildOrderedLayers()
-  local items = {}
-  for name, layer in pairs(self.layers) do
-    if layer.tilemap and layer.visible ~= false then
-      local renderType = self._staticChunkLayers[name] and "chunked" or "dynamic"
-      tableInsert(items, { layer = layer, name = name, type = renderType, z = layer.zIndex or 0 })
-    end
-  end
-  tableSort(items, function(a, b) return a.z < b.z end)
-  self._orderedLayers = items
+  RoxyTilemap._rebuildOrderedLayers(self)
 end
 
 -- ! Preload Layer Caches
@@ -402,6 +388,7 @@ function RoxyStagTilemap:_renderLayerToImage(layerName, opts)
   local seen = {}
   local order = 0
 
+  -- ! Helper: Enqueue Layer
   local function enqueueLayer(name, layer)
     if not layer or seen[layer] then return end
 
@@ -599,6 +586,7 @@ function RoxyStagTilemap:_renderLayerToBuffer(layerData, targetImage, offsetX, o
   local halfWidth, halfHeight = layerData.halfWidth, layerData.halfHeight
 
   -- Respect stagger axis/index/direction like the fast path
+  -- ! Helper: Row Shift X
   local function rowShiftX(row0) return _rowShiftX_for_row0(self, row0, halfWidth) end
 
   local maxImageHeight = layerData.maxImageHeight or 0
@@ -840,7 +828,7 @@ function RoxyStagTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
 
-  self:markLayerImageDirty(layerName)
+  self:_onLayerTilesChanged(layerName, layer)
 
   if updateSprite and layer.imageTable then
     local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
@@ -1166,7 +1154,6 @@ local scene = RoxyScene()
 
 local map = RoxyStagTilemap("assets/maps/isometric-test-4.json", {
   cameraBounds = true,
-  deferCameraBounds = true,
   layerOptions = {
     ground = {
       preRenderChunked = true,
@@ -1174,10 +1161,11 @@ local map = RoxyStagTilemap("assets/maps/isometric-test-4.json", {
       overlapPx = 32,
     },
   },
-}, scene)
+})
+scene:addTilemap(map)
 
 function scene:start()
-  map:applyCameraBounds()
+  scene:activateCamera({ tilemap = map })
   map:forceRedraw(2)
 end
 

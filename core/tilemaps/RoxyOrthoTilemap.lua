@@ -80,6 +80,7 @@ end
 
 class("RoxyOrthoTilemap").extends(RoxyTilemap)
 
+-- ! Initialize
 function RoxyOrthoTilemap:init(jsonPath, opts, scene)
   opts = opts or {}
   RoxyOrthoTilemap.super.init(self, jsonPath, opts, scene)
@@ -132,15 +133,7 @@ end
 -- ! Utility: Rebuild Ordered Layers
 -- Build a stable, z-sorted draw list once (rarely changes)
 function RoxyOrthoTilemap:_rebuildOrderedLayers()
-  local items = {}
-  for name, layerData in pairs(self.layers) do
-    if layerData.tilemap and layerData.visible ~= false then
-      local renderType = self._staticChunkLayers[name] and "chunked" or "dynamic"
-      tableInsert(items, { layer = layerData, name = name, type = renderType, z = layerData.zIndex or 0 })
-    end
-  end
-  tableSort(items, function(a, b) return a.z < b.z end)
-  self._orderedLayers = items
+  RoxyTilemap._rebuildOrderedLayers(self)
 end
 
 --------------------------------------------------------------------------------
@@ -283,7 +276,7 @@ function RoxyOrthoTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
 
-  self:markLayerImageDirty(layerName)
+  self:_onLayerTilesChanged(layerName, layerData)
 
   if updateSprite then
     local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
@@ -300,6 +293,7 @@ function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
   local renderQueue = {}
   local order = 0
 
+  -- ! Helper: Enqueue Layer
   local function enqueueLayer(name, layer)
     if not layer then return end
 
@@ -580,7 +574,6 @@ local scene = RoxyScene()
 
 local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
   cameraBounds = true,
-  deferCameraBounds = true,
   wrapInSprites = false,
   layerOptions = {
     Ground = {
@@ -592,10 +585,11 @@ local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
       zIndex = 10,
     },
   },
-}, scene)
+})
+scene:addTilemap(map)
 
 function scene:start()
-  map:applyCameraBounds()
+  scene:activateCamera({ tilemap = map })
 end
 
 function scene:draw()

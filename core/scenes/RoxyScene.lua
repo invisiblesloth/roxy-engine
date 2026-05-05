@@ -27,13 +27,23 @@ local pauseHandler  <const> = Input.pause
 local resumeHandler <const> = Input.resume
 local removeHandler <const> = Input.removeHandler
 
-local resetCamera <const> = Camera.reset
+local resetCamera           <const> = Camera.reset
+local setCameraBounds       <const> = Camera.setBounds
+local clearCameraBounds     <const> = Camera.clearBounds
+local setCameraPosition     <const> = Camera.setPosition
+local setCameraTarget       <const> = Camera.setTarget
+local setCameraSmoothing    <const> = Camera.setSmoothing
+local setCameraPanVelocity  <const> = Camera.setPanVelocity
+local setCameraDeadZone     <const> = Camera.setDeadZone
+local setCameraFriction     <const> = Camera.setFriction
+local setCameraBias         <const> = Camera.setBias
+local setCameraMode         <const> = Camera.setMode
 
 local COLOR_WHITE <const> = Graphics.kColorWhite
 local COLOR_BLACK <const> = Graphics.kColorBlack
 local CLEAR_COLOR <const> = COLOR_WHITE
 
-local UNFLIPPED     <const> = Graphics.kImageUnflipped
+local UNFLIPPED <const> = Graphics.kImageUnflipped
 
 local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
@@ -68,6 +78,23 @@ local function _hasItem(array, item)
     if array[i] == item then return true end
   end
   return false
+end
+
+-- ! Helper: Is Bounds Table
+-- Returns true for camera bounds tables accepted by Camera.setBounds.
+local function _isBoundsTable(bounds)
+  return type(bounds) == "table"
+     and type(bounds.x1) == "number"
+     and type(bounds.y1) == "number"
+     and type(bounds.x2) == "number"
+     and type(bounds.y2) == "number"
+end
+
+-- ! Helper: Read XY Pair
+-- Reads either { x, y } or array-style { x, y } option pairs.
+local function _readXYPair(value)
+  if type(value) ~= "table" then return nil, nil end
+  return value.x or value[1], value.y or value[2]
 end
 
 -- ! Helper: Get Color Callback
@@ -107,6 +134,7 @@ end
 
 class("RoxyScene").extends(Object)
 
+-- ! Initialize
 function RoxyScene:init(background)
   self.name = self.className or "RoxyScene"
   Log.debug("[RoxyScene:init] Initializing Scene: " .. self.name) --#DEBUG
@@ -153,6 +181,14 @@ function RoxyScene:enter()
   end
   self._spriteAutoAddQueue = {}
 
+  -- Activate tilemap resources that cannot be created detached from display.
+  for i = 1, #self.tilemaps do
+    local tilemap = self.tilemaps[i]
+    if tilemap and tilemap.sceneDidEnter then
+      tilemap:sceneDidEnter(self)
+    end
+  end
+
   -- Flush any queued sequence auto-starts
   local sequenceQueue = self._sequenceAutoStartQueue
   for i = 1, #sequenceQueue do
@@ -168,6 +204,72 @@ function RoxyScene:start()
   self._didStart = true
 
   self:addHandler()
+end
+
+-- ! Activate Camera
+-- Opt-in scene camera setup. Scenes that do not use Camera pay no enter cost.
+function RoxyScene:activateCamera(opts)
+  opts = opts or {}
+
+  --#DEBUG START
+  if opts.cameraBounds ~= nil then
+    error("[RoxyScene:activateCamera] Use tilemap = map for tilemap bounds or bounds = { x1, y1, x2, y2 } for raw bounds", 2)
+  end
+  if opts.map ~= nil then
+    error("[RoxyScene:activateCamera] Use tilemap = map for tilemap bounds", 2)
+  end
+  --#DEBUG END
+
+  if opts.reset ~= false then
+    resetCamera()
+  end
+
+  if opts.mode then setCameraMode(opts.mode) end
+  if opts.friction ~= nil then setCameraFriction(opts.friction) end
+  if opts.smoothing ~= nil then setCameraSmoothing(opts.smoothing) end
+
+  local deadZoneX, deadZoneY = _readXYPair(opts.deadZone)
+  if deadZoneX and deadZoneY then setCameraDeadZone(deadZoneX, deadZoneY) end
+
+  local biasX, biasY = _readXYPair(opts.bias)
+  if biasX and biasY then setCameraBias(biasX, biasY) end
+
+  local rawBounds = opts.bounds
+  if opts.clearBounds or rawBounds == false then
+    clearCameraBounds()
+  elseif rawBounds ~= nil then
+    if _isBoundsTable(rawBounds) then
+      setCameraBounds(rawBounds)
+    else --#DEBUG
+      error("[RoxyScene:activateCamera] Expected bounds = { x1, y1, x2, y2 }; use tilemap = map for tilemap bounds", 2) --#DEBUG
+    end
+  elseif opts.tilemap ~= nil then
+    local tilemap = opts.tilemap
+    local didApply = false
+    if type(tilemap) == "table" and type(tilemap.applyCameraBounds) == "function" then
+      didApply = tilemap:applyCameraBounds() == true
+    end
+    if not didApply and type(tilemap) == "table" and type(tilemap.getCameraBounds) == "function" then
+      local bounds = tilemap:getCameraBounds()
+      if bounds then setCameraBounds(bounds) end
+    end
+  end
+
+  local positionX, positionY = _readXYPair(opts.position)
+  if positionX and positionY then
+    setCameraPosition(positionX, positionY)
+  elseif opts.x ~= nil and opts.y ~= nil then
+    setCameraPosition(opts.x, opts.y)
+  end
+
+  if opts.target ~= nil then
+    setCameraTarget(opts.target ~= false and opts.target or nil, opts.targetSmoothing or opts.smoothing)
+  elseif opts.panVelocity then
+    local velocityX, velocityY = _readXYPair(opts.panVelocity)
+    setCameraPanVelocity(velocityX, velocityY)
+  end
+
+  return true
 end
 
 -- ! Update
@@ -257,7 +359,6 @@ function RoxyScene:cleanup()
 
   self._spriteAutoAddQueue = {}
   self._sequenceAutoStartQueue = {}
-  self._tilemapActivateQueue = {}
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -444,39 +545,58 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Tilemap
+-- Attaches a load-only tilemap to this scene.
 function RoxyScene:addTilemap(tilemap)
-  if not tilemap then return end
+  if not tilemap then return false end
 
   for i = 1, #self.tilemaps do
-    if self.tilemaps[i] == tilemap then return end
+    if self.tilemaps[i] == tilemap then return true end
+  end
+
+  if type(tilemap.attachToScene) ~= "function" then
+    Log.warn("[RoxyScene:addTilemap] Expected tilemap with attachToScene") --#DEBUG
+    return false
+  end
+
+  if not tilemap:attachToScene(self) then
+    return false
   end
 
   tableInsert(self.tilemaps, tilemap)
-
-  -- Give the tilemap a back-pointer so it can self-remove later
-  tilemap.scene = self
-
-  -- Set the layer manager's scene so callers don't have to
-  local layerManager = tilemap.layerManager
-  if layerManager then
-    layerManager:setScene(self)
-  end
+  return true
 end
 
 -- ! Remove Tilemap
+-- Destroys a tilemap and unregisters it from this scene.
 function RoxyScene:removeTilemap(tilemap)
-  if not tilemap then return end
-  if tilemap.scene ~= self and not _hasItem(self.tilemaps, tilemap) then return end
+  if not tilemap then return false end
+  if tilemap.scene ~= self and not _hasItem(self.tilemaps, tilemap) then return false end
 
-  if tilemap.destroy then
-    tilemap:destroy()
-  else
-    self:_unregisterTilemap(tilemap)
+  if type(tilemap.destroy) ~= "function" then
+    Log.warn("[RoxyScene:removeTilemap] Expected tilemap with destroy") --#DEBUG
+    return false
   end
+
+  tilemap:destroy()
+  return true
+end
+
+-- ! Detach Tilemap
+-- Detaches scene/display state while preserving pooled tilemap resources.
+function RoxyScene:detachTilemap(tilemap)
+  if not tilemap then return false end
+  if tilemap.scene ~= self and not _hasItem(self.tilemaps, tilemap) then return false end
+
+  if type(tilemap.detachFromScene) ~= "function" then
+    Log.warn("[RoxyScene:detachTilemap] Expected tilemap with detachFromScene") --#DEBUG
+    return false
+  end
+
+  return tilemap:detachFromScene()
 end
 
 -- ! Unregister Tilemap
--- Private cleanup path; never calls tilemap:destroy().
+-- Removes a tilemap from scene ownership without destroying it.
 function RoxyScene:_unregisterTilemap(tilemap)
   if not tilemap then return end
 
@@ -499,17 +619,18 @@ function RoxyScene:removeAllTilemaps()
 
   for i = #tilemaps, 1, -1 do
     local tilemap = tilemaps[i]
-    if tilemap.destroy then
+    if type(tilemap.destroy) == "function" then
       tilemap:destroy()
-    else
-      self:_unregisterTilemap(tilemap)
     end
   end
 end
 
 -- ! Spawn Tilemap
+-- Convenience helper that creates and attaches an orthogonal tilemap.
 function RoxyScene:spawnTilemap(path, tilemapOpts)
-  return RoxyOrthoTilemap(path, tilemapOpts, self)
+  local tilemap = RoxyOrthoTilemap(path, tilemapOpts)
+  self:addTilemap(tilemap)
+  return tilemap
 end
 
 --------------------------------------------------------------------------------
@@ -619,9 +740,15 @@ function GameplayScene:start()
 
   self.player = RoxySprite({ name = "player" }, self)
   self.map = self:spawnTilemap("assets/maps/level-01.json", {
+    cameraBounds = true,
     layerOptions = {
       Walls = { collidable = true },
     },
+  })
+  self:activateCamera({
+    tilemap = self.map,
+    target = self.player,
+    smoothing = 0.2,
   })
 
   self.fadeIn = RoxySequence(self):from(0):to(1, 0.25):play()
@@ -650,6 +777,8 @@ local player = RoxySprite({ name = "player" }, scene)
 local map = scene:spawnTilemap("assets/maps/level-01.json")
 
 scene:removeSprite(player)
+scene:detachTilemap(map)
+scene:addTilemap(map)
 scene:removeTilemap(map)
 scene:cleanup()
 

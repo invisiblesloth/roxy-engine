@@ -79,6 +79,7 @@ local COLOR_CLEAR <const> = Graphics.kColorClear
 
 class("RoxyIsoTilemap").extends(RoxyTilemap)
 
+-- ! Initialize
 function RoxyIsoTilemap:init(jsonPath, opts, scene)
   opts = opts or {}
   opts.wrapInSprites = false
@@ -113,16 +114,9 @@ function RoxyIsoTilemap:init(jsonPath, opts, scene)
   end
   self.worldHeight = worldHeightBase + maxOverdrawPx
 
-  -- Refresh camera bounds if requested
+  -- Store camera bounds for attach/apply time; constructors are load-only
   if opts and opts.cameraBounds then
-    local x2 = max(0, self.worldWidth - DISPLAY_WIDTH)
-    local y2 = max(0, self.worldHeight - DISPLAY_HEIGHT)
-
-    if type(self.setCameraBounds) == "function" then
-      pcall(function() self:setCameraBounds(0, 0, x2, y2) end)
-    elseif Camera and type(setCameraBounds) == "function" then
-      pcall(function() setCameraBounds({ x1 = 0, y1 = 0, x2 = x2, y2 = y2 }) end)
-    end
+    self:updateCameraBounds(false)
   end
 
   self._projection = "iso"
@@ -243,6 +237,7 @@ function RoxyIsoTilemap:_projectDirtyTileRect(layerConfig, tileX, tileY, tileCou
   local minX, minY = math.huge, math.huge
   local maxX, maxY = -math.huge, -math.huge
 
+  -- ! Helper: Include Projected Tile
   local function include(column, row)
     local screenX = (column - row) * halfWidth
     local screenY = (column + row) * halfHeight
@@ -326,15 +321,7 @@ end
 -- ! Rebuild Ordered Layers
 -- Build a stable, z-sorted draw list (rarely changes)
 function RoxyIsoTilemap:_rebuildOrderedLayers()
-  local items = {}
-  for name, layer in pairs(self.layers) do
-    if layer.tilemap and layer.visible ~= false then
-      local renderType = self._staticChunkLayers[name] and "chunked" or "dynamic"
-      tableInsert(items, { layer = layer, name = name, type = renderType, z = layer.zIndex or 0 })
-    end
-  end
-  tableSort(items, function(a, b) return a.z < b.z end)
-  self._orderedLayers = items
+  RoxyTilemap._rebuildOrderedLayers(self)
 end
 
 -- ! Preload Layer Caches
@@ -396,6 +383,7 @@ function RoxyIsoTilemap:_renderLayerToImage(layerName, opts)
   local seen = {}
   local order = 0
 
+  -- ! Helper: Enqueue Layer
   local function enqueueLayer(name, layer)
     if not layer or seen[layer] then return end
 
@@ -714,7 +702,7 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
 
   -- All chunks available - draw them.
   for index = 1, drawCount do
-    -- dx/dy are already integers; removed floor() for tiny win.
+    -- The dx/dy values are already integers; removed floor() for a small win.
     images[index]:draw(xs[index], ys[index])
     images[index] = nil
   end
@@ -825,7 +813,7 @@ function RoxyIsoTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
 
-  self:markLayerImageDirty(layerName)
+  self:_onLayerTilesChanged(layerName, layer)
 
   if updateSprite and layer.imageTable then
     local tileWidth, tileHeight = layer.tileWidth, layer.tileHeight
@@ -1132,7 +1120,6 @@ local scene = RoxyScene()
 
 local map = RoxyIsoTilemap("assets/maps/isometric-test-3.json", {
   cameraBounds = true,
-  deferCameraBounds = true,
   wrapInSprites = false,
   layerOptions = {
     ground = {
@@ -1147,10 +1134,11 @@ local map = RoxyIsoTilemap("assets/maps/isometric-test-3.json", {
       zIndex = 10,
     },
   },
-}, scene)
+})
+scene:addTilemap(map)
 
 function scene:start()
-  map:applyCameraBounds()
+  scene:activateCamera({ tilemap = map })
   map:forceRedraw(2)
 end
 

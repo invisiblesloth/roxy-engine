@@ -1,73 +1,58 @@
--- libraries/roxy/core/sprites/RoxySprite.lua
-
---------------------------------------------------------------------------------
--- Standard Lua Function Aliases
---------------------------------------------------------------------------------
+-- core/sprites/RoxySprite.lua
 
 local floor <const> = math.floor
-
---------------------------------------------------------------------------------
--- Playdate SDK Imports and Aliases
---------------------------------------------------------------------------------
 
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
--- Playdate SDK Function Aliases
 local performAfterDelay <const> = pd.timer.performAfterDelay
 local newImage          <const> = Graphics.image.new
 local newImageTable     <const> = Graphics.imagetable.new
-
---------------------------------------------------------------------------------
--- Roxy Framework Imports and Aliases
---------------------------------------------------------------------------------
 
 local r       <const> = roxy
 local Assets  <const> = r.Assets
 local Camera  <const> = r.Camera
 
--- Roxy Utilities
 local round <const> = r.Math.round
 
--- Roxy Framework Function Aliases
 local getAsset      <const> = Assets.getAsset
 local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
-
---------------------------------------------------------------------------------
--- Graphics Constants
---------------------------------------------------------------------------------
 
 local UNFLIPPED   <const> = Graphics.kImageUnflipped
 local FLIPPED_X   <const> = Graphics.kImageFlippedX
 local FLIPPED_Y   <const> = Graphics.kImageFlippedY
 local FLIPPED_X_Y <const> = Graphics.kImageFlippedXY
 
---------------------------------------------------------------------------------
--- Time Constants
---------------------------------------------------------------------------------
-
 local MS_PER_SECOND <const> = 1000
 
---------------------------------------------------------------------------------
--- Default Values
---------------------------------------------------------------------------------
-
 local DELAY_DEFAULT <const> = 1 -- Seconds
-
---------------------------------------------------------------------------------
--- Display Constants (Cached for Performance)
---------------------------------------------------------------------------------
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 
--- Screen bounds constants for isOnScreen optimization
 local SCREEN_LEFT_LIMIT   <const> = 0
 local SCREEN_TOP_LIMIT    <const> = 0
 local SCREEN_RIGHT_LIMIT  <const> = DISPLAY_WIDTH
 local SCREEN_BOTTOM_LIMIT <const> = DISPLAY_HEIGHT
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+-- ! Helper: Has Parallax
+-- Returns true when the sprite needs camera-relative parallax updates.
+local function _hasParallax(sprite)
+  return sprite.parallaxX ~= nil or sprite.parallaxY ~= nil
+end
+
+-- ! Helper: Set Collisions Active
+-- Toggles the Playdate collision system without changing Roxy's desired state.
+local function _setCollisionsActive(sprite, flag)
+  sprite._collisionsActive = flag == true
+  RoxySprite.super.setCollisionsEnabled(sprite, flag)
+end
 
 --------------------------------------------------------------------------------
 -- Class Definition and Init
@@ -80,17 +65,20 @@ function RoxySprite:init(options, scene)
   options = options or {}
   RoxySprite.super.init(self)
 
-  self.name               = options.name or "RoxySprite"
-  self.isRoxySprite       = true
-  self._added             = false
-  self.isPaused           = true
-  self.flip               = UNFLIPPED
-  self.animation          = nil
-  self._animationRetained = false -- Track if we retained the current animation
-  self.simpleAnimation    = nil
-  self._drawFn            = nil
-  self._ignoresDrawOffset = false
-  self._destroyed         = false -- Prevent use-after-destroy
+  self.name                     = options.name or "RoxySprite"
+  self.isRoxySprite             = true
+  self._added                   = false
+  self.isPaused                 = true
+  self.flip                     = UNFLIPPED
+  self.animation                = nil
+  self._animationRetained       = false -- Track if we retained the current animation
+  self.simpleAnimation          = nil
+  self._drawFn                  = nil
+  self._ignoresDrawOffset       = false
+  self._collisionsEnabled       = true
+  self._collisionsActive        = true
+  self._restoreCollisionsOnAdd  = false
+  self._destroyed               = false -- Prevent use-after-destroy
 
   -- Parallax (optional; only active if configured)
   self.worldX, self.worldY        = nil, nil
@@ -136,6 +124,19 @@ function RoxySprite:setIgnoresDrawOffset(flag)
 
   self._ignoresDrawOffset = flag
   RoxySprite.super.setIgnoresDrawOffset(self, flag)
+  return self
+end
+
+-- ! Set Collisions Enabled
+-- Sets the desired collision state and applies it immediately.
+function RoxySprite:setCollisionsEnabled(flag)
+  assert(type(flag) == "boolean", "[RoxySprite:setCollisionsEnabled] Expected boolean, got " .. tostring(type(flag)))
+
+  self._collisionsEnabled = flag
+  if flag == false then
+    self._restoreCollisionsOnAdd = false
+  end
+  _setCollisionsActive(self, flag)
   return self
 end
 
@@ -228,7 +229,7 @@ end
 
 -- ! Parallax enabled?
 function RoxySprite:isParallaxEnabled()
-  return self.parallaxX ~= nil or self.parallaxY ~= nil
+  return _hasParallax(self)
 end
 
 --------------------------------------------------------------------------------
@@ -460,22 +461,27 @@ function RoxySprite:setFlipState(newFlip)
   return self
 end
 
+-- ! Unflip
 function RoxySprite:unflip()
   return self:setFlipState(UNFLIPPED)
 end
 
+-- ! Flip X
 function RoxySprite:flipX()
   return self:setFlipState(FLIPPED_X)
 end
 
+-- ! Flip Y
 function RoxySprite:flipY()
   return self:setFlipState(FLIPPED_Y)
 end
 
+-- ! Flip XY
 function RoxySprite:flipXY()
   return self:setFlipState(FLIPPED_X_Y)
 end
 
+-- ! Get Orientation
 function RoxySprite:getOrientation()
   return self.flip
 end
@@ -592,7 +598,7 @@ end
 function RoxySprite:pause()
   if self.animation or self.simpleAnimation then
     self.isPaused = true
-    self:setUpdatesEnabled(false) -- Disable engine updates
+    self:setUpdatesEnabled(_hasParallax(self)) -- Parallax placement still needs updates
   end
   return self
 end
@@ -623,7 +629,7 @@ end
 function RoxySprite:stop()
   if self.animation or self.simpleAnimation then
     self.isPaused = true
-    self:setUpdatesEnabled(false)
+    self:setUpdatesEnabled(_hasParallax(self))
     if self.animation then
       self.animation:resetAnimationStart()
     elseif self.simpleAnimation then
@@ -749,7 +755,7 @@ end
 function RoxySprite:update()
   if self._destroyed then return end
 
-  local hasParallax = (self.parallaxX ~= nil) or (self.parallaxY ~= nil)
+  local hasParallax = _hasParallax(self)
   local cameraX, cameraY
 
   if hasParallax or not self._ignoresDrawOffset then
@@ -826,13 +832,25 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Sprite
+-- Re-adds the sprite and restores state needed by pooled scene reuse.
 function RoxySprite:add()
   RoxySprite.super.add(self)
   self._added = true
+  if self._restoreCollisionsOnAdd and self._collisionsEnabled ~= false then
+    _setCollisionsActive(self, true)
+  end
+  self._restoreCollisionsOnAdd = false
+  if _hasParallax(self) then
+    self:setIgnoresDrawOffset(true)
+    self:setUpdatesEnabled(true)
+  elseif (self.animation or self.simpleAnimation) and not self.isPaused then
+    self:setUpdatesEnabled(true)
+  end
   return self
 end
 
 -- ! Remove Sprite
+-- Removes the sprite while remembering state that should resume on add().
 function RoxySprite:remove()
   if self.isRoxySprite and (self.animation or self.simpleAnimation) then
     self:stop()
@@ -840,8 +858,9 @@ function RoxySprite:remove()
 
   -- Pause and disable sprite systems
   if self.isRoxySprite then self:pause() end
+  self._restoreCollisionsOnAdd = self._collisionsEnabled ~= false
   self:setUpdatesEnabled(false)
-  self:setCollisionsEnabled(false)
+  _setCollisionsActive(self, false)
 
   -- Automatically detach from owning scene, if any
   if self.scene then
@@ -922,9 +941,11 @@ function RoxySprite:destroy()
   self._drawFn = nil
 end
 
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
 --[[
-USAGE EXAMPLE:
-RoxySprite is the foundation sprite class with optional parallax support
 
 -- Basic sprite creation
 local sprite = RoxySprite({
@@ -987,16 +1008,26 @@ sprite:play()
 sprite:setSpeed(2.0) -- Double speed
 sprite:setFrameDuration(0.05) -- 20 FPS
 
--- Parallax control (can be added later)
+-- Parallax control can be added later
 sprite:setParallax(0.5, 0.8)
 sprite:setWorldPosition(200, 150)
 sprite:setParallaxOrigin(100, 75)
 
+-- Pooled scene reuse restores parallax updates and desired collisions on add()
+backgroundSprite:remove()
+backgroundSprite:add()
+
+sprite:setCollisionsEnabled(false)
+sprite:remove()
+sprite:add()
+
 -- Sprite management
-sprite:add()            -- Add to display list
-scene:addSprite(sprite) -- Add to scene
-sprite:remove()         -- Remove from display list
-sprite:destroy()        -- Clean up resources
+local looseSprite = RoxySprite({ name = "LooseSprite" })
+looseSprite:add()            -- Add to display list
+looseSprite:remove()         -- Remove from display list
+scene:addSprite(looseSprite) -- Add through scene ownership
+scene:removeSprite(looseSprite)
+looseSprite:destroy()        -- Clean up resources
 
 -- Utility methods
 local onScreen = sprite:isOnScreen()
@@ -1009,8 +1040,9 @@ sprite:flipY()
 sprite:flipXY()
 sprite:unflip()
 
--- Frame control (for animations)
+-- Frame control for animations
 sprite:drawSpecificFrame(5, true) -- Jump to frame 5 and pause
 sprite:stepFrame(1)               -- Step forward one frame
 sprite:stepFrame(-1)              -- Step backward one frame
+
 ]]--

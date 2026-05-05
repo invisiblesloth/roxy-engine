@@ -71,8 +71,7 @@ local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
 
 -- Shared reference counts for all RoxyTilemap instances.
--- Be sure to call _retain/_release in pairs so you don't
--- evict an asset another map still needs.
+-- Call _retain/_release in pairs so assets another map needs are not evicted.
 local referenceCount = {}
 
 --------------------------------------------------------------------------------
@@ -94,6 +93,16 @@ local function _removeSpritesFromScene(scene, sprites)
     for i = 1, #sprites do
       sprites[i]:remove()
     end
+  end
+end
+
+-- ! Helper: Add Sprites To Scene
+-- Adds a batch through scene ownership so pooled re-add paths stay consistent.
+local function _addSpritesToScene(scene, sprites)
+  if not scene or not sprites or #sprites == 0 then return end
+
+  for i = 1, #sprites do
+    scene:addSprite(sprites[i])
   end
 end
 
@@ -198,11 +207,24 @@ end
 -- Configuration & Validation Helpers
 --
 
+local REMOVED_OPTIONS <const> = {
+  layers = "use tileLayers for tile-layer load selection",
+  deferCameraBounds = "constructors always store camera bounds for explicit activation",
+  deferLayerSprites = "layer sprites are created during scene attachment",
+  deferObjectProcessing = "object sprites are created during scene attachment",
+}
+
 -- ! Helper: Validate Options
 -- Ensures all required options have sensible defaults
 local function _validateOptions(opts)
   -- Mutate the original options table instead of creating a new one
   opts = opts or {}
+
+  for optionName, message in pairs(REMOVED_OPTIONS) do
+    if opts[optionName] ~= nil then
+      error("[RoxyTilemap:_validateOptions] Unsupported option '" .. optionName .. "': " .. message, 3)
+    end
+  end
 
   -- Only create layerOptions table if it doesn't exist
   if not opts.layerOptions then
@@ -228,16 +250,14 @@ local function _validateOptions(opts)
     end
   end
 
-  -- Set defaults directly on options
-  if opts.layers == nil then opts.layers = {} end
+  -- Set defaults directly on options. Preserve nil versus empty selection tables:
+  -- Nil means "load all"; an empty table means "load none".
   if opts.wrapInSprites == nil then opts.wrapInSprites = true end
   if opts.zIndices == nil or type(opts.zIndices) ~= "table" then opts.zIndices = {} end
   if opts.cameraBounds == nil then opts.cameraBounds = false end
-  if opts.deferCameraBounds == nil then opts.deferCameraBounds = false end
   if opts.anchor == nil or opts.anchor ~= "topLeft" then opts.anchor = "center" end
   if opts.collisionResponse == nil then opts.collisionResponse = "overlap" end
   if opts.wallCollidesWithGroups == nil then opts.wallCollidesWithGroups = {} end
-  if opts.objectLayers == nil then opts.objectLayers = {} end
 
   -- Return the mutated options instead of a new table
   return opts
@@ -248,6 +268,7 @@ end
 --
 
 -- ! Clone Table
+-- Returns a shallow copy, or nil when the source is nil.
 local function _cloneTable(source)
   if not source then return nil end
   local clone = {}
@@ -258,10 +279,11 @@ local function _cloneTable(source)
 end
 
 -- ! Normalize Composite List
+-- Builds a deduplicated composite layer list for layer image handles.
 local function _normalizeCompositeList(primaryName, opts)
   if not opts then return nil end
 
-  local list = opts.compositeLayers or opts.layers
+  local list = opts.compositeLayers
   if type(list) ~= "table" then return nil end
 
   local deduped = {}
@@ -279,6 +301,7 @@ local function _normalizeCompositeList(primaryName, opts)
 end
 
 -- ! Build Image Handle Key
+-- Builds a stable cache key for a primary layer and optional composites.
 local function _buildImageHandleKey(layerName, compositeLayers, opts)
   if opts and opts.cacheKey then
     return tostring(opts.cacheKey)
@@ -302,12 +325,12 @@ end
 --
 
 -- ! Helper: Create Parallax Update Function
--- Creates an update function for parallax sprites (hoisted to avoid per-sprite function creation)
+-- Creates a parallax updater hoisted away from object creation hot paths
 local function _createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, roundFn, cameraGetter)
   return function(self)
     local cameraX, cameraY = cameraGetter()
 
-    -- Apply parallax origin pivot (consistent with projection classes)
+    -- Apply parallax origin pivot consistent with projection classes
     local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
     local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
@@ -327,29 +350,24 @@ end
 
 class("RoxyTilemap").extends(Object)
 
---[[
-  jsonPath: string - Path to Tiled JSON map
-  opts:   table  - Configuration opts (see _validateOptions)
-  scene:  table? - Optional scene object with addSprite method
-]]
+-- ! Initialize
+-- Parameter jsonPath: path to a Tiled JSON map
+-- Parameter opts: configuration options; see _validateOptions
+-- Parameter scene: unsupported; attach maps with scene:addTilemap(map)
 function RoxyTilemap:init(jsonPath, opts, scene)
+  --#DEBUG START
+  if scene ~= nil then
+    error("[RoxyTilemap:init] Expected RoxyTilemap(jsonPath, opts); attach with scene:addTilemap(map)", 2)
+  end
+  --#DEBUG END
+
   opts = _validateOptions(opts)
   self._opts = opts
-  self.scene = scene
+  self.scene = nil
   self._retainedPaths = {}
   self._layerImageHandles = {}
   self._destroying = false
   self._destroyed = false
-
-  local autoAdd = opts.wrapInSprites and (opts.autoAddSprites ~= false)
-  local sceneHasAdd = scene and type(scene) == "table" and type(scene.addSprite) == "function" or false
-
-  --#DEBUG START
-  if scene and not sceneHasAdd then
-    Log.warn("[RoxyTilemap:init] RoxyTilemap: scene provided but has no addSprite method")
-    -- Will fall back to sprite:add()
-  end
-  --#DEBUG END
 
   -- Load the map JSON
   local mapData, err = loadJSON(jsonPath)
@@ -386,8 +404,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   end
   tableSort(gidRanges, function(rangeA, rangeB) return rangeA.first < rangeB.first end)
 
-  -- Helper: Find tileset for a given GID
-  -- Use binary search over sorted gidRanges (firstgid ascending)
+  -- ! Helper: Tileset For GID
+  -- Uses binary search over sorted gidRanges
   local function _tilesetForGid(gid)
     local lo, hi = 1, #gidRanges
     local candidate = nil
@@ -415,15 +433,8 @@ function RoxyTilemap:init(jsonPath, opts, scene)
       x2 = max(0, self.worldWidth  - DISPLAY_WIDTH),
       y2 = max(0, self.worldHeight - DISPLAY_HEIGHT),
     }
-
-    if opts.deferCameraBounds == true then
-      -- store for later, do NOT apply now (Loader scene)
-      self._pendingCameraBounds = bounds
-    else
-      -- apply immediately
-      setCameraBounds(bounds)
-      self._pendingCameraBounds = nil
-    end
+    self._cameraBounds = bounds
+    self._pendingCameraBounds = bounds
   end
 
   -- Get map-level parallax origins
@@ -482,11 +493,12 @@ function RoxyTilemap:init(jsonPath, opts, scene)
   -- Build layers
   self.layers = {}
   local newSprites = {}
-  self.layerManager = LayerManager(self._opts, scene, self.layers, newSprites)
-  local processAllLayers = next(opts.layers) == nil -- Process all if none specified
+  self.layerManager = LayerManager(self._opts, nil, self.layers, newSprites)
+  local tileLayerSelection = opts.tileLayers
+  local processAllTileLayers = tileLayerSelection == nil
 
-  for _, layer in ipairs(mapData.layers or {}) do
-    if layer.type == "tilelayer" and (processAllLayers or opts.layers[layer.name]) then
+  for layerIndex, layer in ipairs(mapData.layers or {}) do
+    if layer.type == "tilelayer" and (processAllTileLayers or tileLayerSelection[layer.name]) then
       local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or {}
 
       -- Reject unsupported Tiled features before converting GIDs to tile indices
@@ -531,6 +543,7 @@ function RoxyTilemap:init(jsonPath, opts, scene)
         -- Create layer data structure
         local layerData = {
           name = layer.name,
+          tiledOrder = layerIndex,
           tilemap = tilemap,
           tiledId = layer.id,
           anchor = opts.anchor,
@@ -579,76 +592,215 @@ function RoxyTilemap:init(jsonPath, opts, scene)
 
         self.layerManager:addLayer(layerData)
 
-        -- Add collision sprites if layer is collidable
+        -- Store collision config for lazy attach-time sprite creation
         if layerOptions.collidable == true then
-          local emptyIDs = layerOptions.emptyIDs or {}
-          local wallGroup = layerOptions.wallSpriteGroup or opts.wallSpriteGroup
-          local layerCollidesWithGroups = layerOptions.wallCollidesWithGroups or opts.wallCollidesWithGroups
-
-          local collisionSprites = addWallSprites(tilemap, emptyIDs)
-          for _, sprite in ipairs(collisionSprites) do
-            -- Use const for tag instead of magic number
-            sprite:setTag(WALL_TAG)
-            sprite:setCollideRect(0, 0, sprite:getSize())
-
-            if wallGroup then
-              sprite:setGroups(type(wallGroup) == "table" and wallGroup or { wallGroup })
-            end
-
-            if layerCollidesWithGroups and type(layerCollidesWithGroups) == "table" and #layerCollidesWithGroups > 0 then
-              sprite:setCollidesWithGroups(layerCollidesWithGroups)
-            end
-
-            -- Default collisionResponse from layerOptions or global, not hard-coded
-            sprite.collisionResponse = layerOptions.collisionResponse or opts.collisionResponse
-          end
-          layerData.collisionSprites = collisionSprites
+          layerData.collisionConfig = {
+            emptyIDs = layerOptions.emptyIDs or {},
+            wallGroup = layerOptions.wallSpriteGroup or opts.wallSpriteGroup,
+            collidesWithGroups = layerOptions.wallCollidesWithGroups or opts.wallCollidesWithGroups,
+            collisionResponse = layerOptions.collisionResponse or opts.collisionResponse,
+          }
+          layerData._collisionDirty = true
         end
       end
     end
     ::continueLayer::
   end
-  -- Optionally defer sprite creation for layers
-  -- Default behavior remains "create now" unless explicitly deferred
-  if self._opts.wrapInSprites and (self._opts.deferLayerSprites ~= true) then
-    self.layerManager:ensureSpritesForAll()
-  end
   self.sprites = newSprites
 
-  -- Optional deferral of object-layer processing
-  local shouldDeferObjects = (opts.deferObjectProcessing == true)
-
-  -- Process object layers now unless deferred
-  local objectSprites = {}
-  if not shouldDeferObjects then
-    for _, layer in ipairs(mapData.layers or {}) do
-      if layer.type == "objectgroup" and (processAllLayers or opts.objectLayers[layer.name]) then
-        local layerOptions = (opts.layerOptions and opts.layerOptions[layer.name]) or EMPTY_TABLE
-        local sprites = processObjectLayer(layer, opts, layerOptions, autoAdd, scene, sceneHasAdd, newSprites)
-        objectSprites[layer.name] = sprites
-      end
-    end
-  end
-  self.objectSprites = objectSprites
+  self.objectSprites = {}
 
   -- Keep raw object data for later on-demand processing
   self.objectLayers = {}
-  for _, layer in ipairs(mapData.layers or {}) do
+  for layerIndex, layer in ipairs(mapData.layers or {}) do
     if layer.type == "objectgroup" then
-      -- Store name, objects, and Tiled per-layer parallax so deferred processing can inherit it
+      -- Store name, objects, and Tiled per-layer parallax for deferred processing
       self.objectLayers[layer.name] = {
         name      = layer.name,
+        tiledOrder = layerIndex,
         objects   = layer.objects or {},
         parallaxx = tonumber(layer.parallaxx),
         parallaxy = tonumber(layer.parallaxy),
       }
     end
   end
+end
 
-  -- Attach to a scene immediately if it supports tilemaps
-  if scene and scene.addTilemap then
-    scene:addTilemap(self)
+--------------------------------------------------------------------------------
+-- Scene Attachment
+--------------------------------------------------------------------------------
+
+-- ! Configure Collision Sprites
+-- Applies tag, group, and response options to wall sprites.
+function RoxyTilemap:_configureCollisionSprites(sprites, config)
+  if not sprites or not config then return end
+
+  for _, sprite in ipairs(sprites) do
+    sprite:setTag(WALL_TAG)
+    sprite:setCollideRect(0, 0, sprite:getSize())
+
+    local wallGroup = config.wallGroup
+    if wallGroup then
+      sprite:setGroups(type(wallGroup) == "table" and wallGroup or { wallGroup })
+    end
+
+    local collidesWithGroups = config.collidesWithGroups
+    if collidesWithGroups and type(collidesWithGroups) == "table" and #collidesWithGroups > 0 then
+      sprite:setCollidesWithGroups(collidesWithGroups)
+    end
+
+    sprite.collisionResponse = config.collisionResponse or "overlap"
   end
+end
+
+-- ! Rebuild Layer Collision Sprites
+-- Recreates wall sprites for one layer from its current tile values.
+function RoxyTilemap:_rebuildLayerCollisionSprites(layerData, config)
+  if not layerData or not layerData.tilemap then return nil end
+  config = config or layerData.collisionConfig
+  if not config then return nil end
+
+  if layerData.collisionSprites then
+    _removeSpritesFromScene(self.scene, layerData.collisionSprites)
+    layerData.collisionSprites = nil
+  end
+
+  local collisionSprites = addWallSprites(layerData.tilemap, config.emptyIDs or {})
+  self:_configureCollisionSprites(collisionSprites, config)
+  layerData.collisionSprites = collisionSprites
+  layerData._collisionDirty = false
+  layerData._collisionAttachPending = false
+  return collisionSprites
+end
+
+-- ! Ensure Collision Sprites Attached
+-- Builds or re-adds collision sprites once the scene can own display sprites.
+function RoxyTilemap:_ensureCollisionSpritesAttached(scene)
+  local sceneEntered = scene and scene._didEnter
+
+  for _, layerData in pairs(self.layers or {}) do
+    if layerData.collisionConfig then
+      if not layerData.collisionSprites or layerData._collisionDirty then
+        if not sceneEntered then
+          layerData._collisionAttachPending = true
+          goto continueCollisionLayer
+        end
+        self:_rebuildLayerCollisionSprites(layerData, layerData.collisionConfig)
+      end
+      _addSpritesToScene(scene, layerData.collisionSprites)
+    end
+    ::continueCollisionLayer::
+  end
+end
+
+-- ! Ensure Object Sprites Attached
+-- Processes pending object layers and re-adds preserved object sprites.
+function RoxyTilemap:_ensureObjectSpritesAttached(scene)
+  local opts = self._opts or {}
+  local objectSelection = opts.objectLayers
+  local objectSprites = self.objectSprites or {}
+
+  for layerName, _ in pairs(self.objectLayers or {}) do
+    local shouldProcess = objectSelection == nil or objectSelection[layerName]
+    if shouldProcess and not objectSprites[layerName] then
+      self:processObjectLayers({ [layerName] = true }, false, nil)
+      objectSprites = self.objectSprites or objectSprites
+    end
+  end
+
+  if opts.wrapInSprites == false or opts.autoAddSprites == false then
+    return
+  end
+
+  for _, sprites in pairs(objectSprites) do
+    _addSpritesToScene(scene, sprites)
+  end
+end
+
+-- ! Attach To Scene
+-- Attaches layer, object, and collision sprites to a scene.
+function RoxyTilemap:attachToScene(scene)
+  if self._destroyed then
+    Log.warn("[RoxyTilemap:attachToScene] Cannot attach destroyed tilemap") --#DEBUG
+    return false
+  end
+
+  if not scene or type(scene.addSprite) ~= "function" then
+    Log.warn("[RoxyTilemap:attachToScene] Expected a scene with addSprite") --#DEBUG
+    return false
+  end
+
+  if self.scene == scene then
+    return true
+  end
+
+  if self.scene and self.scene ~= scene then
+    Log.warn("[RoxyTilemap:attachToScene] Tilemap is already attached to another scene") --#DEBUG
+    return false
+  end
+
+  self.scene = scene
+
+  if self.layerManager then
+    self.layerManager:setScene(scene)
+    if self._opts.wrapInSprites then
+      self.layerManager:ensureSpritesForAll()
+    end
+  end
+
+  self:_ensureCollisionSpritesAttached(scene)
+  self:_ensureObjectSpritesAttached(scene)
+
+  return true
+end
+
+-- ! Scene Did Enter
+-- Builds display-bound resources that were deferred during pre-enter attach.
+function RoxyTilemap:sceneDidEnter(scene)
+  if self.scene ~= scene then return false end
+  self:_ensureCollisionSpritesAttached(scene)
+  return true
+end
+
+-- ! Detach From Scene
+-- Removes scene/display ownership while preserving reusable resources.
+function RoxyTilemap:detachFromScene()
+  local scene = self.scene
+
+  if self.layerManager then
+    self.layerManager:detach()
+  end
+
+  local collisionSprites = nil
+  for _, layerData in pairs(self.layers or {}) do
+    if layerData.collisionSprites then
+      for _, sprite in ipairs(layerData.collisionSprites) do
+        collisionSprites = collisionSprites or {}
+        tableInsert(collisionSprites, sprite)
+      end
+    end
+  end
+  _removeSpritesFromScene(scene, collisionSprites)
+
+  local objectSprites = nil
+  for _, sprites in pairs(self.objectSprites or {}) do
+    for _, sprite in ipairs(sprites) do
+      objectSprites = objectSprites or {}
+      tableInsert(objectSprites, sprite)
+    end
+  end
+  _removeSpritesFromScene(scene, objectSprites)
+
+  if scene and scene._unregisterTilemap then
+    scene:_unregisterTilemap(self)
+  else
+    self.scene = nil
+    if self.layerManager then
+      self.layerManager:setScene(nil)
+    end
+  end
+
+  return true
 end
 
 --------------------------------------------------------------------------------
@@ -658,17 +810,30 @@ end
 -- ! Apply Camera Bounds
 -- Apply the precomputed bounds now (e.g., when a scene enters)
 function RoxyTilemap:applyCameraBounds()
-  local pending = self._pendingCameraBounds
-  if pending then
-    setCameraBounds(pending)
+  local bounds = self._cameraBounds or self._pendingCameraBounds
+  if bounds then
+    setCameraBounds(bounds)
     self._pendingCameraBounds = nil
     return true
   end
   return false
 end
 
+-- ! Get Camera Bounds
+-- Returns a copy of stored camera bounds without applying them.
+function RoxyTilemap:getCameraBounds()
+  local bounds = self._cameraBounds or self._pendingCameraBounds
+  if not bounds then return nil end
+  return {
+    x1 = bounds.x1,
+    y1 = bounds.y1,
+    x2 = bounds.x2,
+    y2 = bounds.y2,
+  }
+end
+
 -- ! Update Camera Bounds
--- Recompute (in case the display size or map changed) and optionally apply or defer
+-- Recompute bounds after a display or map-size change and optionally apply them.
 function RoxyTilemap:updateCameraBounds(shouldApply)
   local bounds = {
     x1 = 0,
@@ -676,6 +841,7 @@ function RoxyTilemap:updateCameraBounds(shouldApply)
     x2 = max(0, self.worldWidth  - DISPLAY_WIDTH),
     y2 = max(0, self.worldHeight - DISPLAY_HEIGHT),
   }
+  self._cameraBounds = bounds
   if shouldApply then
     setCameraBounds(bounds)
     self._pendingCameraBounds = nil
@@ -1014,6 +1180,33 @@ function RoxyTilemap:_clearLayerChunkState(layerName, removeConfig)
   self._frameDirty = true
 end
 
+-- ! Rebuild Ordered Layers
+-- Cold-path stable z-order cache used by projection draw loops.
+function RoxyTilemap:_rebuildOrderedLayers()
+  local items = {}
+  local staticLayers = self._staticChunkLayers or EMPTY_TABLE
+
+  for name, layerData in pairs(self.layers or EMPTY_TABLE) do
+    if layerData.tilemap and layerData.visible ~= false then
+      local renderType = staticLayers[name] and "chunked" or "dynamic"
+      tableInsert(items, {
+        layer = layerData,
+        name = name,
+        type = renderType,
+        z = layerData.zIndex or 0,
+        order = layerData.tiledOrder or 0,
+      })
+    end
+  end
+
+  tableSort(items, function(a, b)
+    if a.z == b.z then return a.order < b.order end
+    return a.z < b.z
+  end)
+
+  self._orderedLayers = items
+end
+
 -- ! Layer Structure Changed
 -- Invalidates ordered layers and render state after hide/show/remove.
 function RoxyTilemap:_onLayerStructureChanged(layerName, reason, layerData)
@@ -1050,6 +1243,20 @@ function RoxyTilemap:_onLayerRenderResourcesChanged(layerName)
   end
 end
 
+-- ! Layer Tiles Changed
+-- Marks derived state that depends on tile values.
+function RoxyTilemap:_onLayerTilesChanged(layerName, layerData)
+  layerData = layerData or (self.layers and self.layers[layerName])
+  if not layerData then return end
+
+  if layerData.collisionConfig then
+    layerData._collisionDirty = true
+  end
+
+  self:markLayerImageDirty(layerName)
+  self._frameDirty = true
+end
+
 --------------------------------------------------------------------------------
 -- Layer Visibility & Management
 --------------------------------------------------------------------------------
@@ -1060,7 +1267,9 @@ function RoxyTilemap:hideLayer(name)
   local layerData = self.layers and self.layers[name]
   if self.layerManager and self.layerManager:hide(name) then
     self:_onLayerStructureChanged(name, "hide", layerData)
+    return true
   end
+  return false
 end
 
 -- ! Show Layer
@@ -1069,9 +1278,19 @@ function RoxyTilemap:showLayer(name)
   local layerData = self.layers and self.layers[name]
   if self.layerManager and self.layerManager:show(name) then
     self:_onLayerStructureChanged(name, "show", layerData)
+    return true
   end
+  return false
 end
 
+-- ! Set Layer Visible
+-- Convenience wrapper for showLayer and hideLayer.
+function RoxyTilemap:setLayerVisible(name, visible)
+  if visible ~= false then
+    return self:showLayer(name)
+  end
+  return self:hideLayer(name)
+end
 
 -- ! Remove Layer
 -- Completely removes a tile layer and cleans up all associated resources
@@ -1079,7 +1298,9 @@ function RoxyTilemap:removeLayer(name)
   local layerData = self.layers and self.layers[name]
   if self.layerManager and self.layerManager:remove(name) then
     self:_onLayerStructureChanged(name, "remove", layerData)
+    return true
   end
+  return false
 end
 
 --------------------------------------------------------------------------------
@@ -1087,12 +1308,12 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Set Layer Image Table
--- Swap the image table used by a tile layer at runtime
--- newImageTableOrPath: a Playdate image table object or a string path (Tiled/normalized)
--- remapFn: optional table or function to remap tile indices (oldIndex --> newIndex)
+-- Swap the image table used by a tile layer at runtime.
+-- Parameter newImageTableOrPath: a Playdate image table object or a string path.
+-- Parameter remapFn: optional table or function to remap tile indices (oldIndex --> newIndex).
 --   - If a table, remapFn[oldIndex] = newIndex
 --   - If a function, newIndex = remapFn(oldIndex) (return nil to keep oldIndex)
--- Does not rebuild collision sprites; call rebuildLayerCollisions if passability changes
+-- Does not rebuild collision sprites; call rebuildLayerCollisions if passability changes.
 function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remapFn)
   local updated = self.layerManager and self.layerManager:setImageTable(name, newImageTableOrPath, remapFn)
   if updated then
@@ -1103,8 +1324,8 @@ function RoxyTilemap:setLayerImageTable(name, newImageTableOrPath, remapFn)
 end
 
 -- ! Rebuild Layer Collisions
--- Recreates wall sprites for a tile layer using the provided emptyIDs
--- Use when a tileset swap changes which tile indices should be passable vs solid
+-- Recreates wall sprites for a tile layer using the provided emptyIDs.
+-- Use when a tileset swap changes which tile indices should be passable or solid.
 function RoxyTilemap:rebuildLayerCollisions(name, emptyIDs, wallGroup, collidesWithGroups, collisionResponse)
   local layerData = self.layers and self.layers[name]
   if not layerData or not layerData.tilemap then return end
@@ -1130,35 +1351,26 @@ function RoxyTilemap:rebuildLayerCollisions(name, emptyIDs, wallGroup, collidesW
     or global.collisionResponse
     or "overlap"
 
-  -- Remove previous collision sprites
-  if layerData.collisionSprites then
-    for _, sprite in ipairs(layerData.collisionSprites) do
-      sprite:remove()
+  layerData.collisionConfig = {
+    emptyIDs = resolvedEmptyIDs,
+    wallGroup = resolvedWallGroup,
+    collidesWithGroups = resolvedCollidesWithGroups,
+    collisionResponse = resolvedResponse,
+  }
+
+  if not (self.scene and self.scene._didEnter) then
+    if layerData.collisionSprites then
+      _removeSpritesFromScene(self.scene, layerData.collisionSprites)
+      layerData.collisionSprites = nil
     end
-    layerData.collisionSprites = nil
+    layerData._collisionDirty = true
+    layerData._collisionAttachPending = true
+    return nil
   end
 
-  -- Build new collision sprites from current tile indices
-  local collisionSprites = addWallSprites(layerData.tilemap, resolvedEmptyIDs)
-
-  -- Configure sprites with collision properties
-  for _, sprite in ipairs(collisionSprites) do
-    -- Use const for tag, apply resolved defaults
-    sprite:setTag(WALL_TAG)
-    sprite:setCollideRect(0, 0, sprite:getSize())
-
-    if resolvedWallGroup then
-      sprite:setGroups(type(resolvedWallGroup) == "table" and resolvedWallGroup or { resolvedWallGroup })
-    end
-
-    if resolvedCollidesWithGroups and type(resolvedCollidesWithGroups) == "table" and #resolvedCollidesWithGroups > 0 then
-      sprite:setCollidesWithGroups(resolvedCollidesWithGroups)
-    end
-
-    sprite.collisionResponse = resolvedResponse
-  end
-
-  layerData.collisionSprites = collisionSprites
+  local collisionSprites = self:_rebuildLayerCollisionSprites(layerData, layerData.collisionConfig)
+  _addSpritesToScene(self.scene, collisionSprites)
+  return collisionSprites
 end
 
 --------------------------------------------------------------------------------
@@ -1166,15 +1378,26 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Set Layer Origin
--- Updates the origin for a single layer and keeps any display sprite in sync
+-- Updates the origin for a single layer and keeps any display sprite in sync.
 function RoxyTilemap:setLayerOrigin(name, x, y)
-  return self.layerManager and self.layerManager:setOrigin(name, x, y)
+  local updated = self.layerManager and self.layerManager:setOrigin(name, x, y)
+  if updated then
+    self:markLayerImageDirty(name)
+    self._frameDirty = true
+  end
+  return updated
 end
 
 -- ! Set Origin For All Layers
--- Convenience method to apply the same origin to every tile layer
+-- Convenience method to apply the same origin to every tile layer.
 function RoxyTilemap:setOriginForAllLayers(x, y)
-  return self.layerManager and self.layerManager:setOriginForAll(x, y)
+  if not self.layerManager then return false end
+  self.layerManager:setOriginForAll(x, y)
+  for name, _ in pairs(self.layers or {}) do
+    self:markLayerImageDirty(name)
+  end
+  self._frameDirty = true
+  return true
 end
 
 --------------------------------------------------------------------------------
@@ -1541,22 +1764,6 @@ end
 -- Cleanup
 --------------------------------------------------------------------------------
 
--- ! Detach Sprites
-function RoxyTilemap:detachSprites()
-  if self.layerManager then self.layerManager:detach() end
-
-  -- Collect object sprites so the scene can unregister them in one batch
-  local objectSprites = nil
-  for _, sprites in pairs(self.objectSprites or {}) do
-    for _, sprite in ipairs(sprites) do
-      objectSprites = objectSprites or {}
-      tableInsert(objectSprites, sprite)
-    end
-  end
-  _removeSpritesFromScene(self.scene, objectSprites)
-  self.objectSprites = {}
-end
-
 -- ! Destroy
 -- Cleans up all resources and removes sprites from display
 function RoxyTilemap:destroy()
@@ -1642,7 +1849,6 @@ local scene = RoxyScene()
 -- RoxyTilemap is usually instantiated through a projection subclass.
 local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
   cameraBounds = true,
-  deferCameraBounds = true,
   wrapInSprites = true,
   layerOptions = {
     Ground = {
@@ -1661,9 +1867,10 @@ local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
       spriteGroup = 2,
     },
   },
-}, scene)
+})
+scene:addTilemap(map)
 
-map:applyCameraBounds()
+scene:activateCamera({ tilemap = map })
 local worldWidth, worldHeight = map:getWorldSize()
 
 map:hideLayer("Decor")
@@ -1680,6 +1887,8 @@ map:rebuildLayerCollisions("Walls", { 0 })
 map:processObjectLayers({ Objects = true })
 local pickups = map:findObjectSpritesByType("Objects", "pickup")
 
+scene:detachTilemap(map)
+scene:addTilemap(map)
 map:removeObjectLayer("Objects")
 map:removeLayer("Decor")
 map:destroy()

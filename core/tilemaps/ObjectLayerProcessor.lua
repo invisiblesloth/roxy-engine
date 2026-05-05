@@ -34,6 +34,19 @@ local OBJECT_TAG <const> = 2
 local COLOR_BLACK <const> = Graphics.kColorBlack
 
 --------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+-- ! Helper: Non-Empty String
+-- Returns a string only when it contains visible text.
+local function _nonEmptyString(value)
+  if type(value) == "string" and value:match("%S") then
+    return value
+  end
+  return nil
+end
+
+--------------------------------------------------------------------------------
 -- Create Default Object Sprite
 --------------------------------------------------------------------------------
 
@@ -72,15 +85,18 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
 
   -- Determine image path
   local imagePath = nil
-  if objectProperties.image or objectProperties.sprite then
-    imagePath = IMAGE_PATH_PREFIX .. (objectProperties.image or objectProperties.sprite)
+  local explicitImage = _nonEmptyString(objectProperties.image) or _nonEmptyString(objectProperties.sprite)
+  if explicitImage then
+    imagePath = IMAGE_PATH_PREFIX .. explicitImage
   else
-    local baseName = object.type or object.name or "default"
-    imagePath = IMAGE_PATH_PREFIX .. baseName
+    local baseName = _nonEmptyString(object.type) or _nonEmptyString(object.name)
+    if baseName then
+      imagePath = IMAGE_PATH_PREFIX .. baseName
+    end
   end
 
   -- Try to load the image (optional)
-  local img = getImageCached(imagePath) or nil
+  local img = imagePath and getImageCached(imagePath) or nil
   local didRetain = false
   if img then
     didRetain = retain(imagePath, img)
@@ -120,7 +136,7 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
     end
   end
 
-  -- Track retained imagePath for cleanup
+  -- Track retained image path for cleanup
   sprite._retainedImagePath = didRetain and imagePath or nil
 
   -- Store object properties on sprite for reference
@@ -157,13 +173,13 @@ function ObjectLayerProcessor.processObjectLayer(layer, opts, layerOptions, auto
     elseif layerOptions.spriteFactory and type(layerOptions.spriteFactory) == "function" then
       sprite = layerOptions.spriteFactory(object, layer, layerOptions)
     else
-      -- Default creation uses resolved layer parallax as a fallback,
-      -- but still allows object.properties to override.
+      -- Default creation uses resolved layer parallax as a fallback.
+      -- Object properties can still override it.
       sprite = ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, resolvedParallaxX, resolvedParallaxY)
     end
 
     if sprite then
-      -- Compute world position (center vs topLeft)
+      -- Compute world position from the configured anchor
       local positionX, positionY = object.x or 0, object.y or 0
       if opts.anchor == "center" then
         positionX += (object.width  or 0) * 0.5
@@ -176,7 +192,7 @@ function ObjectLayerProcessor.processObjectLayer(layer, opts, layerOptions, auto
         sprite:moveTo(positionX, positionY)
       end
 
-      -- Z-index & visibility
+      -- Z-index and visibility
       local zIndex = layerOptions.zIndex or (opts.zIndices and opts.zIndices[layer.name]) or 0
       sprite:setZIndex(zIndex)
       sprite:setVisible(layerOptions.visible ~= false)
@@ -245,3 +261,36 @@ function ObjectLayerProcessor.processObjectLayers(tilemapInstance, mapData, opts
   tilemapInstance.objectSprites = objectSprites
   return processedCount
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+local scene = RoxyScene()
+
+local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
+  objectLayers = {
+    Pickups = true,
+  },
+  layerOptions = {
+    Pickups = {
+      collidable = true,
+      spriteGroup = 2,
+      collidesWithGroups = { 1 },
+      parallaxX = 1,
+      parallaxY = 1,
+    },
+  },
+})
+scene:addTilemap(map)
+
+local pickups = map:getObjectSprites("Pickups")
+local strawberry = map:findObjectSprite("Pickups", function(sprite)
+  return sprite.objectProps.kind == "strawberry"
+end)
+
+map:removeObjectLayer("Pickups")
+
+]]--
