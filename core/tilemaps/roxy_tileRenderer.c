@@ -50,6 +50,49 @@ static inline int indexFromRowColumn(const RoxyTileRendererC* tileRenderer, int 
     return rowZeroBased * tileRenderer->mapWidth + columnZeroBased;
 }
 
+static int tileCountForRenderer(const RoxyTileRendererC* tileRenderer, size_t* outCount)
+{
+    if (!roxy_valid(tileRenderer) || !outCount) return 0;
+    if (tileRenderer->mapWidth <= 0 || tileRenderer->mapHeight <= 0) return 0;
+    if (tileRenderer->mapWidth > INT_MAX / tileRenderer->mapHeight) return 0;
+
+    *outCount = (size_t)tileRenderer->mapWidth * (size_t)tileRenderer->mapHeight;
+    return 1;
+}
+
+static inline void recordTilesPayloadBytes(RoxyTileRendererC* tileRenderer, size_t bytesLength)
+{
+    tileRenderer->tilesCountBytes = bytesLength > (size_t)INT_MAX ? INT_MAX : (int)bytesLength;
+}
+
+static inline int sanitizeTileValue(const RoxyTileRendererC* tileRenderer, int value)
+{
+    if (value < 0 || value > tileRenderer->imageCount) return 0;
+    return value;
+}
+
+static int ensureTilesAllocated(RoxyTileRendererC* tileRenderer, int zeroFill)
+{
+    if (!roxy_valid(tileRenderer)) return 0;
+    if (tileRenderer->tiles) return 1;
+
+    size_t tilesCount = 0;
+    if (!tileCountForRenderer(tileRenderer, &tilesCount) || tilesCount > SIZE_MAX / sizeof(int32_t)) {
+        pd->system->logToConsole("RoxyTileRendererC: tiles size overflow");
+        return 0;
+    }
+
+    tileRenderer->tiles = (int32_t*)pd_alloc(sizeof(int32_t) * tilesCount);
+    if (!tileRenderer->tiles) return 0;
+    ROXY_LABEL(tileRenderer->tiles, "RoxyTileRendererC.tiles");
+
+    if (zeroFill) {
+        roxy_memset(tileRenderer->tiles, 0, sizeof(int32_t) * tilesCount);
+    }
+
+    return 1;
+}
+
 static inline int16_t safeOffsetX(const RoxyTileRendererC* tileRenderer, int tileIndex)
 {
     // Guard null offset array
@@ -215,45 +258,47 @@ static int roxy_tileRenderer_newobject(lua_State* L)
         tileRenderer->offsetY[i] = offsetY;
     }
 
-    // Tiles blob (optional) with overflow guard
-    const int tilesCount = mw * mh;
-    if ((size_t)tilesCount > SIZE_MAX / sizeof(int32_t)) {
+    // Tiles blob (optional) with overflow guard. Without an initial blob, tile
+    // memory is allocated lazily by the first native sync.
+    const size_t tilesCount = (size_t)mw * (size_t)mh;
+    if (tilesCount > SIZE_MAX / sizeof(int32_t)) {
         pd->system->logToConsole("RoxyTileRendererC.new: tiles size overflow");
         roxy_tileRenderer_free(tileRenderer);
         pd_free(tileRenderer);
         return 0;
     }
-    tileRenderer->tiles = (int32_t*)pd_alloc(sizeof(int32_t) * tilesCount);
-    if (!tileRenderer->tiles) {
-        roxy_tileRenderer_free(tileRenderer);
-        pd_free(tileRenderer);
-        return 0;
-    }
-    roxy_memset(tileRenderer->tiles, 0, sizeof(int32_t) * tilesCount);
-    ROXY_LABEL(tileRenderer->tiles, "RoxyTileRendererC.tiles");
+    const size_t tilesCountBytes16 = tilesCount * 2;
+    const size_t tilesCountBytes32 = tilesCount * 4;
 
     if (argumentCount >= 13 && !pd->lua->argIsNil(13)) {
         size_t bytesLength = 0;
         const char* bytes = pd->lua->getArgBytes(13, &bytesLength);
         if (bytes && bytesLength > 0) {
-            if ((int)bytesLength == tilesCount * 2) {
-                for (int i = 0; i < tilesCount; ++i) {
+            if (bytesLength == tilesCountBytes16) {
+                if (!ensureTilesAllocated(tileRenderer, 0)) {
+                    roxy_tileRenderer_free(tileRenderer);
+                    pd_free(tileRenderer);
+                    return 0;
+                }
+                for (size_t i = 0; i < tilesCount; ++i) {
                     uint16_t value = ((const uint8_t*)bytes)[2*i] | (((const uint8_t*)bytes)[2*i + 1] << 8);
                     int v = (int)value;
-                    // Sanitize tile value to avoid out-of-range image table lookups
-                    if (v < 0 || v > tileRenderer->imageCount) v = 0;
-                    tileRenderer->tiles[i] = v;
+                    tileRenderer->tiles[i] = sanitizeTileValue(tileRenderer, v);
                 }
-                tileRenderer->tilesCountBytes = (int)bytesLength;
-            } else if ((int)bytesLength == tilesCount * 4) {
-                for (int i = 0; i < tilesCount; ++i) {
+                recordTilesPayloadBytes(tileRenderer, bytesLength);
+            } else if (bytesLength == tilesCountBytes32) {
+                if (!ensureTilesAllocated(tileRenderer, 0)) {
+                    roxy_tileRenderer_free(tileRenderer);
+                    pd_free(tileRenderer);
+                    return 0;
+                }
+                for (size_t i = 0; i < tilesCount; ++i) {
                     const uint8_t* p = (const uint8_t*)bytes + 4*i;
-                    int v = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-                    // Sanitize tile value
-                    if (v < 0 || v > tileRenderer->imageCount) v = 0;
-                    tileRenderer->tiles[i] = v;
+                    uint32_t raw = ((uint32_t)p[0]) | (((uint32_t)p[1]) << 8) | (((uint32_t)p[2]) << 16) | (((uint32_t)p[3]) << 24);
+                    int v = (int)raw;
+                    tileRenderer->tiles[i] = sanitizeTileValue(tileRenderer, v);
                 }
-                tileRenderer->tilesCountBytes = (int)bytesLength;
+                recordTilesPayloadBytes(tileRenderer, bytesLength);
             }
         }
     }
@@ -286,43 +331,124 @@ static int roxy_tileRenderer_updateTilesBytes(lua_State* L)
     const char* bytes = pd->lua->getArgBytes(2, &bytesLength);
     if (!bytes || bytesLength == 0) return 0;
 
-    const int tilesCount = tileRenderer->mapWidth * tileRenderer->mapHeight;
-    if ((int)bytesLength != tilesCount * 2 && (int)bytesLength != tilesCount * 4) {
-        pd->system->logToConsole("RoxyTileRendererC.updateTilesBytes: bad size %d (expected %d or %d)",
-                                 (int)bytesLength, tilesCount*2, tilesCount*4);
+    size_t tilesCount = 0;
+    if (!tileCountForRenderer(tileRenderer, &tilesCount) || tilesCount > SIZE_MAX / 4) {
+        pd->system->logToConsole("RoxyTileRendererC.updateTilesBytes: tiles size overflow");
         return 0;
     }
 
-    if (!tileRenderer->tiles) {
-        if ((size_t)tilesCount > SIZE_MAX / sizeof(int32_t)) {
-            pd->system->logToConsole("RoxyTileRendererC.updateTilesBytes: tiles size overflow");
-            return 0;
-        }
-        tileRenderer->tiles = (int32_t*)pd_alloc(sizeof(int32_t) * tilesCount);
-        if (!tileRenderer->tiles) return 0;
-        ROXY_LABEL(tileRenderer->tiles, "RoxyTileRendererC.tiles");
+    const size_t tilesCountBytes16 = tilesCount * 2;
+    const size_t tilesCountBytes32 = tilesCount * 4;
+    if (bytesLength != tilesCountBytes16 && bytesLength != tilesCountBytes32) {
+        pd->system->logToConsole("RoxyTileRendererC.updateTilesBytes: bad size %lu (expected %lu or %lu)",
+                                 (unsigned long)bytesLength,
+                                 (unsigned long)tilesCountBytes16,
+                                 (unsigned long)tilesCountBytes32);
+        return 0;
     }
 
-    if ((int)bytesLength == tilesCount * 2) {
-        for (int i = 0; i < tilesCount; ++i) {
+    if (!ensureTilesAllocated(tileRenderer, 0)) return 0;
+
+    if (bytesLength == tilesCountBytes16) {
+        for (size_t i = 0; i < tilesCount; ++i) {
             uint16_t value = ((const uint8_t*)bytes)[2*i] | (((const uint8_t*)bytes)[2*i + 1] << 8);
             int v = (int)value;
-            // Sanitize tile value
-            if (v < 0 || v > tileRenderer->imageCount) v = 0;
-            tileRenderer->tiles[i] = v;
+            tileRenderer->tiles[i] = sanitizeTileValue(tileRenderer, v);
         }
-        tileRenderer->tilesCountBytes = (int)bytesLength;
+        recordTilesPayloadBytes(tileRenderer, bytesLength);
     } else {
-        for (int i = 0; i < tilesCount; ++i) {
+        for (size_t i = 0; i < tilesCount; ++i) {
             const uint8_t* p = (const uint8_t*)bytes + 4*i;
-            int v = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
-            // Sanitize tile value
-            if (v < 0 || v > tileRenderer->imageCount) v = 0;
-            tileRenderer->tiles[i] = v;
+            uint32_t raw = ((uint32_t)p[0]) | (((uint32_t)p[1]) << 8) | (((uint32_t)p[2]) << 16) | (((uint32_t)p[3]) << 24);
+            int v = (int)raw;
+            tileRenderer->tiles[i] = sanitizeTileValue(tileRenderer, v);
         }
-        tileRenderer->tilesCountBytes = (int)bytesLength;
+        recordTilesPayloadBytes(tileRenderer, bytesLength);
     }
     return 0;
+}
+
+// ! Update Tiles Bytes Range
+// lua: ok = self:updateTilesBytesRange(bytes, startIndex, count)
+// startIndex is 1-based row-major. count == 0 is a no-op.
+static int roxy_tileRenderer_updateTilesBytesRange(lua_State* L)
+{
+    RoxyTileRendererC* tileRenderer = (RoxyTileRendererC*)pd->lua->getArgObject(1, "RoxyTileRendererC", NULL);
+    if (!roxy_valid(tileRenderer)) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    size_t tilesCount = 0;
+    if (!tileCountForRenderer(tileRenderer, &tilesCount)) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    const int startIndex = pd->lua->getArgInt(3);
+    const int count = pd->lua->getArgInt(4);
+
+    if (count < 0 || startIndex < 1) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    if (count == 0) {
+        pd->lua->pushBool((size_t)startIndex <= tilesCount + 1);
+        return 1;
+    }
+
+    const size_t totalCells = tilesCount;
+    const size_t rangeStart = (size_t)startIndex;
+    const size_t rangeCount = (size_t)count;
+    if (rangeCount > totalCells || rangeStart > totalCells || rangeCount > totalCells - rangeStart + 1) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    size_t bytesLength = 0;
+    const char* bytes = pd->lua->getArgBytes(2, &bytesLength);
+    if (!bytes) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    if (rangeCount > SIZE_MAX / 4) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+    const size_t bytes16 = rangeCount * 2;
+    const size_t bytes32 = rangeCount * 4;
+    const int payloadWidth = (bytesLength == bytes16) ? 2 : ((bytesLength == bytes32) ? 4 : 0);
+    if (payloadWidth == 0) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    if (!ensureTilesAllocated(tileRenderer, 1)) {
+        pd->lua->pushBool(0);
+        return 1;
+    }
+
+    const size_t destinationStart = rangeStart - 1;
+    if (payloadWidth == 2) {
+        for (size_t i = 0; i < rangeCount; ++i) {
+            uint16_t value = ((const uint8_t*)bytes)[2*i] | (((const uint8_t*)bytes)[2*i + 1] << 8);
+            int v = (int)value;
+            tileRenderer->tiles[destinationStart + i] = sanitizeTileValue(tileRenderer, v);
+        }
+    } else {
+        for (size_t i = 0; i < rangeCount; ++i) {
+            const uint8_t* p = (const uint8_t*)bytes + 4*i;
+            uint32_t raw = ((uint32_t)p[0]) | (((uint32_t)p[1]) << 8) | (((uint32_t)p[2]) << 16) | (((uint32_t)p[3]) << 24);
+            int v = (int)raw;
+            tileRenderer->tiles[destinationStart + i] = sanitizeTileValue(tileRenderer, v);
+        }
+    }
+
+    recordTilesPayloadBytes(tileRenderer, bytesLength);
+    pd->lua->pushBool(1);
+    return 1;
 }
 
 // ! Set Tile At
@@ -618,6 +744,7 @@ static const lua_reg roxyTileRendererLib[] = {
     {    "new",                     roxy_tileRenderer_newobject               },
     {    "__gc",                    roxy_tileRenderer_gc                      },
     {    "updateTilesBytes",        roxy_tileRenderer_updateTilesBytes        },
+    {    "updateTilesBytesRange",   roxy_tileRenderer_updateTilesBytesRange   },
     {    "setTileAt",               roxy_tileRenderer_setTileAt               },
     {    "drawRows",                roxy_tileRenderer_drawRows                },
     {    "renderToBuffer",          roxy_tileRenderer_renderToBuffer          },

@@ -27,7 +27,7 @@ typedef struct {
 
     // Tiles: copied into C memory for speed (row-major, 0-based)
     int32_t* tiles;           // Length = mapWidth*mapHeight
-    int      tilesCountBytes; // Original byte size, for sanity/debug
+    int      tilesCountBytes; // Last accepted tile payload byte size
 
     // Lifetime guard
     uint32_t magic; // Magic cookie used to validate the instance

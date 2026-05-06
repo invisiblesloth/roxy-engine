@@ -54,6 +54,8 @@ local sanitizeTileIndex       <const> = TilemapHelpers.sanitizeTileIndex
 local sanitizeTilesInPlace    <const> = TilemapHelpers.sanitizeTilesInPlace
 local syncNativeTiles         <const> = TilemapHelpers.syncNativeTiles
 local dequeueBestWarmJob      <const> = TilemapHelpers.dequeueBestWarmJob
+local clearChunkDrawScratch   <const> = TilemapHelpers.clearChunkDrawScratch
+local recordPerfCount         <const> = TilemapHelpers.recordPerfCount --#DEBUG
 
 -- C-side bindings
 local newTileRenderer_C <const> = RoxyTileRendererC and RoxyTileRendererC.new or nil
@@ -126,7 +128,8 @@ function RoxyIsoTilemap:init(jsonPath, opts, scene)
   self._orderedLayers = {}
 
   self._warmQueue = {}  -- Queue of { layerConfig, chunkX, chunkY, key }
-  self._warmSet   = {}  -- Tracks keys already queued
+  self._warmSet = {}  -- Tracks keys already queued
+  self._chunkDrawScratch = { images = {}, xs = {}, ys = {} }
 
   self._didPrimeVisible = false -- One-time prime flag
   self._frameDirty = true -- Assume dirty until first frame settles
@@ -351,8 +354,9 @@ end
 -- Amortize chunk builds across frames
 function RoxyIsoTilemap:_warmSomeChunks()
   local built = 0
+  local centerCache = {}
   while built < BUILD_BUDGET and #self._warmQueue > 0 do
-    local job = dequeueBestWarmJob(self) -- Pick closest
+    local job = dequeueBestWarmJob(self, centerCache) -- Pick closest
     if not job then break end
     if not getIsAssetCached(self._globalChunkBucket, job.key) then
       local img = self:_buildChunk(job.layerConfig, job.chunkX, job.chunkY)
@@ -551,11 +555,13 @@ function RoxyIsoTilemap:_renderLayerToBuffer(layerData, targetImage, offsetX, of
 
   -- Fast path: native renderer to a real LCDBitmap
   if nativeRenderer and targetImage ~= nil then
+    recordPerfCount("tilemap.nativeBuffer.iso") --#DEBUG
     nativeRenderer:renderToBuffer(targetImage, offsetX, offsetY, bufferWidth, bufferHeight)
     return
   end
 
   -- Fallback Lua implementation (rare in practice)
+  recordPerfCount("tilemap.luaBuffer.iso") --#DEBUG
   Log.debug("[_renderLayerToBuffer] Falling back on Lua implementation") --#DEBUG
 
   local imageTable = layerData.imageTable
@@ -659,10 +665,6 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
   local imageWidth, imageHeight = layerConfig.bufferWidth, layerConfig.bufferHeight
 
   local scratch = self._chunkDrawScratch
-  if not scratch then
-    scratch = { images = {}, xs = {}, ys = {} }
-    self._chunkDrawScratch = scratch
-  end
   local images, xs, ys = scratch.images, scratch.xs, scratch.ys
   local drawCount = 0
 
@@ -672,6 +674,7 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
       local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
       local img = getCachedAsset(self._globalChunkBucket, key)
       if img then
+        recordPerfCount("tilemap.chunkHit.iso") --#DEBUG
         local dx = chunkX * size - overlap + screenX
         local dy = rowDeltaY
         -- Offscreen culling
@@ -682,6 +685,7 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
           ys[drawCount] = dy
         end
       else
+        recordPerfCount("tilemap.chunkMiss.iso") --#DEBUG
         anyMissing = true
         self:_enqueueWarm(layerConfig, chunkX, chunkY)
       end
@@ -689,9 +693,7 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
   end
 
   if anyMissing then
-    for index = 1, drawCount do
-      images[index] = nil
-    end
+    clearChunkDrawScratch(scratch, drawCount)
     -- Single-pass fallback - render the layer once (native rows or Lua), not per-miss.
     -- Clip to screen to be safe.
     setClipRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
@@ -704,8 +706,8 @@ function RoxyIsoTilemap:_drawStaticLayerChunked(layerName)
   for index = 1, drawCount do
     -- The dx/dy values are already integers; removed floor() for a small win.
     images[index]:draw(xs[index], ys[index])
-    images[index] = nil
   end
+  clearChunkDrawScratch(scratch, drawCount)
 end
 
 --
@@ -978,6 +980,7 @@ function RoxyIsoTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, maxC
 
     local tr = layerData._nativeRenderer
     if tr then
+      recordPerfCount("tilemap.nativeRows.iso") --#DEBUG
       tr:drawRows(
         rowStart, rowEnd,
         minX, maxX,
@@ -996,6 +999,7 @@ function RoxyIsoTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, maxC
   --
 
   Log.debug("[drawLayerRows] Falling back on Lua implementation") --#DEBUG
+  recordPerfCount("tilemap.luaRows.iso") --#DEBUG
 
   local imageTable = layerData.imageTable
   if not imageTable then

@@ -54,6 +54,8 @@ local sanitizeTileIndex       <const> = TilemapHelpers.sanitizeTileIndex
 local sanitizeTilesInPlace    <const> = TilemapHelpers.sanitizeTilesInPlace
 local syncNativeTiles         <const> = TilemapHelpers.syncNativeTiles
 local dequeueBestWarmJob      <const> = TilemapHelpers.dequeueBestWarmJob
+local clearChunkDrawScratch   <const> = TilemapHelpers.clearChunkDrawScratch
+local recordPerfCount         <const> = TilemapHelpers.recordPerfCount --#DEBUG
 
 -- C-side bindings
 local newTileRenderer_C <const> = RoxyTileRendererC and RoxyTileRendererC.new or nil
@@ -354,8 +356,9 @@ end
 -- Amortize chunk builds across frames
 function RoxyStagTilemap:_warmSomeChunks()
   local built = 0
+  local centerCache = {}
   while built < BUILD_BUDGET and #self._warmQueue > 0 do
-    local job = dequeueBestWarmJob(self)
+    local job = dequeueBestWarmJob(self, centerCache)
     if not job then break end
     if not getIsAssetCached(self._globalChunkBucket, job.key) then
       local img = self:_buildChunk(job.layerConfig, job.chunkX, job.chunkY)
@@ -570,11 +573,13 @@ function RoxyStagTilemap:_renderLayerToBuffer(layerData, targetImage, offsetX, o
 
   -- Fast path: native renderer to a real LCDBitmap
   if nativeRenderer and targetImage ~= nil then
+    recordPerfCount("tilemap.nativeBuffer.stag") --#DEBUG
     nativeRenderer:renderToBuffer(targetImage, offsetX, offsetY, bufferWidth, bufferHeight)
     return
   end
 
   -- Fallback Lua implementation (rare in practice)
+  recordPerfCount("tilemap.luaBuffer.stag") --#DEBUG
   Log.debug("[_renderLayerToBuffer] Falling back on Lua implementation") --#DEBUG
 
   local imageTable = layerData.imageTable
@@ -684,6 +689,7 @@ function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
       local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
       local img = getCachedAsset(self._globalChunkBucket, key)
       if img then
+        recordPerfCount("tilemap.chunkHit.stag") --#DEBUG
         local dx = chunkX * size - overlap + screenX
         local dy = rowDeltaY
         if dx < DISPLAY_WIDTH and dy < DISPLAY_HEIGHT and (dx + imageWidth) > 0 and (dy + imageHeight) > 0 then
@@ -693,6 +699,7 @@ function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
           ys[drawCount] = dy
         end
       else
+        recordPerfCount("tilemap.chunkMiss.stag") --#DEBUG
         anyMissing = true
         self:_enqueueWarm(layerConfig, chunkX, chunkY)
       end
@@ -700,9 +707,7 @@ function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
   end
 
   if anyMissing then
-    for index = 1, drawCount do
-      images[index] = nil
-    end
+    clearChunkDrawScratch(scratch, drawCount)
     setClipRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
       self:drawLayerRows(layerName, nil, nil, nil, nil)
     clearClipRect()
@@ -711,8 +716,8 @@ function RoxyStagTilemap:_drawStaticLayerChunked(layerName)
 
   for index = 1, drawCount do
     images[index]:draw(xs[index], ys[index])
-    images[index] = nil
   end
+  clearChunkDrawScratch(scratch, drawCount)
 end
 
 --
@@ -1016,6 +1021,7 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
 
     local tr = layerData._nativeRenderer
     if tr then
+      recordPerfCount("tilemap.nativeRows.stag") --#DEBUG
       tr:drawRows(
         rowStart, rowEnd,
         minX, maxX,
@@ -1034,6 +1040,7 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
   --
 
   Log.debug("[drawLayerRows] Falling back on Lua implementation") --#DEBUG
+  recordPerfCount("tilemap.luaRows.stag") --#DEBUG
 
   local imageTable = layerData.imageTable
   if not imageTable then
