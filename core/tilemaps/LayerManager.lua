@@ -9,7 +9,7 @@ local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
 local Camera      <const> = r.Camera
 
-local round     <const> = r.Math.round
+local round <const> = r.Math.round
 
 local tableInsert <const> = table.insert
 local tableRemove <const> = table.remove
@@ -27,10 +27,11 @@ local getTable  <const> = AssetStore.getImagetable
 -- ! Helper: Create Parallax Update
 -- Parallax updater (same behavior as in RoxyTilemap)
 local function _createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY)
+  local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
+  local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+
   return function(sprite)
     local cameraX, cameraY = Camera.getPosition()
-    local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
-    local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
 
     local screenX = round(worldX + pivotAdjustX - cameraX * parallaxX)
     local screenY = round(worldY + pivotAdjustY - cameraY * parallaxY)
@@ -42,12 +43,31 @@ local function _createParallaxUpdate(worldX, worldY, parallaxX, parallaxY, paral
   end
 end
 
+-- ! Helper: Remove Sprites From Scene
+-- Uses the scene batch unregister path when available; otherwise removes directly.
+local function _removeSpritesFromScene(scene, sprites)
+  if not sprites or #sprites == 0 then return end
+
+  if scene and scene._unregisterSprites then
+    scene:_unregisterSprites(sprites, true)
+  elseif scene and scene.removeSprite then
+    for i = 1, #sprites do
+      scene:removeSprite(sprites[i])
+    end
+  else
+    for i = 1, #sprites do
+      sprites[i]:remove()
+    end
+  end
+end
+
 --------------------------------------------------------------------------------
 -- ! Class Definition and Initialize
 --------------------------------------------------------------------------------
 
 class("LayerManager").extends(Object)
 
+-- ! Initialize
 function LayerManager:init(opts, scene, backingLayersTable, backingSpritesList)
   self._opts = opts or {}
   self.scene = scene
@@ -76,10 +96,17 @@ function LayerManager:addLayer(layerData)
 end
 
 -- ! Ensure Sprite
--- Create (if needed) and return the sprite for a layer
+-- Creates if needed and returns the sprite for a layer
 function LayerManager:ensureSprite(name)
   local layer = self.layers[name]; if not layer then return nil end
-  if layer.sprite or self._opts.wrapInSprites == false then return layer.sprite end
+  if self._opts.wrapInSprites == false then return layer.sprite end
+
+  if layer.sprite then
+    if self._autoAdd and self._sceneHasAdd then
+      self.scene:addSprite(layer.sprite)
+    end
+    return layer.sprite
+  end
 
   local sprite = newSprite()
   sprite:setTilemap(layer.tilemap)
@@ -100,12 +127,8 @@ function LayerManager:ensureSprite(name)
     sprite:moveTo(layer.originX or 0, layer.originY or 0)
   end
 
-  if self._autoAdd then
-    if self._sceneHasAdd then
-      self.scene:addSprite(sprite)
-    else
-      sprite:add()
-    end
+  if self._autoAdd and self._sceneHasAdd then
+    self.scene:addSprite(sprite)
   end
   sprite:setVisible(layer.visible ~= false)
 
@@ -145,32 +168,34 @@ end
 -- ! Hide
 function LayerManager:hide(name)
   local layer = self.layers[name]
-  if not layer then return end
+  if not layer then return false end
 
   layer.visible = false
   if layer.sprite then layer.sprite:setVisible(false) end
+  return true
 end
 
 -- ! Show
 function LayerManager:show(name)
   local layer = self.layers[name]
-  if not layer then return end
+  if not layer then return false end
 
   layer.visible = true
   local sprite = self:ensureSprite(name)
   if sprite then sprite:setVisible(true) end
+  return true
 end
 
 -- ! Remove
 -- Remove layer + sprites + collision sprites + retained paths from swaps
 function LayerManager:remove(name)
   local layer = self.layers[name]
-  if not layer then return end
+  if not layer then return false end
 
   if layer.sprite then
     local sprite = layer.sprite
-    if self.scene and self.scene.removeSprite then self.scene:removeSprite(sprite) else sprite:remove() end
-    -- remove from external list if present
+    _removeSpritesFromScene(self.scene, { sprite })
+    -- Remove from external list if present
     for i = #self._spritesList, 1, -1 do
       if self._spritesList[i] == sprite then tableRemove(self._spritesList, i); break end
     end
@@ -178,7 +203,7 @@ function LayerManager:remove(name)
   end
 
   if layer.collisionSprites then
-    for _, collisionSprite in ipairs(layer.collisionSprites) do collisionSprite:remove() end
+    _removeSpritesFromScene(self.scene, layer.collisionSprites)
     layer.collisionSprites = nil
   end
 
@@ -189,10 +214,11 @@ function LayerManager:remove(name)
 
   layer.tilemap, layer.imageTable, layer._imageCache, layer._offsetCache = nil, nil, nil, nil
   self.layers[name] = nil
+  return true
 end
 
 -- ! Set Image Table
--- Runtime imagetable swap with index remap and proper retention accounting
+-- Runtime image table swap with index remap and proper retention accounting
 function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
   local layer = self.layers[name]
   if not layer or not layer.tilemap then return false end
@@ -211,7 +237,14 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
   end
 
   if remapFn then
-    local tiles, width = layer.tilemap:getTiles()
+    local tiles, width
+    if layer.tilemap.getTiles then
+      tiles, width = layer.tilemap:getTiles()
+    end
+    if not tiles then
+      tiles = layer.tilesFlat
+      width = layer.tilesStride or layer.mapWidth
+    end
     if tiles and width then
       if type(remapFn) == "function" then
         for index = 1, #tiles do
@@ -237,13 +270,15 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
       end
 
       layer.tilemap:setTiles(tiles, width)
+      layer.tilesFlat = tiles
+      layer.tilesStride = width
     end
   end
 
   layer.tilemap:setImageTable(newTable)
   layer.imageTable, layer._imageCache, layer._offsetCache = newTable, {}, {}
 
-  -- recompute image meta
+  -- Recompute image metadata
   local maxHeight, count = 0, newTable and newTable:getLength() or 0
   for i = 1, count do
     local img = newTable:getImage(i)
@@ -255,7 +290,7 @@ function LayerManager:setImageTable(name, newImageTableOrPath, remapFn)
   end
   layer.maxImageHeight, layer.imageCount = maxHeight, count
 
-  -- update retention (for swap paths only)
+  -- Update retention for swap paths only
   if newPath then
     if not self._retainedPaths[newPath] then
       if retain(newPath, newTable) then
@@ -298,7 +333,10 @@ function LayerManager:setOrigin(name, x, y)
   local layer = self.layers[name]
   if not layer then return false end
 
-  layer.originX, layer.originY = x or 0, y or 0
+  x, y = x or 0, y or 0
+  if layer.originX == x and layer.originY == y then return true end
+
+  layer.originX, layer.originY = x, y
   local sprite = layer.sprite
   if sprite then
     local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
@@ -323,38 +361,105 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Detach
+-- Remove layer and collision sprites without releasing retained swap paths.
 function LayerManager:detach()
+  -- Collect layer sprites so the scene can unregister them in one batch
+  local layerSprites = nil
+
   for _, layer in pairs(self.layers) do
     if layer.sprite then
-      if self.scene and self.scene.removeSprite then
-        self.scene:removeSprite(layer.sprite)
-      else
-        layer.sprite:remove()
-      end
-      layer.sprite = nil
-    end
-    if layer.collisionSprites then
-      for _, sprite in ipairs(layer.collisionSprites) do sprite:remove() end
-      layer.collisionSprites = nil
+      layerSprites = layerSprites or {}
+      tableInsert(layerSprites, layer.sprite)
     end
   end
+
+  _removeSpritesFromScene(self.scene, layerSprites)
 end
 
 -- ! Destroy
--- Cleanly remove all layer sprites + collisions and release swap-retained paths
+-- Cleanly remove all layer sprites, collisions, and swap-retained paths
 function LayerManager:destroy()
+  -- Collect layer sprites so the scene can unregister them in one batch
+  local layerSprites = nil
+  local collisionSprites = nil
+
   for _, layer in pairs(self.layers) do
     if layer.sprite then
-      if self.scene and self.scene.removeSprite then self.scene:removeSprite(layer.sprite) else layer.sprite:remove() end
+      layerSprites = layerSprites or {}
+      tableInsert(layerSprites, layer.sprite)
       layer.sprite = nil
     end
     if layer.collisionSprites then
-      for _, collisionSprite in ipairs(layer.collisionSprites) do collisionSprite:remove() end
+      for _, collisionSprite in ipairs(layer.collisionSprites) do
+        collisionSprites = collisionSprites or {}
+        tableInsert(collisionSprites, collisionSprite)
+      end
       layer.collisionSprites = nil
     end
     layer.tilemap, layer.imageTable, layer._imageCache, layer._offsetCache = nil, nil, nil, nil
   end
+  _removeSpritesFromScene(self.scene, layerSprites)
+  _removeSpritesFromScene(self.scene, collisionSprites)
   for path, _ in pairs(self._retainedPaths) do release(path) end
   self._retainedPaths = {}
   self._spritesList = {}
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+local Graphics <const> = playdate.graphics
+
+-- Advanced/direct usage; RoxyTilemap usually creates the manager for you.
+local scene = RoxyScene()
+local layers = {}
+local sprites = {}
+
+local manager = LayerManager({
+  wrapInSprites = true,
+  autoAddSprites = true,
+  anchor = "topLeft",
+}, scene, layers, sprites)
+
+local imageTable = Graphics.imagetable.new("images/terrain")
+local tilemap = Graphics.tilemap.new()
+tilemap:setImageTable(imageTable)
+tilemap:setTiles({
+  1, 1, 0,
+  2, 2, 1,
+}, 3)
+
+manager:addLayer({
+  name = "Ground",
+  tilemap = tilemap,
+  imageTable = imageTable,
+  tileWidth = 16,
+  tileHeight = 16,
+  originX = 0,
+  originY = 0,
+  zIndex = 0,
+  visible = true,
+  anchor = "topLeft",
+})
+
+local groundSprite = manager:ensureSprite("Ground")
+manager:hide("Ground")
+manager:show("Ground")
+manager:setOrigin("Ground", 32, 16)
+
+-- Runtime image table swap with a compact remap table
+local winterTiles = Graphics.imagetable.new("images/terrain-winter")
+manager:setImageTable("Ground", winterTiles, {
+  [1] = 2,
+  [2] = 1,
+})
+
+-- Detach for pooled scene reuse, or destroy during tilemap teardown.
+manager:detach()
+manager:remove("Ground")
+manager:destroy()
+
+]]

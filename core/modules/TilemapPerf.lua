@@ -16,7 +16,8 @@ local clock             <const> = os and os.clock or nil
 local resetElapsedTime  <const> = pd and pd.resetElapsedTime or nil
 local getElapsedTime    <const> = pd and pd.getElapsedTime or nil
 
-local samples = {}
+local samples   = {}
+local counters  = {}
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -72,6 +73,16 @@ local function sortedLabels()
   return labels
 end
 
+-- ! Sorted Counter Labels
+local function sortedCounterLabels()
+  local labels = {}
+  for label, _ in pairs(counters) do
+    tableInsert(labels, label)
+  end
+  tableSort(labels)
+  return labels
+end
+
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
@@ -79,6 +90,7 @@ end
 -- ! Reset
 function TilemapPerf.reset()
   samples = {}
+  counters = {}
 end
 
 -- ! Record
@@ -107,6 +119,14 @@ function TilemapPerf.record(label, seconds, memoryDeltaKB)
   sample.memoryDeltaKB = memoryDeltaKB
 
   return sample
+end
+
+-- ! Count
+function TilemapPerf.count(label, amount)
+  if type(label) ~= "string" or label == "" then return nil end
+  amount = tonumber(amount) or 1
+  counters[label] = (counters[label] or 0) + amount
+  return counters[label]
 end
 
 -- ! Measure
@@ -141,6 +161,15 @@ function TilemapPerf.snapshot()
   return snapshot
 end
 
+-- ! Counter Snapshot
+function TilemapPerf.counterSnapshot()
+  local snapshot = {}
+  for label, value in pairs(counters) do
+    snapshot[label] = value
+  end
+  return snapshot
+end
+
 -- ! Report Lines
 function TilemapPerf.reportLines()
   local lines = {
@@ -161,6 +190,15 @@ function TilemapPerf.reportLines()
       formatMS(sample.last),
       formatMemory(sample.memoryDeltaKB)
     ))
+  end
+
+  local counterLabels = sortedCounterLabels()
+  if #counterLabels > 0 then
+    tableInsert(lines, "TilemapPerfCounters")
+    tableInsert(lines, "label | count")
+    for _, label in ipairs(counterLabels) do
+      tableInsert(lines, formatString("%s | %d", label, counters[label]))
+    end
   end
 
   return lines

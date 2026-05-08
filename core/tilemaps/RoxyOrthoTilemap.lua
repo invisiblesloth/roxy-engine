@@ -80,6 +80,7 @@ end
 
 class("RoxyOrthoTilemap").extends(RoxyTilemap)
 
+-- ! Initialize
 function RoxyOrthoTilemap:init(jsonPath, opts, scene)
   opts = opts or {}
   RoxyOrthoTilemap.super.init(self, jsonPath, opts, scene)
@@ -112,13 +113,18 @@ function RoxyOrthoTilemap:_initializeStaticLayers(opts)
   for layerName, layerData in pairs(self.layers) do
     local lopts = layerOptions[layerName] or {}
     if lopts.preRenderChunked then
+      local size = max(1, lopts.chunkSizePx or DEFAULT_CHUNK_SIZE)
+      local overlap = lopts.overlapPx or DEFAULT_CHUNK_OVERLAP
+      local bufferSize = size + 2 * overlap
       self._staticChunkLayers[layerName] = {
-        name      = layerName,
-        layer     = layerData,
-        size      = max(1, lopts.chunkSizePx or DEFAULT_CHUNK_SIZE),
-        overlap   = lopts.overlapPx  or DEFAULT_CHUNK_OVERLAP,
-        keyPrefix = "chunk:" .. (self._mapCacheId or "map") .. ":" ..
-                    tostring(layerData.tiledId or layerName) .. ":",
+        name         = layerName,
+        layer        = layerData,
+        size         = size,
+        overlap      = overlap,
+        bufferWidth  = bufferSize,
+        bufferHeight = bufferSize,
+        keyPrefix    = "chunk:" .. (self._mapCacheId or "map") .. ":" ..
+                       tostring(layerData.tiledId or layerName) .. ":",
       }
     end
   end
@@ -127,15 +133,7 @@ end
 -- ! Utility: Rebuild Ordered Layers
 -- Build a stable, z-sorted draw list once (rarely changes)
 function RoxyOrthoTilemap:_rebuildOrderedLayers()
-  local items = {}
-  for name, layerData in pairs(self.layers) do
-    if layerData.tilemap and layerData.visible ~= false then
-      local renderType = self._staticChunkLayers[name] and "chunked" or "dynamic"
-      tableInsert(items, { layer = layerData, name = name, type = renderType, z = layerData.zIndex or 0 })
-    end
-  end
-  tableSort(items, function(a, b) return a.z < b.z end)
-  self._orderedLayers = items
+  RoxyTilemap._rebuildOrderedLayers(self)
 end
 
 --------------------------------------------------------------------------------
@@ -148,7 +146,7 @@ function RoxyOrthoTilemap:_getOrBuildChunk(layerConfig, chunkX, chunkY)
   local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
   return getOrLoadAsset(self._globalChunkBucket, key, function()
     local size, overlap = layerConfig.size, layerConfig.overlap
-    local width, height = size + 2 * overlap, size + 2 * overlap
+    local width, height = layerConfig.bufferWidth, layerConfig.bufferHeight
     local img = newImage(width, height)
 
     -- Convert chunk indices to layer pixel origin for this chunk
@@ -195,7 +193,7 @@ function RoxyOrthoTilemap:_drawStaticLayerChunked(layerName)
         local destX = chunkX * size - overlap + screenX
         local destY = rowDestY
 
-        local imageWidth, imageHeight = img:getSize()
+        local imageWidth, imageHeight = config.bufferWidth, config.bufferHeight
         if not (destX >= DISPLAY_WIDTH or destY >= DISPLAY_HEIGHT
              or destX + imageWidth <= 0 or destY + imageHeight <= 0) then
           img:draw(destX, destY)
@@ -266,9 +264,9 @@ function RoxyOrthoTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
   if tiles then
     local stride = layerData.tilesStride or layerData.mapWidth
     if stride and stride > 0 then
-      local idx = (y - 1) * stride + x
-      if idx >= 1 and idx <= #tiles then
-        tiles[idx] = tileIndex
+      local tileOffset = (y - 1) * stride + x
+      if tileOffset >= 1 and tileOffset <= #tiles then
+        tiles[tileOffset] = tileIndex
       end
     end
   end
@@ -278,7 +276,7 @@ function RoxyOrthoTilemap:setTileAt(layerName, x, y, tileIndex, updateSprite)
     self:markTilesDirty(layerName, x, y, 1, 1)
   end
 
-  self:markLayerImageDirty(layerName)
+  self:_onLayerTilesChanged(layerName, layerData)
 
   if updateSprite then
     local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
@@ -295,6 +293,7 @@ function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
   local renderQueue = {}
   local order = 0
 
+  -- ! Helper: Enqueue Layer
   local function enqueueLayer(name, layer)
     if not layer then return end
 
@@ -457,16 +456,16 @@ end
 -- ! Draw
 -- Draw a single tile layer directly (no sprite required)
 function RoxyOrthoTilemap:draw(layerName)
+  local layerData = self.layers and self.layers[layerName]
+  if not layerData or not layerData.tilemap or layerData.visible == false then return end
+
   if self._staticChunkLayers[layerName] then
     self:_drawStaticLayerChunked(layerName); return
   end
 
-  local layerData = self.layers and self.layers[layerName]
-  if not layerData or not layerData.tilemap or layerData.visible == false then return end
-
   -- Use base helper so tall tiles near edges are included
   local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
-  self:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
+  self:_drawLayerRegionData(layerData, minTileX, maxTileX, minTileY, maxTileY)
 end
 
 -- ! Draw Visible
@@ -481,7 +480,7 @@ function RoxyOrthoTilemap:drawVisible()
       local layerData = item.layer
       if layerData.tilemap and layerData.visible ~= false then
         local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
-        self:drawLayerRegion(item.name, minTileX, maxTileX, minTileY, maxTileY)
+        self:_drawLayerRegionData(layerData, minTileX, maxTileX, minTileY, maxTileY)
       end
     end
   end
@@ -494,13 +493,15 @@ function RoxyOrthoTilemap:drawVisibleInRect(x, y, width, height)
   clearClipRect()
 end
 
--- ! Draw Layer Region
--- Region-based renderer that batches via tilemap:drawIgnoringOffset.
-function RoxyOrthoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
-  local layerData = self.layers and self.layers[layerName]
+-- ! Draw Layer Region Data
+-- Internal region renderer for callers that already have layerData.
+function RoxyOrthoTilemap:_drawLayerRegionData(layerData, minTileX, maxTileX, minTileY, maxTileY)
   if not layerData or not layerData.tilemap or layerData.visible == false then return end
 
-  local mapWidthTiles, mapHeightTiles = layerData.tilemap:getSize()
+  local mapWidthTiles, mapHeightTiles = layerData.mapWidth, layerData.mapHeight
+  if not mapWidthTiles or not mapHeightTiles then
+    mapWidthTiles, mapHeightTiles = layerData.tilemap:getSize()
+  end
   local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
 
   -- Clamp bounds
@@ -536,6 +537,13 @@ function RoxyOrthoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTile
   )
 end
 
+-- ! Draw Layer Region
+-- Region-based renderer that batches via tilemap:drawIgnoringOffset.
+function RoxyOrthoTilemap:drawLayerRegion(layerName, minTileX, maxTileX, minTileY, maxTileY)
+  local layerData = self.layers and self.layers[layerName]
+  self:_drawLayerRegionData(layerData, minTileX, maxTileX, minTileY, maxTileY)
+end
+
 --------------------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------------------
@@ -543,6 +551,8 @@ end
 -- ! Destroy
 -- Clean up static layer resources and defer remainder to base class.
 function RoxyOrthoTilemap:destroy()
+  if self._destroyed or self._destroying then return end
+
   -- Clear pre-rendered chunk cache for this map
   if self._globalChunkBucket then
     clearCache(self._globalChunkBucket)
@@ -553,3 +563,54 @@ function RoxyOrthoTilemap:destroy()
 
   RoxyOrthoTilemap.super.destroy(self)
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+local scene = RoxyScene()
+
+local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
+  cameraBounds = true,
+  wrapInSprites = false,
+  layerOptions = {
+    Ground = {
+      preRenderChunked = true,
+      chunkSizePx = 320,
+      overlapPx = 32,
+    },
+    Props = {
+      zIndex = 10,
+    },
+  },
+})
+scene:addTilemap(map)
+
+function scene:start()
+  scene:activateCamera({ tilemap = map })
+end
+
+function scene:draw()
+  map:drawVisible()
+end
+
+map:setTileAt("Ground", 12, 8, 4, true)
+map:markTilesDirty("Ground", 10, 8, 3, 2)
+
+local row = map:getRowFromScreen(200, 120, "Ground")
+
+local previewImage, offsetX, offsetY = map:getLayerImage("Ground", {
+  tileX = 1,
+  tileY = 1,
+  tileWidth = 10,
+  tileHeight = 8,
+})
+
+map:drawVisibleInRect(0, 0, 400, 120)
+map:drawLayerRegion("Ground", 1, 20, 1, 15)
+
+map:destroy()
+
+]]
