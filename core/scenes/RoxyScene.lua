@@ -55,7 +55,7 @@ local _imageCallbacks = setmetatable({}, { __mode = "k" }) -- Cache: image --> f
 --------------------------------------------------------------------------------
 
 -- ! Helper: Remove Item From Array
--- Removes every matching item and returns whether the array changed.
+-- Removes every matching item and returns whether the array changed
 local function _removeItem(array, item)
   if not array or not item then return false end
 
@@ -70,7 +70,7 @@ local function _removeItem(array, item)
 end
 
 -- ! Helper: Has Item In Array
--- Returns true when the array contains the given item.
+-- Returns true when the array contains the given item
 local function _hasItem(array, item)
   if not array or not item then return false end
 
@@ -81,7 +81,7 @@ local function _hasItem(array, item)
 end
 
 -- ! Helper: Is Bounds Table
--- Returns true for camera bounds tables accepted by Camera.setBounds.
+-- Returns true for camera bounds tables accepted by Camera.setBounds
 local function _isBoundsTable(bounds)
   return type(bounds) == "table"
      and type(bounds.x1) == "number"
@@ -91,14 +91,14 @@ local function _isBoundsTable(bounds)
 end
 
 -- ! Helper: Read XY Pair
--- Reads either { x, y } or array-style { x, y } option pairs.
+-- Reads either { x, y } or array-style { x, y } option pairs
 local function _readXYPair(value)
   if type(value) ~= "table" then return nil, nil end
   return value.x or value[1], value.y or value[2]
 end
 
 -- ! Helper: Get Color Callback
--- Builds (and returns) a drawing callback for a solid color.
+-- Builds (and returns) a drawing callback for a solid color
 local function _getColorCallback(color)
   local fn = _colorCallbacks[color]
   if fn == nil then
@@ -118,7 +118,7 @@ local function _getImageCallback(img)
   local fn = _imageCallbacks[img]
   if fn == nil then
     fn = function(x, y, width, height)
-      -- Set a clip to the dirty rect, then draw the full image once.
+      -- Set a clip to the dirty rect, then draw the full image once
       setClipRect(x, y, width, height)  -- Only redraw the dirty rect
       img:draw(0, 0, UNFLIPPED)         -- Avoid per-call src rect; let clip do the work
       clearClipRect()                   -- Restore clip
@@ -181,7 +181,7 @@ function RoxyScene:enter()
   end
   self._spriteAutoAddQueue = {}
 
-  -- Activate tilemap resources that cannot be created detached from display.
+  -- Activate tilemap resources that cannot be created detached from display
   for i = 1, #self.tilemaps do
     local tilemap = self.tilemaps[i]
     if tilemap and tilemap.sceneDidEnter then
@@ -208,6 +208,7 @@ end
 
 -- ! Activate Camera
 -- Opt-in scene camera setup. Scenes that do not use Camera pay no enter cost.
+-- Supports tilemap bounds, raw bounds, or explicitly clearing bounds.
 function RoxyScene:activateCamera(opts)
   opts = opts or {}
 
@@ -451,7 +452,7 @@ function RoxyScene:removeSprite(sprite)
 end
 
 -- ! Unregister Sprite
--- Private cleanup path used by tilemaps and direct scene sprite removal.
+-- Private cleanup path used by tilemaps and direct scene sprite removal
 function RoxyScene:_unregisterSprite(sprite, removeFromDisplay)
   if not sprite then return end
 
@@ -529,7 +530,12 @@ function RoxyScene:removeAllSprites()
     if sprite.scene == self then
       sprite.scene = nil -- Clear back-pointer
     end
-    sprite:remove()
+    -- Prefer view-aware cleanup so pooled sprite assets are released
+    if sprite.removeAndClearView then
+      sprite:removeAndClearView()
+    else
+      sprite:remove()
+    end
   end
   self.sprites = {}
   self._spriteAutoAddQueue = {}
@@ -545,7 +551,7 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Tilemap
--- Attaches a load-only tilemap to this scene.
+-- Attaches a load-only tilemap to this scene
 function RoxyScene:addTilemap(tilemap)
   if not tilemap then return false end
 
@@ -567,7 +573,7 @@ function RoxyScene:addTilemap(tilemap)
 end
 
 -- ! Remove Tilemap
--- Destroys a tilemap and unregisters it from this scene.
+-- Destroys a tilemap and unregisters it from this scene
 function RoxyScene:removeTilemap(tilemap)
   if not tilemap then return false end
   if tilemap.scene ~= self and not _hasItem(self.tilemaps, tilemap) then return false end
@@ -582,7 +588,7 @@ function RoxyScene:removeTilemap(tilemap)
 end
 
 -- ! Detach Tilemap
--- Detaches scene/display state while preserving pooled tilemap resources.
+-- Detaches scene/display state while preserving pooled tilemap resources
 function RoxyScene:detachTilemap(tilemap)
   if not tilemap then return false end
   if tilemap.scene ~= self and not _hasItem(self.tilemaps, tilemap) then return false end
@@ -596,7 +602,7 @@ function RoxyScene:detachTilemap(tilemap)
 end
 
 -- ! Unregister Tilemap
--- Removes a tilemap from scene ownership without destroying it.
+-- Removes a tilemap from scene ownership without destroying it
 function RoxyScene:_unregisterTilemap(tilemap)
   if not tilemap then return end
 
@@ -626,7 +632,7 @@ function RoxyScene:removeAllTilemaps()
 end
 
 -- ! Spawn Tilemap
--- Convenience helper that creates and attaches an orthogonal tilemap.
+-- Convenience helper that creates and attaches an orthogonal tilemap
 function RoxyScene:spawnTilemap(path, tilemapOpts)
   local tilemap = RoxyOrthoTilemap(path, tilemapOpts)
   self:addTilemap(tilemap)
@@ -755,7 +761,7 @@ function GameplayScene:start()
 end
 
 function GameplayScene:update(dt)
-  -- Game logic here.
+  -- Game logic here
 end
 
 function GameplayScene:cleanup()

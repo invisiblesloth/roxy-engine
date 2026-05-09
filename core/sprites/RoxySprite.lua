@@ -17,6 +17,7 @@ local Camera  <const> = r.Camera
 local round <const> = r.Math.round
 
 local getAsset      <const> = Assets.getAsset
+local recycleAsset  <const> = Assets.recycleAsset
 local getPosition   <const> = Camera.getPosition
 local worldToScreen <const> = Camera.worldToScreen
 
@@ -42,13 +43,13 @@ local SCREEN_BOTTOM_LIMIT <const> = DISPLAY_HEIGHT
 --------------------------------------------------------------------------------
 
 -- ! Helper: Has Parallax
--- Returns true when the sprite needs camera-relative parallax updates.
+-- Returns true when the sprite needs camera-relative parallax updates
 local function _hasParallax(sprite)
   return sprite.parallaxX ~= nil or sprite.parallaxY ~= nil
 end
 
 -- ! Helper: Set Collisions Active
--- Toggles the Playdate collision system without changing Roxy's desired state.
+-- Toggles the Playdate collision system without changing Roxy's desired state
 local function _setCollisionsActive(sprite, flag)
   sprite._collisionsActive = flag == true
   RoxySprite.super.setCollisionsEnabled(sprite, flag)
@@ -71,7 +72,10 @@ function RoxySprite:init(options, scene)
   self.isPaused                 = true
   self.flip                     = UNFLIPPED
   self.animation                = nil
-  self._animationRetained       = false -- Track if we retained the current animation
+  self._animationRetained       = false -- Track if the current animation should be released
+  self._animationPoolKey        = nil   -- Track checked-out full animation objects
+  self._imagePoolKey            = nil
+  self._pooledImage             = nil
   self.simpleAnimation          = nil
   self._drawFn                  = nil
   self._ignoresDrawOffset       = false
@@ -128,7 +132,7 @@ function RoxySprite:setIgnoresDrawOffset(flag)
 end
 
 -- ! Set Collisions Enabled
--- Sets the desired collision state and applies it immediately.
+-- Sets the desired collision state and applies it immediately
 function RoxySprite:setCollisionsEnabled(flag)
   assert(type(flag) == "boolean", "[RoxySprite:setCollisionsEnabled] Expected boolean, got " .. tostring(type(flag)))
 
@@ -236,17 +240,26 @@ end
 -- View Management
 --------------------------------------------------------------------------------
 
--- ! Clear View Helper - Fixed memory leak by properly tracking retained animations
+-- ! Clear View
+-- Releases sprite-owned view resources and clears display state
 function RoxySprite:clearView()
-  -- Properly release retained animations to prevent memory leaks
+  -- Release current animation ownership
   if self.animation then
     self.animation:stop()
-    -- Only release if we retained it
-    if self._animationRetained and self.animation.release then
+    if self._animationPoolKey then
+      recycleAsset(self._animationPoolKey, self.animation)
+    elseif self._animationRetained and self.animation.release then
       self.animation:release()
     end
     self.animation = nil
     self._animationRetained = false
+    self._animationPoolKey = nil
+  end
+
+  if self._imagePoolKey and self._pooledImage then
+    recycleAsset(self._imagePoolKey, self._pooledImage)
+    self._imagePoolKey = nil
+    self._pooledImage = nil
   end
 
   self.simpleAnimation = nil -- Clear any previous simpleAnimation
@@ -272,40 +285,43 @@ local function _applySizeFromImageTable(sprite, imagetable)
   end
 end
 
--- ! Helper: Setup pooled animation with proper memory management
+-- ! Helper: Setup Pooled View
+-- Sets up pooled sheet, full-animation, or image descriptors
 local function _setupPooledAnimation(sprite, view)
   local kind = view.kind or "sheet"
 
   if kind == "sheet" then
-    -- Load imagetable from pool; wrap as RoxyAnimation
-    local imagetable = getAsset(view.poolKey)
-    if not imagetable then
-      error(("[RoxySprite:setView] Pool key not found: %s"):format(tostring(view.poolKey)), 3)
-    end
-    sprite.animation = RoxyAnimation.fromImagetable(imagetable) -- Refcount owned by this sprite
-    sprite._animationRetained = false -- We own this, don't need to release
-    _applySizeFromImageTable(sprite, imagetable)
+    -- Pooled sheets share image data with sprite-local playback state
+    sprite.animation = RoxyAnimation.fromPool(view.poolKey)
+    sprite._animationRetained = true
+    _applySizeFromImageTable(sprite, sprite.animation.imagetable)
     sprite._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
 
   elseif kind == "animation" then
-    -- Pooled/shared animation object in Assets pool
+    -- Pooled full animation object from an Assets pool
     local animation = getAsset(view.poolKey)
     if not (type(animation) == "table" and animation.isRoxyAnimation) then
+      if animation then
+        recycleAsset(view.poolKey, animation)
+      end
       error(("[RoxySprite:setView] Pool key does not resolve to RoxyAnimation: %s"):format(tostring(view.poolKey)), 3)
     end
-    if animation.retain then
-      animation:retain()
-      sprite._animationRetained = true -- Track that we retained this
-    end
     sprite.animation = animation
+    sprite._animationRetained = false
+    sprite._animationPoolKey = view.poolKey
     _applySizeFromImageTable(sprite, animation.imagetable)
     sprite._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
 
   elseif kind == "image" then
     local image = getAsset(view.poolKey)
     if not (image and image.draw) then
+      if image then
+        recycleAsset(view.poolKey, image)
+      end
       error(("[RoxySprite:setView] Pool key does not resolve to Image: %s"):format(tostring(view.poolKey)), 3)
     end
+    sprite._imagePoolKey = view.poolKey
+    sprite._pooledImage = image
     sprite:setImage(image) -- Sets sprite size from image
     sprite._drawFn = function(_, x, y, flip) image:draw(x, y, flip) end
 
@@ -334,7 +350,7 @@ local function _setupSimpleAnimation(sprite, imagetable, frameDuration, loop)
   }
 
   _applySizeFromImageTable(sprite, imagetable)
-  -- Optimized draw function for simpleAnimation
+  -- Use a cached draw function for simpleAnimation
   sprite._drawFn = function(s, x, y, flip)
     local simpleAnimation = s.simpleAnimation
     if simpleAnimation and simpleAnimation.imagetable then
@@ -358,7 +374,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
   end
   self:setVisible(true)
 
-  -- Clear previous state (handles memory cleanup properly)
+  -- Clear previous view state before installing the new one
   self:clearView()
 
   -- Handle descriptor table form
@@ -367,10 +383,13 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     return self
   end
 
-  -- Handle direct pooled objects
-  if type(view) == "table" and view.imagetable then
-    self.animation = RoxyAnimation.fromImagetable(view.imagetable)
-    self._animationRetained = false
+  if type(view) == "table" and (view.isRoxyAnimation == true) then
+    -- Direct RoxyAnimation instances share playback state explicitly
+    if view.retain then
+      view:retain()
+      self._animationRetained = true
+    end
+    self.animation = view
     _applySizeFromImageTable(self, view.imagetable)
     self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
     return self
@@ -378,12 +397,22 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
 
   if type(view) == "table" and view.animation and
      (type(view.animation) == "table" and view.animation.isRoxyAnimation) then
+    -- Wrapped RoxyAnimation instances share playback state explicitly
     if view.animation.retain then
       view.animation:retain()
       self._animationRetained = true
     end
     self.animation = view.animation
     _applySizeFromImageTable(self, view.animation.imagetable)
+    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+    return self
+  end
+
+  -- Handle imagetable descriptor tables
+  if type(view) == "table" and view.imagetable then
+    self.animation = RoxyAnimation.fromImagetable(view.imagetable)
+    self._animationRetained = true
+    _applySizeFromImageTable(self, view.imagetable)
     self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
     return self
   end
@@ -398,7 +427,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       else
         -- Full RoxyAnimation
         self.animation = RoxyAnimation(view) -- Path-based constructor
-        self._animationRetained = false
+        self._animationRetained = true
         if not (self.animation and self.animation.imagetable) then
           error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite", 2)
         end
@@ -417,16 +446,6 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
         if image then image:draw(x, y, flip) end
       end
     end
-
-  elseif type(view) == "table" and (view.isRoxyAnimation == true) then
-    -- Direct RoxyAnimation instance
-    if view.retain then
-      view:retain()
-      self._animationRetained = true
-    end
-    self.animation = view
-    _applySizeFromImageTable(self, view.imagetable)
-    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
 
   elseif type(view) == "userdata" then
     -- Handle ImageTable or Image userdata
@@ -491,7 +510,7 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Animation
--- Accepts either an options table or legacy (name, opts) arguments.
+-- Accepts either an options table or legacy (name, opts) arguments
 function RoxySprite:addAnimation(optsOrName, legacyOpts)
   local animationOpts
 
@@ -573,7 +592,7 @@ function RoxySprite:play()
   return self
 end
 
--- ! Play With Delay - Fixed race condition
+-- ! Play With Delay
 function RoxySprite:playWithDelay(delay, animationName)
   if not (type(delay) == "number" and delay > 0) then
     Log.warn("[RoxySprite:playWithDelay] Delay must be a positive number") --#DEBUG
@@ -582,7 +601,7 @@ function RoxySprite:playWithDelay(delay, animationName)
 
   if self.animation or self.simpleAnimation then
     performAfterDelay(delay * MS_PER_SECOND, function()
-      -- Check if sprite still exists and hasn't been destroyed
+      -- Skip delayed resume if the sprite was destroyed
       if not self._destroyed and self.animation then
         if animationName then
           self:setAnimation(animationName)
@@ -748,7 +767,7 @@ function RoxySprite:stepFrame(direction)
 end
 
 --------------------------------------------------------------------------------
--- Rendering - Optimized to cache camera position once
+-- Rendering
 --------------------------------------------------------------------------------
 
 -- ! Update
@@ -787,7 +806,7 @@ function RoxySprite:update()
     local oldFrame = simpleAnimation.currentFrame -- Track if frame changes
     simpleAnimation.accumulator += dt
 
-    -- Handle large delta times properly
+    -- Handle large delta times
     while simpleAnimation.accumulator >= simpleAnimation.frameDuration do
       simpleAnimation.currentFrame += 1
       if simpleAnimation.currentFrame > simpleAnimation.endFrame then
@@ -832,7 +851,7 @@ end
 --------------------------------------------------------------------------------
 
 -- ! Add Sprite
--- Re-adds the sprite and restores state needed by pooled scene reuse.
+-- Re-adds the sprite and restores state needed by pooled scene reuse
 function RoxySprite:add()
   RoxySprite.super.add(self)
   self._added = true
@@ -850,7 +869,7 @@ function RoxySprite:add()
 end
 
 -- ! Remove Sprite
--- Removes the sprite while remembering state that should resume on add().
+-- Removes the sprite while remembering state that should resume on add()
 function RoxySprite:remove()
   if self.isRoxySprite and (self.animation or self.simpleAnimation) then
     self:stop()
@@ -872,6 +891,14 @@ function RoxySprite:remove()
 
   self._added = false
   RoxySprite.super.remove(self)
+  return self
+end
+
+-- ! Remove and Clear View
+-- Fully releases sprite-owned view resources during scene cleanup
+function RoxySprite:removeAndClearView()
+  self:remove()
+  self:clearView()
   return self
 end
 
@@ -927,18 +954,7 @@ function RoxySprite:destroy()
 
   self._destroyed = true
   self:remove()
-
-  -- Release retained animations to prevent memory leaks
-  if self.animation and self._animationRetained and self.animation.release then
-    self.animation:release()
-  end
-
-  self.animation = nil
-  self._animationRetained = false
-  self.simpleAnimation = nil
-  self:setImage(nil)
-  self:setSize(0, 0)
-  self._drawFn = nil
+  self:clearView()
 end
 
 --------------------------------------------------------------------------------
