@@ -120,6 +120,19 @@ static inline int rowShiftX_for_row0(const RoxyTileRendererC* tileRenderer, int 
     return tileRenderer->staggerDirectionRight ? tileRenderer->halfTileWidth : -tileRenderer->halfTileWidth;
 }
 
+static inline int isoRowNeedsFullProjection(float start, int step, int count)
+{
+    // Integer-step incremental rounding only differs when a negative .5 row
+    // crosses into positive coordinates, because roundf rounds halves away from zero.
+    if (count <= 1 || step <= 0) return 0;
+
+    const float end = start + (float)step * (float)(count - 1);
+    if (start >= 0.f || end <= 0.f) return 0;
+
+    const float fraction = start - floorf(start);
+    return fabsf(fraction - 0.5f) <= 0.000001f;
+}
+
 // -----------------------------------------------------------------------------
 // Lifetime
 // -----------------------------------------------------------------------------
@@ -580,21 +593,43 @@ static int roxy_tileRenderer_drawRows(lua_State* L)
         }
     } else {
         // Isometric
+        const int minColumnZeroBased = minColumn - 1;
+        const int columnCount = maxColumn - minColumn + 1;
         for (int tileY = minRow; tileY <= maxRow; ++tileY) {
             const int rowZeroBased = tileY - 1;
-            const int rowIndexBase = rowZeroBased * mapWidth + (minColumn - 1);
-            for (int tileX = minColumn, tileIndex = rowIndexBase; tileX <= maxColumn; ++tileX, ++tileIndex) {
-                const int columnZeroBased = tileX - 1;
-                const float worldX = (float)columnZeroBased;
-                const float worldY = (float)rowZeroBased;
+            const int rowBaseIndex = rowZeroBased * mapWidth + minColumnZeroBased;
+            const float worldX = (float)minColumnZeroBased;
+            const float worldY = (float)rowZeroBased;
 
-                const int isoX = roxy_math_roundInt(originX + (worldX - worldY) * halfTileWidth + pivotAdjustX - cameraX * parallaxX);
-                const int isoY = roxy_math_roundInt(originY + (worldX + worldY) * halfTileHeight + pivotAdjustY - cameraY * parallaxY);
+            const float rowStartX = originX + (worldX - worldY) * halfTileWidth + pivotAdjustX - cameraX * parallaxX;
+            const float rowStartY = originY + (worldX + worldY) * halfTileHeight + pivotAdjustY - cameraY * parallaxY;
 
+            if (isoRowNeedsFullProjection(rowStartX, halfTileWidth, columnCount) ||
+                isoRowNeedsFullProjection(rowStartY, halfTileHeight, columnCount)) {
+                for (int tileX = minColumn, tileIndex = rowBaseIndex; tileX <= maxColumn; ++tileX, ++tileIndex) {
+                    const int columnZeroBased = tileX - 1;
+                    const float currentWorldX = (float)columnZeroBased;
+                    const int isoX = roxy_math_roundInt(originX + (currentWorldX - worldY) * halfTileWidth + pivotAdjustX - cameraX * parallaxX);
+                    const int isoY = roxy_math_roundInt(originY + (currentWorldX + worldY) * halfTileHeight + pivotAdjustY - cameraY * parallaxY);
+
+                    const int currentTileIndex = tiles[tileIndex];
+                    if (currentTileIndex > 0 && currentTileIndex <= imageCount) {
+                        drawCellUnchecked(images, offsetX, offsetY, currentTileIndex, isoX, isoY);
+                    }
+                }
+                continue;
+            }
+
+            int screenX = roxy_math_roundInt(rowStartX);
+            int screenY = roxy_math_roundInt(rowStartY);
+
+            for (int tileX = minColumn, tileIndex = rowBaseIndex; tileX <= maxColumn; ++tileX, ++tileIndex) {
                 const int currentTileIndex = tiles[tileIndex];
                 if (currentTileIndex > 0 && currentTileIndex <= imageCount) {
-                    drawCellUnchecked(images, offsetX, offsetY, currentTileIndex, isoX, isoY);
+                    drawCellUnchecked(images, offsetX, offsetY, currentTileIndex, screenX, screenY);
                 }
+                screenX += halfTileWidth;
+                screenY += halfTileHeight;
             }
         }
     }
@@ -724,15 +759,17 @@ static int roxy_tileRenderer_renderToBuffer(lua_State* L)
         const int maxRowZeroBased    = roxy_math_clampi((int)ceilf(maxRow)     + 1, 0, mapHeight - 1);
 
         for (int rowZeroBased = minRowZeroBased; rowZeroBased <= maxRowZeroBased; ++rowZeroBased) {
-            int tileIndex = rowZeroBased * mapWidth + minColumnZeroBased;
+            const int rowBaseIndex = rowZeroBased * mapWidth + minColumnZeroBased;
+            const float worldX = (float)minColumnZeroBased;
+            const float worldY = (float)rowZeroBased;
+
+            int screenX = roxy_math_roundInt((worldX - worldY) * halfTileWidth  + offsetX);
+            int screenY = roxy_math_roundInt((worldX + worldY) * halfTileHeight + offsetY);
+
+            int tileIndex = rowBaseIndex;
             for (int columnZeroBased = minColumnZeroBased; columnZeroBased <= maxColumnZeroBased; ++columnZeroBased, ++tileIndex) {
                 const int currentTileIndex = tiles[tileIndex];
                 if (currentTileIndex > 0 && currentTileIndex <= imageCount) {
-                    const float worldX = (float)columnZeroBased;
-                    const float worldY = (float)rowZeroBased;
-                    const int screenX = roxy_math_roundInt((worldX - worldY) * halfTileWidth  + offsetX);
-                    const int screenY = roxy_math_roundInt((worldX + worldY) * halfTileHeight + offsetY);
-
                     const int drawX = screenX + offsetXTable[currentTileIndex];
                     const int drawY = screenY + offsetYTable[currentTileIndex];
                     if (drawX < bufferWidth && drawY < bufferHeight && drawX > -tileWidth && drawY > -cullHeight) {
@@ -740,6 +777,8 @@ static int roxy_tileRenderer_renderToBuffer(lua_State* L)
                         if (cell) pd->graphics->drawBitmap(cell, drawX, drawY, kBitmapUnflipped);
                     }
                 }
+                screenX += halfTileWidth;
+                screenY += halfTileHeight;
             }
         }
     }
