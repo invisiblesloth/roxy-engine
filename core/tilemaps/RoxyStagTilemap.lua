@@ -102,6 +102,32 @@ local function _rowShiftX_for_row0(self, row0, halfWidth)
   return (direction == "right") and halfWidth or -halfWidth
 end
 
+-- ! Helper: Row Shift Range
+-- Min/max row shift, in pixels, for a staggered-y layer.
+local function _rowShiftRange(self, mapHeight, halfWidth)
+  if self.staggerAxis ~= "y" or mapHeight <= 0 then return 0, 0 end
+
+  local shiftedRowsExist
+  local unshiftedRowsExist
+  if self.staggerIndex == "odd" then
+    shiftedRowsExist = mapHeight >= 2
+    unshiftedRowsExist = true
+  elseif self.staggerIndex == "even" then
+    shiftedRowsExist = true
+    unshiftedRowsExist = mapHeight >= 2
+  else
+    return 0, 0
+  end
+
+  if not shiftedRowsExist then return 0, 0 end
+
+  local direction = self.staggerDirection or "right"
+  local shiftedValue = (direction == "right") and halfWidth or -halfWidth
+  if not unshiftedRowsExist then return shiftedValue, shiftedValue end
+
+  return min(0, shiftedValue), max(0, shiftedValue)
+end
+
 -- ! Helper: Camera Position
 -- Reuse drawVisible's camera stamp during a frame; otherwise query once.
 local function _cameraPositionFor(self)
@@ -131,15 +157,7 @@ local function _staggeredLayerImageBounds(self, layer)
   local originX = layer.originX or 0
   local originY = layer.originY or 0
 
-  local minShift = math.huge
-  local maxShift = -math.huge
-  for row0 = 0, mapHeight - 1 do
-    local shift = _rowShiftX_for_row0(self, row0, halfWidth)
-    if shift < minShift then minShift = shift end
-    if shift > maxShift then maxShift = shift end
-  end
-  if minShift == math.huge then minShift = 0 end
-  if maxShift == -math.huge then maxShift = 0 end
+  local minShift, maxShift = _rowShiftRange(self, mapHeight, halfWidth)
 
   local layerMinX = originX + minShift
   local layerMaxX = originX + (mapWidth - 1) * tileWidth + maxShift + tileWidth
