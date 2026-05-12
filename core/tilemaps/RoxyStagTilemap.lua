@@ -112,6 +112,56 @@ local function _cameraPositionFor(self)
   return getCameraPosition()
 end
 
+-- ! Helper: Staggered Layer Image Bounds
+local function _staggeredLayerImageBounds(self, layer)
+  local mapWidth = layer.mapWidth or 0
+  local mapHeight = layer.mapHeight or 0
+  if mapWidth <= 0 or mapHeight <= 0 then return nil end
+
+  local tileWidth = layer.tileWidth or 0
+  local tileHeight = layer.tileHeight or 0
+  local halfWidth = layer.halfWidth or tileWidth * 0.5
+  local halfHeight = layer.halfHeight or tileHeight * 0.5
+
+  local maxImageHeight = layer.maxImageHeight or tileHeight
+  if maxImageHeight < tileHeight then
+    maxImageHeight = tileHeight
+  end
+
+  local originX = layer.originX or 0
+  local originY = layer.originY or 0
+
+  local minShift = math.huge
+  local maxShift = -math.huge
+  for row0 = 0, mapHeight - 1 do
+    local shift = _rowShiftX_for_row0(self, row0, halfWidth)
+    if shift < minShift then minShift = shift end
+    if shift > maxShift then maxShift = shift end
+  end
+  if minShift == math.huge then minShift = 0 end
+  if maxShift == -math.huge then maxShift = 0 end
+
+  local layerMinX = originX + minShift
+  local layerMaxX = originX + (mapWidth - 1) * tileWidth + maxShift + tileWidth
+
+  local layerMinY = originY + tileHeight - maxImageHeight
+  local layerMaxY = originY + (mapHeight - 1) * halfHeight + tileHeight
+
+  return layerMinX, layerMinY, layerMaxX, layerMaxY
+end
+
+-- ! Helper: Layer Image Anchor Offset
+local function _layerImageAnchorOffset(self, primaryLayer, minPixelX, minPixelY, pixelWidth, pixelHeight)
+  local anchor = (primaryLayer.anchor or (self._opts and self._opts.anchor)) or "center"
+  if anchor == "topLeft" then
+    return (primaryLayer.originX or 0) - minPixelX,
+      (primaryLayer.originY or 0) - minPixelY
+  end
+
+  return (primaryLayer.originX or 0) - (minPixelX + pixelWidth * 0.5),
+    (primaryLayer.originY or 0) - (minPixelY + pixelHeight * 0.5)
+end
+
 --------------------------------------------------------------------------------
 -- ! Class Definition / Initialize
 --------------------------------------------------------------------------------
@@ -387,6 +437,36 @@ function RoxyStagTilemap:_renderLayerToImage(layerName, opts)
   local primaryLayer = self:_getValidLayer(layerName)
   if not primaryLayer then return nil end
 
+  local compositeLayers = opts and opts.compositeLayers
+  if type(compositeLayers) ~= "table" or #compositeLayers == 0 then
+    -- Fast path avoids queue, entry, and sort overhead for common single-layer renders
+    local minScreenX, minScreenY, maxScreenX, maxScreenY = _staggeredLayerImageBounds(self, primaryLayer)
+    if not minScreenX then return nil end
+
+    local minPixelX = floor(minScreenX)
+    local minPixelY = floor(minScreenY)
+    local maxPixelX = ceil(maxScreenX)
+    local maxPixelY = ceil(maxScreenY)
+
+    local pixelWidth = max(0, maxPixelX - minPixelX)
+    local pixelHeight = max(0, maxPixelY - minPixelY)
+    if pixelWidth <= 0 or pixelHeight <= 0 then return nil end
+
+    local image = newImage(pixelWidth, pixelHeight)
+    if not image then return nil end
+
+    pushContext(image)
+      clear(COLOR_CLEAR)
+      local bufferOffsetX = (primaryLayer.originX or 0) - minPixelX
+      local bufferOffsetY = (primaryLayer.originY or 0) - minPixelY
+      self:_renderLayerToBuffer(primaryLayer, image, bufferOffsetX, bufferOffsetY, pixelWidth, pixelHeight)
+    popContext()
+
+    local anchorOffsetX, anchorOffsetY =
+      _layerImageAnchorOffset(self, primaryLayer, minPixelX, minPixelY, pixelWidth, pixelHeight)
+    return image, anchorOffsetX, anchorOffsetY
+  end
+
   local renderQueue = {}
   local seen = {}
   local order = 0
@@ -408,12 +488,10 @@ function RoxyStagTilemap:_renderLayerToImage(layerName, opts)
 
   enqueueLayer(layerName, primaryLayer)
 
-  if opts and opts.compositeLayers then
-    for index = 1, #opts.compositeLayers do
-      local compositeName = opts.compositeLayers[index]
-      if type(compositeName) == "string" then
-        enqueueLayer(compositeName, self:_getValidLayer(compositeName))
-      end
+  for index = 1, #compositeLayers do
+    local compositeName = compositeLayers[index]
+    if type(compositeName) == "string" then
+      enqueueLayer(compositeName, self:_getValidLayer(compositeName))
     end
   end
 
@@ -429,42 +507,8 @@ function RoxyStagTilemap:_renderLayerToImage(layerName, opts)
 
   for index = 1, #renderQueue do
     local layer = renderQueue[index].layer
-    local mapWidth = layer.mapWidth or 0
-    local mapHeight = layer.mapHeight or 0
-    if mapWidth > 0 and mapHeight > 0 then
-      local tileWidth = layer.tileWidth or 0
-      local tileHeight = layer.tileHeight or 0
-      local halfWidth = layer.halfWidth or tileWidth * 0.5
-      local halfHeight = layer.halfHeight or tileHeight * 0.5
-
-      local maxImageHeight = layer.maxImageHeight or tileHeight
-      if maxImageHeight < tileHeight then
-        maxImageHeight = tileHeight
-      end
-
-      local originX = layer.originX or 0
-      local originY = layer.originY or 0
-
-      local minShift = 0
-      local maxShift = 0
-      if mapHeight > 0 then
-        minShift = math.huge
-        maxShift = -math.huge
-        for row0 = 0, mapHeight - 1 do
-          local shift = _rowShiftX_for_row0(self, row0, halfWidth)
-          if shift < minShift then minShift = shift end
-          if shift > maxShift then maxShift = shift end
-        end
-        if minShift == math.huge then minShift = 0 end
-        if maxShift == -math.huge then maxShift = 0 end
-      end
-
-      local layerMinX = originX + minShift
-      local layerMaxX = originX + (mapWidth - 1) * tileWidth + maxShift + tileWidth
-
-      local layerMinY = originY + tileHeight - maxImageHeight
-      local layerMaxY = originY + (mapHeight - 1) * halfHeight + tileHeight
-
+    local layerMinX, layerMinY, layerMaxX, layerMaxY = _staggeredLayerImageBounds(self, layer)
+    if layerMinX then
       if layerMinX < minScreenX then minScreenX = layerMinX end
       if layerMaxX > maxScreenX then maxScreenX = layerMaxX end
       if layerMinY < minScreenY then minScreenY = layerMinY end
@@ -498,16 +542,8 @@ function RoxyStagTilemap:_renderLayerToImage(layerName, opts)
     end
   popContext()
 
-  local anchor = (primaryLayer.anchor or (self._opts and self._opts.anchor)) or "center"
-  local offsetX, offsetY
-  if anchor == "topLeft" then
-    offsetX = (primaryLayer.originX or 0) - minPixelX
-    offsetY = (primaryLayer.originY or 0) - minPixelY
-  else
-    offsetX = (primaryLayer.originX or 0) - (minPixelX + pixelWidth * 0.5)
-    offsetY = (primaryLayer.originY or 0) - (minPixelY + pixelHeight * 0.5)
-  end
-
+  local offsetX, offsetY =
+    _layerImageAnchorOffset(self, primaryLayer, minPixelX, minPixelY, pixelWidth, pixelHeight)
   return image, offsetX, offsetY
 end
 
