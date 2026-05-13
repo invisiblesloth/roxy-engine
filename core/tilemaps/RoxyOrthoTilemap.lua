@@ -11,6 +11,7 @@ local Cache   <const> = r.Cache
 local min   <const> = math.min
 local max   <const> = math.max
 local floor <const> = math.floor
+local ceil  <const> = math.ceil
 local round <const> = r.Math.round
 
 local tableInsert <const> = table.insert
@@ -40,6 +41,7 @@ local findFirstAvailableLayer <const> = TilemapHelpers.findFirstAvailableLayer
 local DEFAULT_CHUNK_SIZE    <const> = 320
 local DEFAULT_CHUNK_CACHE   <const> = 200
 local DEFAULT_CHUNK_OVERLAP <const> = 32
+local ROUNDING_GUARD_TILES  <const> = 1
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
 local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
@@ -146,6 +148,55 @@ end
 --------------------------------------------------------------------------------
 
 class("RoxyOrthoTilemap").extends(RoxyTilemap)
+
+-- ! Helper: Orthographic Visible Tile Bounds Fast
+-- Direct orthographic bounds path for draw visibility; avoids inverse projection.
+function RoxyOrthoTilemap:_getVisibleTileBoundsFast(layerData, cameraX, cameraY)
+  if not layerData then return 1, 1, 0, 0 end
+
+  local tileWidth, tileHeight = layerData.tileWidth, layerData.tileHeight
+  local mapWidth, mapHeight = layerData.mapWidth, layerData.mapHeight
+  if not tileWidth or tileWidth <= 0
+     or not tileHeight or tileHeight <= 0
+     or not mapWidth or mapWidth <= 0
+     or not mapHeight or mapHeight <= 0
+  then
+    return 1, 1, 0, 0
+  end
+
+  if cameraX == nil or cameraY == nil then
+    cameraX, cameraY = getCameraPosition()
+  end
+
+  local originX, originY = layerData.originX or 0, layerData.originY or 0
+  local parallaxX, parallaxY = layerData.parallaxx or 1, layerData.parallaxy or 1
+  local parallaxOriginX = layerData.parallaxoriginx or 0
+  local parallaxOriginY = layerData.parallaxoriginy or 0
+  local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
+  local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+
+  local screenX = round(originX + pivotAdjustX - cameraX * parallaxX)
+  local screenY = round(originY + pivotAdjustY - cameraY * parallaxY)
+  local sourceX, sourceY = -screenX, -screenY
+
+  local tileMargin = 0
+  if layerData.imageTable then
+    local maxImageHeight = layerData.maxImageHeight or 0
+    local overdraw = max(0, maxImageHeight - tileHeight)
+    tileMargin = ceil(overdraw / max(1, tileHeight * 0.5)) + 1
+  end
+
+  local paddedTileMargin = tileMargin + ROUNDING_GUARD_TILES
+  local padX = paddedTileMargin * tileWidth
+  local padY = paddedTileMargin * tileHeight
+
+  local minTileX = max(1, floor((sourceX - padX) / tileWidth) + 1)
+  local maxTileX = min(mapWidth, ceil((sourceX + DISPLAY_WIDTH + padX) / tileWidth) + 1)
+  local minTileY = max(1, floor((sourceY - padY) / tileHeight) + 1)
+  local maxTileY = min(mapHeight, ceil((sourceY + DISPLAY_HEIGHT + padY) / tileHeight) + 1)
+
+  return minTileX, minTileY, maxTileX, maxTileY
+end
 
 -- ! Initialize
 function RoxyOrthoTilemap:init(jsonPath, opts, scene)
@@ -487,8 +538,9 @@ function RoxyOrthoTilemap:draw(layerName)
     self:_drawStaticLayerChunked(layerName); return
   end
 
-  -- Use base helper so tall tiles near edges are included
-  local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
+  local cameraX, cameraY = getCameraPosition()
+  local minTileX, minTileY, maxTileX, maxTileY =
+    self:_getVisibleTileBoundsFast(layerData, cameraX, cameraY)
   self:_drawLayerRegionData(layerData, minTileX, maxTileX, minTileY, maxTileY)
 end
 
@@ -496,6 +548,7 @@ end
 -- Draw all visible tile layers by zIndex (ascending)
 function RoxyOrthoTilemap:drawVisible()
   local ordered = self._orderedLayers
+  local cameraX, cameraY
   for i = 1, #ordered do
     local item = ordered[i]
     if item.type == "chunked" then
@@ -503,7 +556,11 @@ function RoxyOrthoTilemap:drawVisible()
     else
       local layerData = item.layer
       if layerData.tilemap and layerData.visible ~= false then
-        local minTileX, minTileY, maxTileX, maxTileY = self:getVisibleTileBounds(layerData)
+        if cameraX == nil then
+          cameraX, cameraY = getCameraPosition()
+        end
+        local minTileX, minTileY, maxTileX, maxTileY =
+          self:_getVisibleTileBoundsFast(layerData, cameraX, cameraY)
         self:_drawLayerRegionData(layerData, minTileX, maxTileX, minTileY, maxTileY)
       end
     end
