@@ -80,6 +80,58 @@ local function _hasItem(array, item)
   return false
 end
 
+-- ! Helper: Append Indexed Item
+-- Appends an item and records its array position
+local function _appendIndexed(array, index, item)
+  if not array or not index or not item then return false end
+
+  local existingIndex = index[item]
+  if existingIndex ~= nil then
+    if array[existingIndex] == item then return false end
+    index[item] = nil
+  end
+
+  local nextIndex = #array + 1
+  array[nextIndex] = item
+  index[item] = nextIndex
+  return true
+end
+
+-- ! Helper: Remove Indexed Item
+-- Swap-removes an item from an indexed array
+local function _removeIndexed(array, index, item)
+  if not array or not index or not item then return false end
+
+  local itemIndex = index[item]
+  if itemIndex == nil then return false end
+  if array[itemIndex] ~= item then
+    index[item] = nil
+    return false
+  end
+
+  local lastIndex = #array
+  local lastItem = array[lastIndex]
+
+  array[itemIndex] = lastItem
+  array[lastIndex] = nil
+  index[item] = nil
+
+  if itemIndex ~= lastIndex and lastItem ~= nil then
+    index[lastItem] = itemIndex
+  end
+
+  return true
+end
+
+-- ! Helper: Has Indexed Item
+-- Returns true when the indexed array points back to the item
+local function _hasIndexed(array, index, item)
+  if not array or not index or not item then return false end
+
+  local itemIndex = index[item]
+  return itemIndex ~= nil and array[itemIndex] == item
+end
+
 -- ! Helper: Is Bounds Table
 -- Returns true for camera bounds tables accepted by Camera.setBounds
 local function _isBoundsTable(bounds)
@@ -150,7 +202,10 @@ function RoxyScene:init(background)
   self.tilemaps = {}
   self.sequences = {}
 
+  self._spriteSet = {}
+  self._spriteIndex = {}
   self._spriteAutoAddQueue = {}
+  self._spriteAutoAddIndex = {}
   self._sequenceAutoStartQueue = {}
 
   -- Sensible defaults used by Scene draw filtering
@@ -180,6 +235,7 @@ function RoxyScene:enter()
     spriteQueue[i]:add()
   end
   self._spriteAutoAddQueue = {}
+  self._spriteAutoAddIndex = {}
 
   -- Activate tilemap resources that cannot be created detached from display
   for i = 1, #self.tilemaps do
@@ -359,6 +415,7 @@ function RoxyScene:cleanup()
   resetCamera()
 
   self._spriteAutoAddQueue = {}
+  self._spriteAutoAddIndex = {}
   self._sequenceAutoStartQueue = {}
 
   self.backgroundColor = nil
@@ -425,24 +482,38 @@ end
 -- ! Add Sprite
 function RoxyScene:addSprite(sprite)
   if not sprite then return end
-  if sprite.scene == self then return end
 
-  -- Avoid duplicates
-  for i = 1, #self.sprites do
-    if self.sprites[i] == sprite then return end
+  if self._spriteSet[sprite] == true then
+    local isTracked = _hasIndexed(self.sprites, self._spriteIndex, sprite)
+    local isQueued = self._didEnter or _hasIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+    if sprite.scene == self and isTracked and isQueued then return end
+
+    _removeIndexed(self.sprites, self._spriteIndex, sprite)
+    _removeIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+    self._spriteSet[sprite] = nil
+  end
+
+  local currentScene = sprite.scene
+  if currentScene ~= nil and currentScene ~= self and type(currentScene) == "table" then
+    if type(currentScene._unregisterSprite) == "function" then
+      currentScene:_unregisterSprite(sprite, true)
+    elseif type(currentScene.removeSprite) == "function" then
+      currentScene:removeSprite(sprite)
+    end
   end
 
   -- Give the sprite a back-pointer so it can self-remove later
   sprite.scene = self
 
-  tableInsert(self.sprites, sprite)
+  _appendIndexed(self.sprites, self._spriteIndex, sprite)
+  self._spriteSet[sprite] = true
 
   if self._didEnter then
     -- Scene is active -- attach immediately
     sprite:add()
   else
     -- Scene isn't active yet -- queue for enter()
-    tableInsert(self._spriteAutoAddQueue, sprite)
+    _appendIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
   end
 end
 
@@ -456,16 +527,19 @@ end
 function RoxyScene:_unregisterSprite(sprite, removeFromDisplay)
   if not sprite then return end
 
-  -- Remove from active scene list and pre-enter auto-add queue
-  local wasManaged = _removeItem(self.sprites, sprite)
-  wasManaged = _removeItem(self._spriteAutoAddQueue, sprite) or wasManaged
-  wasManaged = (sprite.scene == self) or wasManaged
+  local wasSelfOwnedAtEntry = sprite.scene == self
 
-  if sprite.scene == self then
+  -- Remove only this scene's ownership state. Direct external writes to
+  -- scene.sprites are unsupported, but removeAllSprites remains tolerant.
+  _removeIndexed(self.sprites, self._spriteIndex, sprite)
+  _removeIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+  self._spriteSet[sprite] = nil
+
+  if wasSelfOwnedAtEntry and sprite.scene == self then
     sprite.scene = nil -- Clear back-pointer
   end
 
-  if removeFromDisplay ~= false and wasManaged then
+  if removeFromDisplay ~= false and wasSelfOwnedAtEntry then
     sprite:remove()
   end
 end
@@ -476,47 +550,34 @@ end
 function RoxyScene:_unregisterSprites(sprites, removeFromDisplay)
   if not sprites then return end
 
-  -- Build a lookup set so scene lists only need one pass each
+  -- Build a unique target list so duplicate inputs stay idempotent
   local targets = nil
+  local targetList = nil
   for i = 1, #sprites do
     local sprite = sprites[i]
-    if sprite then
+    if sprite and (not targets or not targets[sprite]) then
       targets = targets or {}
+      targetList = targetList or {}
       targets[sprite] = true
+      targetList[#targetList + 1] = sprite
     end
   end
   if not targets then return end
 
-  local managed = {}
-
-  -- Remove from active scene list
-  local sceneSprites = self.sprites
-  for i = #sceneSprites, 1, -1 do
-    local sprite = sceneSprites[i]
-    if targets[sprite] then
-      tableRemove(sceneSprites, i)
-      managed[sprite] = true
-    end
-  end
-
-  -- Remove from pre-enter auto-add queue
-  local spriteQueue = self._spriteAutoAddQueue
-  for i = #spriteQueue, 1, -1 do
-    local sprite = spriteQueue[i]
-    if targets[sprite] then
-      tableRemove(spriteQueue, i)
-      managed[sprite] = true
-    end
-  end
-
   local shouldRemove = removeFromDisplay ~= false
-  for sprite, _ in pairs(targets) do
-    if sprite.scene == self then
+  for i = 1, #targetList do
+    local sprite = targetList[i]
+    local wasSelfOwnedAtEntry = sprite.scene == self
+
+    _removeIndexed(self.sprites, self._spriteIndex, sprite)
+    _removeIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+    self._spriteSet[sprite] = nil
+
+    if wasSelfOwnedAtEntry and sprite.scene == self then
       sprite.scene = nil -- Clear back-pointer
-      managed[sprite] = true
     end
 
-    if shouldRemove and managed[sprite] then
+    if shouldRemove and wasSelfOwnedAtEntry then
       sprite:remove()
     end
   end
@@ -525,11 +586,22 @@ end
 -- ! Remove All Sprites
 function RoxyScene:removeAllSprites()
   local sprites = self.sprites
+
+  self.sprites = {}
+  self._spriteSet = {}
+  self._spriteIndex = {}
+  self._spriteAutoAddQueue = {}
+  self._spriteAutoAddIndex = {}
+
   for i = #sprites, 1, -1 do
     local sprite = sprites[i]
     if sprite.scene == self then
       sprite.scene = nil -- Clear back-pointer
     end
+  end
+
+  for i = #sprites, 1, -1 do
+    local sprite = sprites[i]
     -- Prefer view-aware cleanup so pooled sprite assets are released
     if sprite.removeAndClearView then
       sprite:removeAndClearView()
@@ -537,8 +609,6 @@ function RoxyScene:removeAllSprites()
       sprite:remove()
     end
   end
-  self.sprites = {}
-  self._spriteAutoAddQueue = {}
 end
 
 -- ! Spawn Sprite
@@ -777,12 +847,20 @@ pauseScene.isVisible = true
 pauseScene.blocksLowerDraw = false
 pauseScene.updateBackground = true
 
--- Manual Ownership Cleanup
+-- Manual Ownership and Reuse
 local scene = RoxyScene()
-local player = RoxySprite({ name = "player" }, scene)
+local player = RoxySprite({ name = "player" })
 local map = scene:spawnTilemap("assets/maps/level-01.json")
 
+scene:addSprite(player)
+scene:addSprite(player) -- Ignored; scene ownership stays unique
 scene:removeSprite(player)
+scene:addSprite(player)
+
+local inventoryScene = RoxyScene()
+inventoryScene:addSprite(player) -- Transfers ownership from the old scene
+inventoryScene:removeSprite(player)
+
 scene:detachTilemap(map)
 scene:addTilemap(map)
 scene:removeTilemap(map)
