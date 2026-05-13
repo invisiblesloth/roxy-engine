@@ -74,6 +74,73 @@ local function _drawLayerRegionToBuffer(layerData, destinationX, destinationY, s
   layerData.tilemap:drawIgnoringOffset(destinationX, destinationY, sourceX, sourceY, width, height)
 end
 
+-- ! Helper: Resolve Render Image Rect
+local function _resolveRenderImageRect(primaryLayer, opts)
+  local defaultWidth = primaryLayer.mapPixelWidth or 0
+  local defaultHeight = primaryLayer.mapPixelHeight or 0
+
+  local tileWidth = primaryLayer.tileWidth or 0
+  local tileHeight = primaryLayer.tileHeight or 0
+
+  local sourceX = 0
+  local sourceY = 0
+  local pixelWidth = defaultWidth
+  local pixelHeight = defaultHeight
+
+  if opts then
+    if opts.tileX or opts.tileY then
+      local tileX = tonumber(opts.tileX)
+      local tileY = tonumber(opts.tileY)
+
+      if tileX then sourceX = (tileX - 1) * tileWidth end
+      if tileY then sourceY = (tileY - 1) * tileHeight end
+    end
+
+    if opts.tileWidth or opts.tileHeight then
+      local widthTiles = tonumber(opts.tileWidth)
+      local heightTiles = tonumber(opts.tileHeight)
+
+      if widthTiles then pixelWidth = widthTiles * tileWidth end
+      if heightTiles then pixelHeight = heightTiles * tileHeight end
+    end
+
+    if opts.sourceX ~= nil then sourceX = tonumber(opts.sourceX) or sourceX end
+    if opts.sourceY ~= nil then sourceY = tonumber(opts.sourceY) or sourceY end
+
+    if opts.width ~= nil then pixelWidth = tonumber(opts.width) or pixelWidth end
+    if opts.height ~= nil then pixelHeight = tonumber(opts.height) or pixelHeight end
+
+    if opts.pixelWidth ~= nil then pixelWidth = tonumber(opts.pixelWidth) or pixelWidth end
+    if opts.pixelHeight ~= nil then pixelHeight = tonumber(opts.pixelHeight) or pixelHeight end
+  end
+
+  sourceX = floor(sourceX or 0)
+  sourceY = floor(sourceY or 0)
+  pixelWidth = max(0, floor(pixelWidth or 0))
+  pixelHeight = max(0, floor(pixelHeight or 0))
+
+  if pixelWidth <= 0 or pixelHeight <= 0 then return nil end
+
+  if sourceX < 0 then sourceX = 0 end
+  if sourceY < 0 then sourceY = 0 end
+
+  return sourceX, sourceY, pixelWidth, pixelHeight
+end
+
+-- ! Helper: Layer Image Anchor Offset
+local function _layerImageAnchorOffset(self, primaryLayer, sourceX, sourceY, pixelWidth, pixelHeight)
+  local originX = primaryLayer.originX or 0
+  local originY = primaryLayer.originY or 0
+  local anchor = (primaryLayer.anchor or (self._opts and self._opts.anchor)) or "center"
+
+  if anchor == "topLeft" then
+    return originX - sourceX, originY - sourceY
+  end
+
+  return originX - (sourceX + pixelWidth * 0.5),
+         originY - (sourceY + pixelHeight * 0.5)
+end
+
 --------------------------------------------------------------------------------
 -- ! Class Definition and Initialization
 --------------------------------------------------------------------------------
@@ -290,6 +357,24 @@ function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
   local primaryLayer = self:_getValidLayer(layerName)
   if not primaryLayer then return nil end
 
+  local sourceX, sourceY, pixelWidth, pixelHeight = _resolveRenderImageRect(primaryLayer, opts)
+  if sourceX == nil then return nil end
+
+  local compositeLayers = opts and opts.compositeLayers
+  if type(compositeLayers) ~= "table" or #compositeLayers == 0 then
+    local image = newImage(pixelWidth, pixelHeight)
+    if not image then return nil end
+
+    pushContext(image)
+      clear(COLOR_CLEAR)
+      _drawLayerRegionToBuffer(primaryLayer, 0, 0, sourceX, sourceY, pixelWidth, pixelHeight)
+    popContext()
+
+    local offsetX, offsetY =
+      _layerImageAnchorOffset(self, primaryLayer, sourceX, sourceY, pixelWidth, pixelHeight)
+    return image, offsetX, offsetY
+  end
+
   local renderQueue = {}
   local order = 0
 
@@ -314,12 +399,10 @@ function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
 
   enqueueLayer(layerName, primaryLayer)
 
-  if opts and opts.compositeLayers then
-    for index = 1, #opts.compositeLayers do
-      local compositeName = opts.compositeLayers[index]
-      if type(compositeName) == "string" then
-        enqueueLayer(compositeName, self:_getValidLayer(compositeName))
-      end
+  for index = 1, #compositeLayers do
+    local compositeName = compositeLayers[index]
+    if type(compositeName) == "string" then
+      enqueueLayer(compositeName, self:_getValidLayer(compositeName))
     end
   end
 
@@ -329,54 +412,6 @@ function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
     if a.z == b.z then return a.order < b.order end
     return a.z < b.z
   end)
-
-  local defaultWidth = primaryLayer.mapPixelWidth or 0
-  local defaultHeight = primaryLayer.mapPixelHeight or 0
-
-  local tileWidth = primaryLayer.tileWidth or 0
-  local tileHeight = primaryLayer.tileHeight or 0
-
-  local sourceX = 0
-  local sourceY = 0
-  local pixelWidth = defaultWidth
-  local pixelHeight = defaultHeight
-
-  if opts then
-    if opts.tileX or opts.tileY then
-      local tileX = tonumber(opts.tileX)
-      local tileY = tonumber(opts.tileY)
-
-      if tileX then sourceX = (tileX - 1) * tileWidth end
-      if tileY then sourceY = (tileY - 1) * tileHeight end
-    end
-
-    if opts.tileWidth or opts.tileHeight then
-      local widthTiles = tonumber(opts.tileWidth)
-      local heightTiles = tonumber(opts.tileHeight)
-
-      if widthTiles then pixelWidth = widthTiles * tileWidth end
-      if heightTiles then pixelHeight = heightTiles * tileHeight end
-    end
-
-    if opts.sourceX ~= nil then sourceX = tonumber(opts.sourceX) or sourceX end
-    if opts.sourceY ~= nil then sourceY = tonumber(opts.sourceY) or sourceY end
-
-    if opts.width ~= nil then pixelWidth = tonumber(opts.width) or pixelWidth end
-    if opts.height ~= nil then pixelHeight = tonumber(opts.height) or pixelHeight end
-
-    if opts.pixelWidth ~= nil then pixelWidth = tonumber(opts.pixelWidth) or pixelWidth end
-    if opts.pixelHeight ~= nil then pixelHeight = tonumber(opts.pixelHeight) or pixelHeight end
-  end
-
-  sourceX = floor(sourceX or 0)
-  sourceY = floor(sourceY or 0)
-  pixelWidth = max(0, floor(pixelWidth or 0))
-  pixelHeight = max(0, floor(pixelHeight or 0))
-
-  if pixelWidth <= 0 or pixelHeight <= 0 then return nil end
-
-  if sourceX < 0 then sourceX = 0 end
-  if sourceY < 0 then sourceY = 0 end
 
   local image = newImage(pixelWidth, pixelHeight)
   if not image then return nil end
@@ -389,19 +424,8 @@ function RoxyOrthoTilemap:_renderLayerToImage(layerName, opts)
     end
   popContext()
 
-  local originX = primaryLayer.originX or 0
-  local originY = primaryLayer.originY or 0
-  local anchor = (primaryLayer.anchor or (self._opts and self._opts.anchor)) or "center"
-
-  local offsetX, offsetY
-  if anchor == "topLeft" then
-    offsetX = originX - sourceX
-    offsetY = originY - sourceY
-  else
-    offsetX = originX - (sourceX + pixelWidth * 0.5)
-    offsetY = originY - (sourceY + pixelHeight * 0.5)
-  end
-
+  local offsetX, offsetY =
+    _layerImageAnchorOffset(self, primaryLayer, sourceX, sourceY, pixelWidth, pixelHeight)
   return image, offsetX, offsetY
 end
 
