@@ -12,6 +12,7 @@ local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
 local Camera      <const> = r.Camera
 local Cache       <const> = r.Cache
+local Scene       <const> = r.Scene
 
 local min   <const> = math.min
 local max   <const> = math.max
@@ -636,9 +637,11 @@ function RoxyTilemap:_configureCollisionSprites(sprites, config)
   if not sprites or not config then return end
 
   for _, sprite in ipairs(sprites) do
-    sprite._roxyScenePausePlayback = false
-    sprite._roxyScenePauseUpdates = false
-    sprite._roxyScenePauseCollisions = true
+    Scene.setSpritePauseClassification(sprite, {
+      playback = false,
+      updates = false,
+      collisions = true,
+    })
 
     sprite:setTag(WALL_TAG)
     sprite:setCollideRect(0, 0, sprite:getSize())

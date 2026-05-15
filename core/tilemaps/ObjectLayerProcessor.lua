@@ -10,6 +10,7 @@ local Sprite    <const> = Graphics.sprite
 
 local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
+local Scene       <const> = r.Scene
 
 local tableCreate <const> = table.create
 local tableInsert <const> = table.insert
@@ -140,9 +141,11 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
     end
   end
 
-  sprite._roxyScenePausePlayback = false
-  sprite._roxyScenePauseUpdates = hasParallax
-  sprite._roxyScenePauseCollisions = layerOptions.collidable == true
+  Scene.setSpritePauseClassification(sprite, {
+    playback = false,
+    updates = hasParallax,
+    collisions = layerOptions.collidable == true,
+  })
 
   -- Track retained image path for cleanup
   sprite._retainedImagePath = didRetain and imagePath or nil

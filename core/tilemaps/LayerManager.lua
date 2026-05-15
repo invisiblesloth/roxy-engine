@@ -8,6 +8,7 @@ local Sprite    <const> = Graphics.sprite
 local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
 local Camera      <const> = r.Camera
+local Scene       <const> = r.Scene
 
 local round <const> = r.Math.round
 
@@ -63,9 +64,11 @@ end
 
 -- ! Helper: Set Scene Pause Classification
 local function _setScenePauseClassification(sprite, playback, updates, collisions)
-  sprite._roxyScenePausePlayback = playback
-  sprite._roxyScenePauseUpdates = updates
-  sprite._roxyScenePauseCollisions = collisions
+  Scene.setSpritePauseClassification(sprite, {
+    playback = playback,
+    updates = updates,
+    collisions = collisions,
+  })
 end
 
 --------------------------------------------------------------------------------

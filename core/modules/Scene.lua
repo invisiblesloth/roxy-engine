@@ -13,16 +13,27 @@ local getDisplayImage <const> = Graphics.getDisplayImage
 local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
 local redrawBackground      <const> = Sprite.redrawBackground
 
--- Cache a reference to your base scene class draw, if available
+-- Cache base scene class draw if available
 local BaseSceneDraw <const> = (rawget(_G, "RoxyScene") and RoxyScene.draw) or nil
 
 local MAX_SCENE_DEPTH <const> = 32
+
+local SCENE_PAUSE_NONE        <const> = 0
+local SCENE_PAUSE_PLAYBACK    <const> = 1
+local SCENE_PAUSE_UPDATES     <const> = 2
+local SCENE_PAUSE_COLLISIONS  <const> = 4
+local SCENE_PAUSE_ALL         <const> = SCENE_PAUSE_PLAYBACK + SCENE_PAUSE_UPDATES + SCENE_PAUSE_COLLISIONS
 
 -- Shared no-op function to avoid per-activation allocations
 local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
 -- Global
-Scene.currentScene = nil
+Scene.currentScene            = nil
+Scene._SCENE_PAUSE_NONE       = SCENE_PAUSE_NONE
+Scene._SCENE_PAUSE_PLAYBACK   = SCENE_PAUSE_PLAYBACK
+Scene._SCENE_PAUSE_UPDATES    = SCENE_PAUSE_UPDATES
+Scene._SCENE_PAUSE_COLLISIONS = SCENE_PAUSE_COLLISIONS
+Scene._SCENE_PAUSE_ALL        = SCENE_PAUSE_ALL
 
 -- Local
 local scenes
@@ -31,9 +42,72 @@ local updateList
 local bgList
 local drawList
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Utilities
--- ----------------------------------------
+--------------------------------------------------------------------------------
+
+-- ! Utility: Get Sprite Pause Mask
+-- Internal helper; mask values are an implementation detail, not public API.
+function Scene._getSpritePauseMask(sprite)
+  if not sprite then return SCENE_PAUSE_NONE end
+
+  local mask = sprite._roxyScenePauseMask
+  if mask == nil then return SCENE_PAUSE_ALL end
+  return mask
+end
+
+-- ! Utility: Set Sprite Pause Classification
+function Scene.setSpritePauseClassification(sprite, opts)
+  if not sprite then return nil end
+
+  local oldMask = Scene._getSpritePauseMask(sprite)
+  local newMask = nil
+
+  if opts == nil then
+    sprite._roxyScenePauseMask = nil
+    newMask = SCENE_PAUSE_ALL
+  else
+    if type(opts) ~= "table" then
+      Log.error("[Scene.setSpritePauseClassification] Expected table or nil", 2)
+    end
+
+    local playback = opts.playback
+    local updates = opts.updates
+    local collisions = opts.collisions
+
+    -- Validate in all builds; silent coercion makes pause state difficult to trace.
+    if playback ~= nil and type(playback) ~= "boolean" then
+      Log.error("[Scene.setSpritePauseClassification] playback must be a boolean when supplied", 2)
+    end
+    if updates ~= nil and type(updates) ~= "boolean" then
+      Log.error("[Scene.setSpritePauseClassification] updates must be a boolean when supplied", 2)
+    end
+    if collisions ~= nil and type(collisions) ~= "boolean" then
+      Log.error("[Scene.setSpritePauseClassification] collisions must be a boolean when supplied", 2)
+    end
+
+    newMask = SCENE_PAUSE_NONE
+    if playback == true then newMask = newMask + SCENE_PAUSE_PLAYBACK end
+    if updates == true then newMask = newMask + SCENE_PAUSE_UPDATES end
+    if collisions == true then newMask = newMask + SCENE_PAUSE_COLLISIONS end
+    sprite._roxyScenePauseMask = newMask
+  end
+
+  if oldMask ~= newMask then
+    local scene = sprite.scene
+    if scene and type(scene._spritePauseClassificationDidChange) == "function" then
+      scene:_spritePauseClassificationDidChange(sprite, oldMask, newMask)
+    end
+  end
+
+  return sprite
+end
+
+if type(Sprite.setPauseClassification) ~= "function" then
+  function Sprite:setPauseClassification(opts)
+    return Scene.setSpritePauseClassification(self, opts)
+  end
+end
 
 -- ! Utility: Rebuild Lists
 -- Rebuilds the update lists based on the current stack.
@@ -138,9 +212,9 @@ local function activateScene(scene)
   end
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- ! Initialize Scene module
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 function Scene.init()
   -- Clear registered scenes, stack and lists
@@ -155,9 +229,9 @@ function Scene.init()
   rebuildLists()
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Scene Registration
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Register Scenes
 function Scene.registerScenes(...)
@@ -208,9 +282,9 @@ function Scene.registerScenes(...)
   Log.error("[Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Scene Stack Management
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Replace Scene Raw
 function Scene.replaceRaw(newScene)
@@ -330,9 +404,9 @@ function Scene.invalidateLists()
   rebuildLists()
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Scene State / Getters
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Get Current Scene
 function Scene.getCurrentScene()
@@ -359,8 +433,61 @@ function Scene.getBackgroundList()
   return bgList
 end
 
--- ! Get Draw List (Added)
+-- ! Get Draw List
 -- Returns the cached draw list honoring blocksLowerDraw and isVisible flags.
 function Scene.getDrawList()
   return drawList
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Scene manages registration, stack flow, background updates, and sprite pause classification.
+
+-- Register and Start Scenes
+Scene.init()
+Scene.registerScenes({
+  Title    = TitleScene,
+  Gameplay = GameplayScene,
+  Pause    = PauseScene,
+})
+
+Scene.replaceScene(TitleScene)
+
+-- Stack a Pause Scene
+Scene.pushScene(PauseScene)
+local currentScene = Scene.getCurrentScene()
+local depth = Scene.getStackDepth()
+Scene.popScene()
+
+-- Keep a Background Scene Updating
+GameplayScene.alwaysUpdate = true
+GameplayScene.updateBackground = true
+Scene.invalidateLists()
+
+-- Classify Sprites for Scene Pause
+local player = RoxySprite({ name = "player" })
+player:setPauseClassification(nil) -- Default dynamic behavior
+
+local decoration = playdate.graphics.sprite.new()
+decoration:setPauseClassification({}) -- Static; skip pause/resume work
+
+local parallaxLayer = playdate.graphics.sprite.new()
+parallaxLayer:setPauseClassification({ updates = true })
+
+local wall = playdate.graphics.sprite.new()
+Scene.setSpritePauseClassification(wall, { collisions = true })
+
+-- Manual Loop Integration
+for _, scene in ipairs(Scene.getUpdateList()) do
+  scene:update(dt)
+end
+
+for _, scene in ipairs(Scene.getDrawList()) do
+  scene:draw(dt)
+end
+
+--]]

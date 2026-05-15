@@ -5,6 +5,7 @@ local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 local r         <const> = roxy
 local Debug     <const> = r.Debug
+local Scene     <const> = r.Scene
 
 local max   <const> = math.max
 local floor <const> = math.floor
@@ -123,9 +124,11 @@ class("RoxyParticles").extends(RoxySprite)
 -- ! Initialize
 function RoxyParticles:init(x, y, opts)
   RoxySprite.super.init(self)
-  self._roxyScenePausePlayback = false
-  self._roxyScenePauseUpdates = true
-  self._roxyScenePauseCollisions = false
+  Scene.setSpritePauseClassification(self, {
+    playback = false,
+    updates = true,
+    collisions = false,
+  })
 
   local opts = mergeTableImmutable(DEFAULT_OPTS, (opts or EMPTY_TABLE))
 
