@@ -636,6 +636,10 @@ function RoxyTilemap:_configureCollisionSprites(sprites, config)
   if not sprites or not config then return end
 
   for _, sprite in ipairs(sprites) do
+    sprite._roxyScenePausePlayback = false
+    sprite._roxyScenePauseUpdates = false
+    sprite._roxyScenePauseCollisions = true
+
     sprite:setTag(WALL_TAG)
     sprite:setCollideRect(0, 0, sprite:getSize())
 

@@ -38,12 +38,27 @@ local setCameraDeadZone     <const> = Camera.setDeadZone
 local setCameraFriction     <const> = Camera.setFriction
 local setCameraBias         <const> = Camera.setBias
 local setCameraMode         <const> = Camera.setMode
+local snapshotCameraState   <const> = Camera._snapshotState
+local restoreCameraState    <const> = Camera._restoreState
 
 local COLOR_WHITE <const> = Graphics.kColorWhite
 local COLOR_BLACK <const> = Graphics.kColorBlack
 local CLEAR_COLOR <const> = COLOR_WHITE
 
 local UNFLIPPED <const> = Graphics.kImageUnflipped
+
+local SCENE_PAUSE_NONE        <const> = 0
+local SCENE_PAUSE_PLAYBACK    <const> = 1
+local SCENE_PAUSE_UPDATES     <const> = 2
+local SCENE_PAUSE_COLLISIONS  <const> = 4
+local SCENE_PAUSE_PLAYBACK_UPDATES <const> = SCENE_PAUSE_PLAYBACK + SCENE_PAUSE_UPDATES
+local SCENE_PAUSE_PLAYBACK_COLLISIONS <const> = SCENE_PAUSE_PLAYBACK + SCENE_PAUSE_COLLISIONS
+local SCENE_PAUSE_UPDATES_COLLISIONS <const> = SCENE_PAUSE_UPDATES + SCENE_PAUSE_COLLISIONS
+local SCENE_PAUSE_ALL <const> = SCENE_PAUSE_PLAYBACK + SCENE_PAUSE_UPDATES + SCENE_PAUSE_COLLISIONS
+
+local RESTORE_UPDATES     <const> = 1
+local RESTORE_COLLISIONS  <const> = 2
+local SHOULD_PLAY         <const> = 4
 
 local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
@@ -149,6 +164,472 @@ local function _readXYPair(value)
   return value.x or value[1], value.y or value[2]
 end
 
+-- ! Helper: Get Scene Pause Mask
+-- Nil classification fields keep custom sprites on the legacy full-dynamic path;
+-- False opts a subsystem out. The scene caches this at registration time.
+local function _getScenePauseMask(sprite)
+  if not sprite then return SCENE_PAUSE_NONE end
+
+  local mask = SCENE_PAUSE_NONE
+  if sprite._roxyScenePausePlayback ~= false then
+    mask = mask + SCENE_PAUSE_PLAYBACK
+  end
+  if sprite._roxyScenePauseUpdates ~= false then
+    mask = mask + SCENE_PAUSE_UPDATES
+  end
+  if sprite._roxyScenePauseCollisions ~= false then
+    mask = mask + SCENE_PAUSE_COLLISIONS
+  end
+  return mask
+end
+
+-- ! Helper: Clear Scene Pause Registration
+-- Clears registration-only pause fields when the scene stops tracking a sprite
+local function _clearScenePauseRegistration(sprite)
+  if not sprite then return end
+
+  sprite._roxyScenePauseMask = nil
+
+  -- Remove fields from older cache-based builds when dirty scenes are recycled.
+  sprite._roxyScenePausePause = nil
+  sprite._roxyScenePausePlay = nil
+  sprite._roxyScenePauseGetIsPaused = nil
+  sprite._roxyScenePauseReadIsPaused = nil
+  sprite._roxyScenePauseSetUpdatesEnabled = nil
+  sprite._roxyScenePauseUpdatesEnabled = nil
+  sprite._roxyScenePauseSetCollisionsActive = nil
+  sprite._roxyScenePauseSetCollisionsEnabled = nil
+  sprite._roxyScenePauseCollisionsEnabled = nil
+end
+
+-- ! Helper: Remove Sprite From Scene Pause Buckets
+local function _removeFromScenePauseBuckets(scene, sprite)
+  _removeIndexed(scene._pauseSprites, scene._pauseSpriteIndex, sprite)
+  _removeIndexed(scene._pauseUpdateSprites, scene._pauseUpdateSpriteIndex, sprite)
+  _removeIndexed(scene._pauseCollisionSprites, scene._pauseCollisionSpriteIndex, sprite)
+end
+
+-- ! Helper: Add Sprite To Scene Pause Bucket
+local function _addToScenePauseBucket(scene, sprite, pauseMask)
+  if pauseMask == SCENE_PAUSE_NONE then return end
+
+  if pauseMask == SCENE_PAUSE_COLLISIONS then
+    _appendIndexed(scene._pauseCollisionSprites, scene._pauseCollisionSpriteIndex, sprite)
+  elseif pauseMask == SCENE_PAUSE_UPDATES then
+    _appendIndexed(scene._pauseUpdateSprites, scene._pauseUpdateSpriteIndex, sprite)
+  else
+    _appendIndexed(scene._pauseSprites, scene._pauseSpriteIndex, sprite)
+  end
+end
+
+-- ! Helper: Scene Pause Mask Has Playback
+local function _pauseMaskHasPlayback(mask)
+  return mask == SCENE_PAUSE_PLAYBACK
+      or mask == SCENE_PAUSE_PLAYBACK_UPDATES
+      or mask == SCENE_PAUSE_PLAYBACK_COLLISIONS
+      or mask == SCENE_PAUSE_ALL
+end
+
+-- ! Helper: Scene Pause Mask Has Updates
+local function _pauseMaskHasUpdates(mask)
+  return mask == SCENE_PAUSE_UPDATES
+      or mask == SCENE_PAUSE_PLAYBACK_UPDATES
+      or mask == SCENE_PAUSE_UPDATES_COLLISIONS
+      or mask == SCENE_PAUSE_ALL
+end
+
+-- ! Helper: Scene Pause Mask Has Collisions
+local function _pauseMaskHasCollisions(mask)
+  return mask == SCENE_PAUSE_COLLISIONS
+      or mask == SCENE_PAUSE_PLAYBACK_COLLISIONS
+      or mask == SCENE_PAUSE_UPDATES_COLLISIONS
+      or mask == SCENE_PAUSE_ALL
+end
+
+-- ! Helper: Read Sprite Paused State
+-- Returns (isPaused, didRead). Custom sprites without state keep legacy resume.
+local function _readSpritePaused(sprite)
+  local getIsPaused = sprite and sprite.getIsPaused
+  if type(getIsPaused) == "function" then
+    local value = getIsPaused(sprite)
+    if type(value) == "boolean" then
+      return value, true
+    end
+  end
+
+  local value = sprite and sprite.isPaused
+  if type(value) == "boolean" then
+    return value, true
+  end
+
+  return nil, false
+end
+
+-- ! Helper: Read Sprite Updates Enabled
+local function _readSpriteUpdatesEnabled(sprite)
+  local updatesEnabled = sprite and sprite.updatesEnabled
+  if type(updatesEnabled) ~= "function" then
+    return true
+  end
+
+  local value = updatesEnabled(sprite)
+  return value ~= false and value ~= 0
+end
+
+-- ! Helper: Read Sprite Collisions Enabled
+local function _readSpriteCollisionsEnabled(sprite)
+  local collisionsEnabled = sprite and sprite.collisionsEnabled
+  if type(collisionsEnabled) ~= "function" then
+    return true
+  end
+
+  local value = collisionsEnabled(sprite)
+  return value ~= false and value ~= 0
+end
+
+-- ! Helper: Run Sprite Pause
+local function _runSpritePause(sprite)
+  local pause = sprite and sprite.pause
+  if type(pause) ~= "function" then return end
+
+  pause(sprite)
+end
+
+-- ! Helper: Run Sprite Play
+local function _runSpritePlay(sprite)
+  local play = sprite and sprite.play
+  if type(play) ~= "function" then return end
+
+  play(sprite)
+end
+
+-- ! Helper: Set Sprite Updates Active
+local function _setSpriteUpdatesActive(sprite, flag)
+  local setter = sprite and sprite.setUpdatesEnabled
+  if type(setter) ~= "function" then return end
+
+  setter(sprite, flag)
+end
+
+-- ! Helper: Set Sprite Collisions Active
+-- RoxySprite exposes a scene-pause-only path that preserves desired collisions.
+local function _setSpriteCollisionsActive(sprite, flag)
+  local sceneSetter = sprite and sprite._setScenePauseCollisionsActive
+  if type(sceneSetter) == "function" then
+    sceneSetter(sprite, flag)
+    return
+  end
+
+  local setter = sprite and sprite.setCollisionsEnabled
+  if type(setter) ~= "function" then return end
+
+  setter(sprite, flag)
+end
+
+-- ! Helper: Clear Scene Pause Snapshot
+local function _clearScenePauseSnapshot(scene, sprite)
+  if not sprite then return end
+  if scene ~= nil and sprite._roxyScenePauseOwner ~= scene then return end
+
+  sprite._roxyScenePauseOwner = nil
+  sprite._roxyScenePauseState = nil
+
+  -- Remove fields from older snapshot builds when dirty scenes are recycled.
+  sprite._roxyScenePauseHadUpdates = nil
+  sprite._roxyScenePauseHadCollisions = nil
+  sprite._roxyScenePauseShouldPlay = nil
+end
+
+-- ! Helper: Reapply Existing Scene Pause
+-- Used when add() re-enables sprite systems while the owning scene is paused.
+local function _reapplyScenePauseSprite(sprite, pauseMask)
+  pauseMask = pauseMask or sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+
+  if _pauseMaskHasPlayback(pauseMask) then
+    local isPaused, didReadPaused = _readSpritePaused(sprite)
+    if (not didReadPaused) or isPaused == false then
+      _runSpritePause(sprite)
+    end
+  end
+  if _pauseMaskHasUpdates(pauseMask) then
+    _setSpriteUpdatesActive(sprite, false)
+  end
+  if _pauseMaskHasCollisions(pauseMask) then
+    _setSpriteCollisionsActive(sprite, false)
+  end
+end
+
+-- ! Helper: Build Scene Pause State
+-- Stores only the restore bits needed for the subsystems this mask pauses
+local function _buildScenePauseState(sprite, pauseMask)
+  local state = 0
+
+  if _pauseMaskHasPlayback(pauseMask) then
+    local wasPaused, didReadPaused = _readSpritePaused(sprite)
+    if (not didReadPaused) or wasPaused == false then
+      state = state + SHOULD_PLAY
+    end
+  end
+
+  if _pauseMaskHasUpdates(pauseMask) and _readSpriteUpdatesEnabled(sprite) then
+    state = state + RESTORE_UPDATES
+  end
+
+  if _pauseMaskHasCollisions(pauseMask) and _readSpriteCollisionsEnabled(sprite) then
+    state = state + RESTORE_COLLISIONS
+  end
+
+  return state
+end
+
+-- ! Helper: Pause Scene Collision Sprite
+local function _pauseSceneCollisionSprite(scene, sprite)
+  if not sprite then return end
+
+  if sprite._roxyScenePauseOwner == scene then
+    _setSpriteCollisionsActive(sprite, false)
+    return
+  elseif sprite._roxyScenePauseOwner ~= nil then
+    _clearScenePauseSnapshot(nil, sprite)
+  end
+
+  local state = _readSpriteCollisionsEnabled(sprite) and RESTORE_COLLISIONS or 0
+  sprite._roxyScenePauseOwner = scene
+  sprite._roxyScenePauseState = state
+
+  if (state & RESTORE_COLLISIONS) ~= 0 then
+    _setSpriteCollisionsActive(sprite, false)
+  end
+end
+
+-- ! Helper: Resume Scene Collision Sprite
+local function _resumeSceneCollisionSprite(scene, sprite)
+  if not sprite or sprite._roxyScenePauseOwner ~= scene then return end
+
+  local state = sprite._roxyScenePauseState or 0
+  _setSpriteCollisionsActive(sprite, (state & RESTORE_COLLISIONS) ~= 0)
+  _clearScenePauseSnapshot(scene, sprite)
+end
+
+-- ! Helper: Pause Scene Update Sprite
+local function _pauseSceneUpdateSprite(scene, sprite)
+  if not sprite then return end
+
+  if sprite._roxyScenePauseOwner == scene then
+    _setSpriteUpdatesActive(sprite, false)
+    return
+  elseif sprite._roxyScenePauseOwner ~= nil then
+    _clearScenePauseSnapshot(nil, sprite)
+  end
+
+  local state = _readSpriteUpdatesEnabled(sprite) and RESTORE_UPDATES or 0
+  sprite._roxyScenePauseOwner = scene
+  sprite._roxyScenePauseState = state
+
+  if (state & RESTORE_UPDATES) ~= 0 then
+    _setSpriteUpdatesActive(sprite, false)
+  end
+end
+
+-- ! Helper: Resume Scene Update Sprite
+local function _resumeSceneUpdateSprite(scene, sprite)
+  if not sprite or sprite._roxyScenePauseOwner ~= scene then return end
+
+  local state = sprite._roxyScenePauseState or 0
+  _setSpriteUpdatesActive(sprite, (state & RESTORE_UPDATES) ~= 0)
+  _clearScenePauseSnapshot(scene, sprite)
+end
+
+-- ! Helper: Pause Scene Sprite
+-- Snapshots update, collision, and playback state before any mutation.
+local function _pauseSceneSprite(scene, sprite, pauseMask)
+  if not sprite then return end
+
+  pauseMask = pauseMask or sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+  if pauseMask == SCENE_PAUSE_NONE then return end
+  if sprite._roxyScenePauseMask == nil then
+    sprite._roxyScenePauseMask = pauseMask
+  end
+
+  if sprite._roxyScenePauseOwner == scene then
+    _reapplyScenePauseSprite(sprite, pauseMask)
+    return
+  elseif sprite._roxyScenePauseOwner ~= nil then
+    _clearScenePauseSnapshot(nil, sprite)
+  end
+
+  if pauseMask == SCENE_PAUSE_ALL then
+    local state = 0
+    local getIsPaused = sprite.getIsPaused
+    if type(getIsPaused) == "function" then
+      local wasPaused = getIsPaused(sprite)
+      if type(wasPaused) ~= "boolean" or wasPaused == false then
+        state = state + SHOULD_PLAY
+      end
+    else
+      local wasPaused = sprite.isPaused
+      if type(wasPaused) ~= "boolean" or wasPaused == false then
+        state = state + SHOULD_PLAY
+      end
+    end
+
+    local updatesEnabled = sprite.updatesEnabled
+    local updatesValue = type(updatesEnabled) == "function" and updatesEnabled(sprite) or nil
+    if updatesValue == nil or (updatesValue ~= false and updatesValue ~= 0) then
+      state = state + RESTORE_UPDATES
+    end
+
+    local collisionsEnabled = sprite.collisionsEnabled
+    local collisionsValue = type(collisionsEnabled) == "function" and collisionsEnabled(sprite) or nil
+    if collisionsValue == nil or (collisionsValue ~= false and collisionsValue ~= 0) then
+      state = state + RESTORE_COLLISIONS
+    end
+
+    sprite._roxyScenePauseOwner = scene
+    sprite._roxyScenePauseState = state
+
+    local pause = sprite.pause
+    if type(pause) == "function" then pause(sprite) end
+
+    if (state & RESTORE_UPDATES) ~= 0 then
+      local setUpdatesEnabled = sprite.setUpdatesEnabled
+      if type(setUpdatesEnabled) == "function" then setUpdatesEnabled(sprite, false) end
+    end
+
+    if (state & RESTORE_COLLISIONS) ~= 0 then
+      local setCollisionsActive = sprite._setScenePauseCollisionsActive
+      if type(setCollisionsActive) == "function" then
+        setCollisionsActive(sprite, false)
+      else
+        local setCollisionsEnabled = sprite.setCollisionsEnabled
+        if type(setCollisionsEnabled) == "function" then setCollisionsEnabled(sprite, false) end
+      end
+    end
+    return
+  end
+
+  if pauseMask == SCENE_PAUSE_COLLISIONS then
+    _pauseSceneCollisionSprite(scene, sprite)
+    return
+  end
+
+  if pauseMask == SCENE_PAUSE_UPDATES then
+    _pauseSceneUpdateSprite(scene, sprite)
+    return
+  end
+
+  local pausePlayback = _pauseMaskHasPlayback(pauseMask)
+  local pauseUpdates = _pauseMaskHasUpdates(pauseMask)
+  local pauseCollisions = _pauseMaskHasCollisions(pauseMask)
+  local state = _buildScenePauseState(sprite, pauseMask)
+
+  sprite._roxyScenePauseOwner = scene
+  sprite._roxyScenePauseState = state
+
+  if pausePlayback then _runSpritePause(sprite) end
+  if pauseUpdates and (state & RESTORE_UPDATES) ~= 0 then
+    _setSpriteUpdatesActive(sprite, false)
+  end
+  if pauseCollisions and (state & RESTORE_COLLISIONS) ~= 0 then
+    _setSpriteCollisionsActive(sprite, false)
+  end
+end
+
+-- ! Helper: Resume Scene Sprite
+local function _resumeSceneSprite(scene, sprite)
+  if not sprite or sprite._roxyScenePauseOwner ~= scene then return end
+
+  local pauseMask = sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+  if pauseMask == SCENE_PAUSE_NONE then
+    _clearScenePauseSnapshot(scene, sprite)
+    return
+  end
+
+  if pauseMask == SCENE_PAUSE_ALL then
+    local state = sprite._roxyScenePauseState or 0
+
+    if (state & SHOULD_PLAY) ~= 0 then
+      local play = sprite.play
+      if type(play) == "function" then play(sprite) end
+    end
+
+    local setUpdatesEnabled = sprite.setUpdatesEnabled
+    if type(setUpdatesEnabled) == "function" then
+      setUpdatesEnabled(sprite, (state & RESTORE_UPDATES) ~= 0)
+    end
+
+    local setCollisionsActive = sprite._setScenePauseCollisionsActive
+    if type(setCollisionsActive) == "function" then
+      setCollisionsActive(sprite, (state & RESTORE_COLLISIONS) ~= 0)
+    else
+      local setCollisionsEnabled = sprite.setCollisionsEnabled
+      if type(setCollisionsEnabled) == "function" then
+        setCollisionsEnabled(sprite, (state & RESTORE_COLLISIONS) ~= 0)
+      end
+    end
+
+    _clearScenePauseSnapshot(scene, sprite)
+    return
+  end
+
+  if pauseMask == SCENE_PAUSE_COLLISIONS then
+    _resumeSceneCollisionSprite(scene, sprite)
+    return
+  end
+
+  if pauseMask == SCENE_PAUSE_UPDATES then
+    _resumeSceneUpdateSprite(scene, sprite)
+    return
+  end
+
+  local state = sprite._roxyScenePauseState or 0
+  local pausePlayback = _pauseMaskHasPlayback(pauseMask)
+  local pauseUpdates = _pauseMaskHasUpdates(pauseMask)
+  local pauseCollisions = _pauseMaskHasCollisions(pauseMask)
+
+  if pausePlayback and (state & SHOULD_PLAY) ~= 0 then _runSpritePlay(sprite) end
+  if pauseUpdates then
+    _setSpriteUpdatesActive(sprite, (state & RESTORE_UPDATES) ~= 0)
+  end
+  if pauseCollisions then
+    _setSpriteCollisionsActive(sprite, (state & RESTORE_COLLISIONS) ~= 0)
+  end
+
+  _clearScenePauseSnapshot(scene, sprite)
+end
+
+-- ! Helper: Pause Registered Scene Sprite
+local function _pauseRegisteredSceneSprite(scene, sprite, pauseMask)
+  pauseMask = pauseMask or sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+  if pauseMask == SCENE_PAUSE_COLLISIONS then
+    _pauseSceneCollisionSprite(scene, sprite)
+  elseif pauseMask == SCENE_PAUSE_UPDATES then
+    _pauseSceneUpdateSprite(scene, sprite)
+  elseif pauseMask ~= SCENE_PAUSE_NONE then
+    _pauseSceneSprite(scene, sprite, pauseMask)
+  end
+end
+
+-- ! Helper: Resume Registered Scene Sprite
+local function _resumeRegisteredSceneSprite(scene, sprite, pauseMask)
+  pauseMask = pauseMask or sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+  if pauseMask == SCENE_PAUSE_COLLISIONS then
+    _resumeSceneCollisionSprite(scene, sprite)
+  elseif pauseMask == SCENE_PAUSE_UPDATES then
+    _resumeSceneUpdateSprite(scene, sprite)
+  elseif pauseMask ~= SCENE_PAUSE_NONE then
+    _resumeSceneSprite(scene, sprite)
+  end
+end
+
+-- ! Helper: Restore Scene Pause Before Unregister
+-- Normal removal detaches restored sprites; transfers preserve captured state.
+local function _restoreScenePauseBeforeUnregister(scene, sprite)
+  if not sprite or sprite._roxyScenePauseOwner ~= scene then return end
+
+  _resumeRegisteredSceneSprite(scene, sprite, sprite._roxyScenePauseMask)
+end
+
 -- ! Helper: Get Color Callback
 -- Builds (and returns) a drawing callback for a solid color
 local function _getColorCallback(color)
@@ -180,6 +661,55 @@ local function _getImageCallback(img)
   return fn
 end
 
+-- ! Helper: Read Sequence Playing
+-- Returns readable running state when the sequence exposes one
+local function _readSequencePlaying(sequence)
+  if not sequence then return nil end
+  if type(sequence.isPlaying) == "function" then
+    return sequence:isPlaying() == true
+  end
+  if type(sequence.isRunning) == "boolean" then
+    return sequence.isRunning
+  end
+  return nil
+end
+
+-- ! Helper: Clear Scene Pause Sequence Snapshot
+-- Clears sequence pause fields owned by the pausing scene
+local function _clearScenePauseSequenceSnapshot(scene, sequence)
+  if not sequence or sequence._roxyScenePauseOwner ~= scene then return end
+  sequence._roxyScenePauseOwner = nil
+  sequence._roxyScenePauseWasRunning = nil
+end
+
+-- ! Helper: Pause Scene Sequence
+-- Pauses a scene-managed sequence while remembering whether it should resume
+local function _pauseSceneSequence(scene, sequence)
+  if not sequence then return end
+  local wasRunning = _readSequencePlaying(sequence)
+  local shouldPause = wasRunning ~= false
+
+  sequence._roxyScenePauseOwner = scene
+  sequence._roxyScenePauseWasRunning = shouldPause
+
+  if shouldPause and type(sequence.pause) == "function" then
+    sequence:pause()
+  end
+end
+
+-- ! Helper: Resume Scene Sequence
+-- Restores a sequence paused by the same scene
+local function _resumeSceneSequence(scene, sequence)
+  if not sequence or sequence._roxyScenePauseOwner ~= scene then return end
+
+  local shouldResume = sequence._roxyScenePauseWasRunning ~= false
+  if shouldResume and type(sequence.play) == "function" then
+    sequence:play()
+  end
+
+  _clearScenePauseSequenceSnapshot(scene, sequence)
+end
+
 --------------------------------------------------------------------------------
 -- ! Class Definition and Initialize
 --------------------------------------------------------------------------------
@@ -206,7 +736,15 @@ function RoxyScene:init(background)
   self._spriteIndex = {}
   self._spriteAutoAddQueue = {}
   self._spriteAutoAddIndex = {}
+  self._pauseSprites = {}
+  self._pauseSpriteIndex = {}
+  self._pauseUpdateSprites = {}
+  self._pauseUpdateSpriteIndex = {}
+  self._pauseCollisionSprites = {}
+  self._pauseCollisionSpriteIndex = {}
   self._sequenceAutoStartQueue = {}
+  self._roxyCameraActivated = false
+  self._roxyScenePauseCameraSnapshot = nil
 
   -- Sensible defaults used by Scene draw filtering
   self.isVisible = true
@@ -232,7 +770,11 @@ function RoxyScene:enter()
   -- Flush any queued sprite auto-adds
   local spriteQueue = self._spriteAutoAddQueue
   for i = 1, #spriteQueue do
-    spriteQueue[i]:add()
+    local sprite = spriteQueue[i]
+    sprite:add()
+    if self.isPaused then
+      _pauseRegisteredSceneSprite(self, sprite)
+    end
   end
   self._spriteAutoAddQueue = {}
   self._spriteAutoAddIndex = {}
@@ -267,6 +809,7 @@ end
 -- Supports tilemap bounds, raw bounds, or explicitly clearing bounds.
 function RoxyScene:activateCamera(opts)
   opts = opts or {}
+  self._roxyCameraActivated = true
 
   --#DEBUG START
   if opts.cameraBounds ~= nil then
@@ -331,12 +874,12 @@ end
 
 -- ! Update
 function RoxyScene:update(dt)
-  -- noop by default
+  -- No-op by default
 end
 
 -- ! Draw
 function RoxyScene:draw(dt)
-  -- noop by default
+  -- No-op by default
 end
 
 -- ! Pause
@@ -345,20 +888,158 @@ function RoxyScene:pause()
   Log.debug("[RoxyScene:pause] Pausing Scene: " .. self.name) --#DEBUG
   self.isPaused = true
 
+  if self._roxyCameraActivated and snapshotCameraState then
+    self._roxyScenePauseCameraSnapshot = snapshotCameraState()
+  end
+
   -- Disable sprites from updating or colliding
-  local sprites = self.sprites
+  local collisionSprites = self._pauseCollisionSprites
+  for i = #collisionSprites, 1, -1 do
+    local sprite = collisionSprites[i]
+    if sprite._roxyScenePauseOwner == self then
+      local setCollisionsActive = sprite._setScenePauseCollisionsActive
+      if setCollisionsActive then
+        setCollisionsActive(sprite, false)
+      else
+        local setCollisionsEnabled = sprite.setCollisionsEnabled
+        if setCollisionsEnabled then setCollisionsEnabled(sprite, false) end
+      end
+    else
+      if sprite._roxyScenePauseOwner ~= nil then
+        _clearScenePauseSnapshot(nil, sprite)
+      end
+
+      local collisionsEnabled = sprite.collisionsEnabled
+      local state = 0
+      if not collisionsEnabled then
+        state = RESTORE_COLLISIONS
+      else
+        local value = collisionsEnabled(sprite)
+        if value ~= false and value ~= 0 then
+          state = RESTORE_COLLISIONS
+        end
+      end
+
+      sprite._roxyScenePauseOwner = self
+      sprite._roxyScenePauseState = state
+
+      if (state & RESTORE_COLLISIONS) ~= 0 then
+        local setCollisionsActive = sprite._setScenePauseCollisionsActive
+        if setCollisionsActive then
+          setCollisionsActive(sprite, false)
+        else
+          local setCollisionsEnabled = sprite.setCollisionsEnabled
+          if setCollisionsEnabled then setCollisionsEnabled(sprite, false) end
+        end
+      end
+    end
+  end
+
+  local updateSprites = self._pauseUpdateSprites
+  for i = #updateSprites, 1, -1 do
+    local sprite = updateSprites[i]
+    if sprite._roxyScenePauseOwner == self then
+      local setUpdatesEnabled = sprite.setUpdatesEnabled
+      if setUpdatesEnabled then setUpdatesEnabled(sprite, false) end
+    else
+      if sprite._roxyScenePauseOwner ~= nil then
+        _clearScenePauseSnapshot(nil, sprite)
+      end
+
+      local updatesEnabled = sprite.updatesEnabled
+      local state = 0
+      if not updatesEnabled then
+        state = RESTORE_UPDATES
+      else
+        local value = updatesEnabled(sprite)
+        if value ~= false and value ~= 0 then
+          state = RESTORE_UPDATES
+        end
+      end
+
+      sprite._roxyScenePauseOwner = self
+      sprite._roxyScenePauseState = state
+
+      if (state & RESTORE_UPDATES) ~= 0 then
+        local setUpdatesEnabled = sprite.setUpdatesEnabled
+        if setUpdatesEnabled then setUpdatesEnabled(sprite, false) end
+      end
+    end
+  end
+
+  local sprites = self._pauseSprites
   for i = #sprites, 1, -1 do
     local sprite = sprites[i]
-    sprite:pause()
-    sprite:setUpdatesEnabled(false)
-    sprite:setCollisionsEnabled(false)
+    local pauseMask = sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+
+    if pauseMask == SCENE_PAUSE_ALL and sprite._roxyScenePauseOwner ~= self then
+      if sprite._roxyScenePauseOwner ~= nil then
+        _clearScenePauseSnapshot(nil, sprite)
+      end
+
+      local state = 0
+      local getIsPaused = sprite.getIsPaused
+      if type(getIsPaused) == "function" then
+        local wasPaused = getIsPaused(sprite)
+        if type(wasPaused) ~= "boolean" or wasPaused == false then
+          state = state + SHOULD_PLAY
+        end
+      else
+        local wasPaused = sprite.isPaused
+        if type(wasPaused) ~= "boolean" or wasPaused == false then
+          state = state + SHOULD_PLAY
+        end
+      end
+
+      local updatesEnabled = sprite.updatesEnabled
+      if not updatesEnabled then
+        state = state + RESTORE_UPDATES
+      else
+        local value = updatesEnabled(sprite)
+        if value ~= false and value ~= 0 then
+          state = state + RESTORE_UPDATES
+        end
+      end
+
+      local collisionsEnabled = sprite.collisionsEnabled
+      if not collisionsEnabled then
+        state = state + RESTORE_COLLISIONS
+      else
+        local value = collisionsEnabled(sprite)
+        if value ~= false and value ~= 0 then
+          state = state + RESTORE_COLLISIONS
+        end
+      end
+
+      sprite._roxyScenePauseOwner = self
+      sprite._roxyScenePauseState = state
+
+      local pause = sprite.pause
+      if pause then pause(sprite) end
+
+      if (state & RESTORE_UPDATES) ~= 0 then
+        local setUpdatesEnabled = sprite.setUpdatesEnabled
+        if setUpdatesEnabled then setUpdatesEnabled(sprite, false) end
+      end
+
+      if (state & RESTORE_COLLISIONS) ~= 0 then
+        local setCollisionsActive = sprite._setScenePauseCollisionsActive
+        if setCollisionsActive then
+          setCollisionsActive(sprite, false)
+        else
+          local setCollisionsEnabled = sprite.setCollisionsEnabled
+          if setCollisionsEnabled then setCollisionsEnabled(sprite, false) end
+        end
+      end
+    else
+      _pauseSceneSprite(self, sprite, pauseMask)
+    end
   end
 
   -- Disable sequences from updating
   local sequences = self.sequences
   for i = #sequences, 1, -1 do
-    local sequence = sequences[i]
-    sequence:pause()
+    _pauseSceneSequence(self, sequences[i])
   end
 
   removeHandler(self)
@@ -371,19 +1052,81 @@ function RoxyScene:resume()
   self.isPaused = false
 
   -- Enable sprites for updating and colliding
-  local sprites = self.sprites
+  local collisionSprites = self._pauseCollisionSprites
+  for i = #collisionSprites, 1, -1 do
+    local sprite = collisionSprites[i]
+    if sprite._roxyScenePauseOwner == self then
+      local state = sprite._roxyScenePauseState or 0
+      local restoreCollisions = (state & RESTORE_COLLISIONS) ~= 0
+      local setCollisionsActive = sprite._setScenePauseCollisionsActive
+      if setCollisionsActive then
+        setCollisionsActive(sprite, restoreCollisions)
+      else
+        local setCollisionsEnabled = sprite.setCollisionsEnabled
+        if setCollisionsEnabled then setCollisionsEnabled(sprite, restoreCollisions) end
+      end
+      sprite._roxyScenePauseOwner = nil
+      sprite._roxyScenePauseState = nil
+    end
+  end
+
+  local updateSprites = self._pauseUpdateSprites
+  for i = #updateSprites, 1, -1 do
+    local sprite = updateSprites[i]
+    if sprite._roxyScenePauseOwner == self then
+      local state = sprite._roxyScenePauseState or 0
+      local setUpdatesEnabled = sprite.setUpdatesEnabled
+      if setUpdatesEnabled then
+        setUpdatesEnabled(sprite, (state & RESTORE_UPDATES) ~= 0)
+      end
+      sprite._roxyScenePauseOwner = nil
+      sprite._roxyScenePauseState = nil
+    end
+  end
+
+  local sprites = self._pauseSprites
   for i = #sprites, 1, -1 do
     local sprite = sprites[i]
-    sprite:setUpdatesEnabled(true)
-    sprite:setCollisionsEnabled(true)
-    sprite:play()
+    local pauseMask = sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+    if pauseMask == SCENE_PAUSE_ALL and sprite._roxyScenePauseOwner == self then
+      local state = sprite._roxyScenePauseState or 0
+
+      if (state & SHOULD_PLAY) ~= 0 then
+        local play = sprite.play
+        if play then play(sprite) end
+      end
+
+      local setUpdatesEnabled = sprite.setUpdatesEnabled
+      if setUpdatesEnabled then
+        setUpdatesEnabled(sprite, (state & RESTORE_UPDATES) ~= 0)
+      end
+
+      local setCollisionsActive = sprite._setScenePauseCollisionsActive
+      if setCollisionsActive then
+        setCollisionsActive(sprite, (state & RESTORE_COLLISIONS) ~= 0)
+      else
+        local setCollisionsEnabled = sprite.setCollisionsEnabled
+        if setCollisionsEnabled then
+          setCollisionsEnabled(sprite, (state & RESTORE_COLLISIONS) ~= 0)
+        end
+      end
+
+      sprite._roxyScenePauseOwner = nil
+      sprite._roxyScenePauseState = nil
+    else
+      _resumeSceneSprite(self, sprite)
+    end
   end
 
   -- Enable sequences for updating
   local sequences = self.sequences
   for i = #sequences, 1, -1 do
-    local sequence = sequences[i]
-    sequence:play()
+    _resumeSceneSequence(self, sequences[i])
+  end
+
+  if self._roxyScenePauseCameraSnapshot and restoreCameraState then
+    restoreCameraState(self._roxyScenePauseCameraSnapshot)
+    self._roxyScenePauseCameraSnapshot = nil
   end
 
   self:addHandler()
@@ -413,6 +1156,8 @@ function RoxyScene:cleanup()
   self:resetDrawOffset()
 
   resetCamera()
+  self._roxyCameraActivated = false
+  self._roxyScenePauseCameraSnapshot = nil
 
   self._spriteAutoAddQueue = {}
   self._spriteAutoAddIndex = {}
@@ -483,20 +1228,54 @@ end
 function RoxyScene:addSprite(sprite)
   if not sprite then return end
 
+  local pauseMask = _getScenePauseMask(sprite)
+
   if self._spriteSet[sprite] == true then
     local isTracked = _hasIndexed(self.sprites, self._spriteIndex, sprite)
     local isQueued = self._didEnter or _hasIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
-    if sprite.scene == self and isTracked and isQueued then return end
+    local cachedPauseMask = sprite._roxyScenePauseMask or SCENE_PAUSE_NONE
+    if sprite.scene == self and isTracked and isQueued then
+      if cachedPauseMask == pauseMask then return end
+
+      if sprite._roxyScenePauseOwner == self then
+        _resumeRegisteredSceneSprite(self, sprite, cachedPauseMask)
+      end
+
+      _removeFromScenePauseBuckets(self, sprite)
+      _clearScenePauseRegistration(sprite)
+      _clearScenePauseSnapshot(self, sprite)
+
+      if pauseMask ~= SCENE_PAUSE_NONE then
+        sprite._roxyScenePauseMask = pauseMask
+        _addToScenePauseBucket(self, sprite, pauseMask)
+      end
+
+      if self.isPaused and pauseMask ~= SCENE_PAUSE_NONE then
+        _pauseRegisteredSceneSprite(self, sprite, pauseMask)
+      end
+
+      return
+    end
 
     _removeIndexed(self.sprites, self._spriteIndex, sprite)
     _removeIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+    _removeFromScenePauseBuckets(self, sprite)
     self._spriteSet[sprite] = nil
+    _clearScenePauseRegistration(sprite)
+    _clearScenePauseSnapshot(self, sprite)
   end
 
   local currentScene = sprite.scene
+  local transferPauseMask = nil
+  local transferPauseState = nil
   if currentScene ~= nil and currentScene ~= self and type(currentScene) == "table" then
+    if sprite._roxyScenePauseOwner == currentScene then
+      transferPauseMask = sprite._roxyScenePauseMask or _getScenePauseMask(sprite)
+      transferPauseState = sprite._roxyScenePauseState
+    end
+
     if type(currentScene._unregisterSprite) == "function" then
-      currentScene:_unregisterSprite(sprite, true)
+      currentScene:_unregisterSprite(sprite, true, true)
     elseif type(currentScene.removeSprite) == "function" then
       currentScene:removeSprite(sprite)
     end
@@ -508,12 +1287,39 @@ function RoxyScene:addSprite(sprite)
   _appendIndexed(self.sprites, self._spriteIndex, sprite)
   self._spriteSet[sprite] = true
 
+  if pauseMask ~= SCENE_PAUSE_NONE then
+    sprite._roxyScenePauseMask = pauseMask
+    _addToScenePauseBucket(self, sprite, pauseMask)
+  else
+    _clearScenePauseRegistration(sprite)
+  end
+
+  if transferPauseMask ~= nil and self.isPaused and pauseMask ~= SCENE_PAUSE_NONE then
+    sprite._roxyScenePauseOwner = self
+    sprite._roxyScenePauseState = transferPauseState
+  end
+
   if self._didEnter then
     -- Scene is active -- attach immediately
     sprite:add()
   else
     -- Scene isn't active yet -- queue for enter()
     _appendIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+  end
+
+  if self.isPaused and pauseMask ~= SCENE_PAUSE_NONE then
+    _pauseRegisteredSceneSprite(self, sprite, pauseMask)
+  elseif transferPauseMask ~= nil then
+    local restoreMask = sprite._roxyScenePauseMask
+    sprite._roxyScenePauseMask = transferPauseMask
+    sprite._roxyScenePauseOwner = self
+    sprite._roxyScenePauseState = transferPauseState
+    _resumeRegisteredSceneSprite(self, sprite, transferPauseMask)
+    if pauseMask ~= SCENE_PAUSE_NONE then
+      sprite._roxyScenePauseMask = restoreMask or pauseMask
+    else
+      _clearScenePauseRegistration(sprite)
+    end
   end
 end
 
@@ -524,16 +1330,26 @@ end
 
 -- ! Unregister Sprite
 -- Private cleanup path used by tilemaps and direct scene sprite removal
-function RoxyScene:_unregisterSprite(sprite, removeFromDisplay)
+function RoxyScene:_unregisterSprite(sprite, removeFromDisplay, preserveScenePauseState)
   if not sprite then return end
 
   local wasSelfOwnedAtEntry = sprite.scene == self
+  local wasSelfTrackedAtEntry = self._spriteSet[sprite] == true
 
-  -- Remove only this scene's ownership state. Direct external writes to
-  -- scene.sprites are unsupported, but removeAllSprites remains tolerant.
+  if preserveScenePauseState ~= true then
+    _restoreScenePauseBeforeUnregister(self, sprite)
+  end
+
+  -- Remove only this scene's ownership state
+  -- Direct external writes to scene.sprites are unsupported, but removeAllSprites remains tolerant.
   _removeIndexed(self.sprites, self._spriteIndex, sprite)
   _removeIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+  _removeFromScenePauseBuckets(self, sprite)
   self._spriteSet[sprite] = nil
+  if wasSelfTrackedAtEntry then
+    _clearScenePauseRegistration(sprite)
+  end
+  _clearScenePauseSnapshot(self, sprite)
 
   if wasSelfOwnedAtEntry and sprite.scene == self then
     sprite.scene = nil -- Clear back-pointer
@@ -568,10 +1384,18 @@ function RoxyScene:_unregisterSprites(sprites, removeFromDisplay)
   for i = 1, #targetList do
     local sprite = targetList[i]
     local wasSelfOwnedAtEntry = sprite.scene == self
+    local wasSelfTrackedAtEntry = self._spriteSet[sprite] == true
+
+    _restoreScenePauseBeforeUnregister(self, sprite)
 
     _removeIndexed(self.sprites, self._spriteIndex, sprite)
     _removeIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
+    _removeFromScenePauseBuckets(self, sprite)
     self._spriteSet[sprite] = nil
+    if wasSelfTrackedAtEntry then
+      _clearScenePauseRegistration(sprite)
+    end
+    _clearScenePauseSnapshot(self, sprite)
 
     if wasSelfOwnedAtEntry and sprite.scene == self then
       sprite.scene = nil -- Clear back-pointer
@@ -592,9 +1416,18 @@ function RoxyScene:removeAllSprites()
   self._spriteIndex = {}
   self._spriteAutoAddQueue = {}
   self._spriteAutoAddIndex = {}
+  self._pauseSprites = {}
+  self._pauseSpriteIndex = {}
+  self._pauseUpdateSprites = {}
+  self._pauseUpdateSpriteIndex = {}
+  self._pauseCollisionSprites = {}
+  self._pauseCollisionSpriteIndex = {}
 
   for i = #sprites, 1, -1 do
     local sprite = sprites[i]
+    _restoreScenePauseBeforeUnregister(self, sprite)
+    _clearScenePauseRegistration(sprite)
+    _clearScenePauseSnapshot(self, sprite)
     if sprite.scene == self then
       sprite.scene = nil -- Clear back-pointer
     end
@@ -741,6 +1574,7 @@ function RoxyScene:removeSequence(sequence)
   if not sequence then return end
   for i = #self.sequences, 1, -1 do
     if self.sequences[i] == sequence then
+      _clearScenePauseSequenceSnapshot(self, sequence)
       sequence.scene = nil -- Clear back-pointer
       sequence:clear(true)
       tableRemove(self.sequences, i)
@@ -754,6 +1588,7 @@ function RoxyScene:removeAllSequences()
   local sequences = self.sequences
   for i = #sequences, 1, -1 do
     local sequence = sequences[i]
+    _clearScenePauseSequenceSnapshot(self, sequence)
     sequence.scene = nil -- Clear back-pointer
     sequence:clear(true)
   end
@@ -793,12 +1628,13 @@ end
 
 --[[
 
+RoxyScene owns scene lifecycle, input, sprites, tilemaps, sequences, and camera setup.
+
+-- Gameplay Scene
 local Graphics <const> = playdate.graphics
 
 local COLOR_WHITE <const> = Graphics.kColorWhite
-local COLOR_BLACK <const> = Graphics.kColorBlack
 
--- Basic Scene Subclass
 class("GameplayScene").extends(RoxyScene)
 
 function GameplayScene:init()
@@ -806,7 +1642,7 @@ function GameplayScene:init()
 
   self.inputHandler = {
     BButtonDown = function()
-      roxy.Scene.popScene()
+      roxy.Scene.pushScene(PauseScene)
     end,
   }
 end
@@ -814,7 +1650,9 @@ end
 function GameplayScene:start()
   GameplayScene.super.start(self)
 
-  self.player = RoxySprite({ name = "player" }, self)
+  self.player = RoxySprite({ name = "player" })
+  self:addSprite(self.player)
+
   self.map = self:spawnTilemap("assets/maps/level-01.json", {
     cameraBounds = true,
     layerOptions = {
@@ -824,14 +1662,15 @@ function GameplayScene:start()
   self:activateCamera({
     tilemap = self.map,
     target = self.player,
-    smoothing = 0.2,
+    smoothing = 4,
+    deadZone = { 48, 32 },
   })
 
-  self.fadeIn = RoxySequence(self):from(0):to(1, 0.25):play()
+  self.fadeIn = self:spawnSequence():from(0):to(1, 0.25):play()
 end
 
 function GameplayScene:update(dt)
-  -- Game logic here
+  roxy.Camera.update(dt)
 end
 
 function GameplayScene:cleanup()
@@ -841,29 +1680,23 @@ function GameplayScene:cleanup()
   self.fadeIn = nil
 end
 
--- Backgrounds and Draw Stack Behavior
-local pauseScene = RoxyScene(COLOR_BLACK)
+-- Overlay Scene
+local pauseScene = RoxyScene(Graphics.kColorBlack)
 pauseScene.isVisible = true
 pauseScene.blocksLowerDraw = false
 pauseScene.updateBackground = true
 
--- Manual Ownership and Reuse
+-- Manual Ownership
 local scene = RoxyScene()
 local player = RoxySprite({ name = "player" })
-local map = scene:spawnTilemap("assets/maps/level-01.json")
+local tilemap = RoxyOrthoTilemap("assets/maps/level-01.json")
 
 scene:addSprite(player)
-scene:addSprite(player) -- Ignored; scene ownership stays unique
+scene:addTilemap(tilemap)
+scene:activateCamera({ tilemap = tilemap, target = player })
+
+scene:detachTilemap(tilemap)
 scene:removeSprite(player)
-scene:addSprite(player)
-
-local inventoryScene = RoxyScene()
-inventoryScene:addSprite(player) -- Transfers ownership from the old scene
-inventoryScene:removeSprite(player)
-
-scene:detachTilemap(map)
-scene:addTilemap(map)
-scene:removeTilemap(map)
 scene:cleanup()
 
-]]
+--]]

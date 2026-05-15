@@ -4,65 +4,37 @@ roxy = roxy or {}
 roxy.Camera = roxy.Camera or {}
 local Camera <const> = roxy.Camera
 
---------------------------------------------------------------------------------
--- Standard Lua Function Aliases
---------------------------------------------------------------------------------
+local abs <const> = math.abs
+local min <const> = math.min
+local max <const> = math.max
+local sin <const> = math.sin
+local cos <const> = math.cos
+local pi  <const> = math.pi
 
--- Math functions
-local abs   <const> = math.abs
-local min   <const> = math.min
-local max   <const> = math.max
-local sin   <const> = math.sin
-local cos   <const> = math.cos
-local floor <const> = math.floor
-local ceil  <const> = math.ceil
-local pi    <const> = math.pi
-
--- Table functions
 local tableRemove <const> = table.remove
 local tableInsert <const> = table.insert
 
---------------------------------------------------------------------------------
--- Playdate SDK Aliases
---------------------------------------------------------------------------------
-
--- Core Playdate
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 local Timer     <const> = pd.timer
 
--- Timer functions
 local performAfterDelay <const> = Timer.performAfterDelay
 
--- Graphics functions
 local setDrawOffset <const> = Graphics.setDrawOffset
 
--- Sprite functions
 local redrawBackground <const> = Sprite.redrawBackground
 
---------------------------------------------------------------------------------
--- Roxy Utilities Function Aliases
---------------------------------------------------------------------------------
+local r <const> = roxy
 
--- Math functions
-local clamp <const> = roxy.Math.clamp
-local lerp  <const> = roxy.Math.lerp
-local round <const> = roxy.Math.roundInt
+local clamp <const> = r.Math.clamp
+local lerp  <const> = r.Math.lerp
+local round <const> = r.Math.roundInt
 
---------------------------------------------------------------------------------
--- Graphics Constants
---------------------------------------------------------------------------------
-
--- Display dimensions
-local DISPLAY_WIDTH   <const> = roxy.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = roxy.Graphics.displayHeight
-local CENTER_X        <const> = roxy.Graphics.displayWidthCenter
-local CENTER_Y        <const> = roxy.Graphics.displayHeightCenter
-
---------------------------------------------------------------------------------
--- Default Values
---------------------------------------------------------------------------------
+local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
+local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+local CENTER_X        <const> = r.Graphics.displayWidthCenter
+local CENTER_Y        <const> = r.Graphics.displayHeightCenter
 
 local CAMERA_SPEED_DEFAULT  <const> = 120   -- Default pan velocity (pixels per second)
 local FRICTION_DEFAULT      <const> = 0.85  -- Default friction factor (0 to 1, higher = slower stop)
@@ -111,7 +83,7 @@ Camera._maxX              = 0     -- Maximum x bound (effective)
 Camera._maxY              = 0     -- Maximum y bound (effective)
 Camera._shakeAmplitude    = 0     -- Shake intensity (pixels)
 Camera._shakeFrequency    = 0     -- Shake oscillations per second
-Camera._shakeAngularFreq  = 0     -- Cached angular frequency (frequency * 2π)
+Camera._shakeAngularFreq  = 0     -- Cached angular frequency (frequency * 2 * pi)
 Camera._shakeTimer        = 0     -- Tracks elapsed shake time
 Camera._deadZoneWidth     = 0     -- Dead zone width (pixels, 0 = disabled)
 Camera._deadZoneHeight    = 0     -- Dead zone height (pixels, 0 = disabled)
@@ -164,7 +136,7 @@ local function _commitOffset(dt)
     Camera._screenRight = totalOffsetX + DISPLAY_WIDTH
     Camera._screenBottom = totalOffsetY + DISPLAY_HEIGHT
     Camera._isActive = true
-    for i=1,#Camera._onOffsetChanged do
+    for i = 1, #Camera._onOffsetChanged do
       Camera._onOffsetChanged[i](totalOffsetX, totalOffsetY)
     end
   else
@@ -201,6 +173,37 @@ local function _recalculateEffectiveBounds()
   Camera._minY = min(Camera._bounds.y1, Camera._bounds.y2)
   Camera._maxY = max(Camera._bounds.y1, Camera._bounds.y2)
   Camera._hasBounds = true
+end
+
+-- ! Copy Bounds
+-- Copies a camera bounds table without keeping caller-owned table identity
+local function _copyBounds(bounds)
+  if not bounds then return nil end
+  return {
+    x1 = bounds.x1,
+    y1 = bounds.y1,
+    x2 = bounds.x2,
+    y2 = bounds.y2,
+  }
+end
+
+-- ! Copy List
+-- Copies an array-style listener list while preserving listener references
+local function _copyList(list)
+  local copy = {}
+  if type(list) ~= "table" then return copy end
+  for i = 1, #list do
+    copy[i] = list[i]
+  end
+  return copy
+end
+
+-- ! Validate Target
+-- Keeps restored snapshots from following an object that lost getPosition
+local function _validateTarget(target)
+  if target == nil then return nil end
+  if type(target.getPosition) == "function" then return target end
+  return nil
 end
 
 --------------------------------------------------------------------------------
@@ -410,6 +413,93 @@ function Camera.reset()
   Camera._isActive = true
 end
 
+-- ! Snapshot State
+-- Captures the active camera state so a paused scene can restore ownership after
+-- another scene resets the global camera during stack pop cleanup.
+function Camera._snapshotState()
+  return {
+    x                 = Camera.x,
+    y                 = Camera.y,
+    _velocityX        = Camera._velocityX,
+    _velocityY        = Camera._velocityY,
+    _targetX          = Camera._targetX,
+    _targetY          = Camera._targetY,
+    target            = Camera.target,
+    _logicalBounds    = _copyBounds(Camera._logicalBounds),
+    smoothing         = Camera.smoothing,
+    _shakeAmplitude   = Camera._shakeAmplitude,
+    shakeDuration     = Camera.shakeDuration,
+    _shakeFrequency   = Camera._shakeFrequency,
+    _shakeAngularFreq = Camera._shakeAngularFreq,
+    _shakeTimer       = Camera._shakeTimer,
+    _deadZoneWidth    = Camera._deadZoneWidth,
+    _deadZoneHeight   = Camera._deadZoneHeight,
+    _deadZoneHalfW    = Camera._deadZoneHalfW,
+    _deadZoneHalfH    = Camera._deadZoneHalfH,
+    friction          = Camera.friction,
+    _updateFunc       = Camera._updateFunc,
+    targetBiasX       = Camera.targetBiasX,
+    targetBiasY       = Camera.targetBiasY,
+    biasReturnRate    = Camera.biasReturnRate,
+    mode              = Camera.mode,
+    springFreq        = Camera.springFreq,
+    springDamp        = Camera.springDamp,
+    _onOffsetChanged  = _copyList(Camera._onOffsetChanged),
+  }
+end
+
+-- ! Restore State
+-- Restores a snapshot created by Camera._snapshotState().
+function Camera._restoreState(snapshot)
+  if type(snapshot) ~= "table" then return false end
+
+  local target = _validateTarget(snapshot.target)
+
+  Camera.x                  = snapshot.x or 0
+  Camera.y                  = snapshot.y or 0
+  Camera._velocityX         = snapshot._velocityX or 0
+  Camera._velocityY         = snapshot._velocityY or 0
+  Camera._targetX           = snapshot._targetX or Camera.x
+  Camera._targetY           = snapshot._targetY or Camera.y
+  Camera.target             = target
+  Camera.smoothing          = snapshot.smoothing or 0
+  Camera._shakeAmplitude    = snapshot._shakeAmplitude or 0
+  Camera.shakeDuration      = snapshot.shakeDuration or 0
+  Camera._shakeFrequency    = snapshot._shakeFrequency or 0
+  Camera._shakeAngularFreq  = snapshot._shakeAngularFreq or 0
+  Camera._shakeTimer        = snapshot._shakeTimer or 0
+  Camera._deadZoneWidth     = snapshot._deadZoneWidth or 0
+  Camera._deadZoneHeight    = snapshot._deadZoneHeight or 0
+  Camera._deadZoneHalfW     = snapshot._deadZoneHalfW or 0
+  Camera._deadZoneHalfH     = snapshot._deadZoneHalfH or 0
+  Camera.friction           = snapshot.friction ~= nil and snapshot.friction or FRICTION_DEFAULT
+  Camera.targetBiasX        = snapshot.targetBiasX or 0
+  Camera.targetBiasY        = snapshot.targetBiasY or 0
+  Camera.biasReturnRate     = snapshot.biasReturnRate or 6
+  Camera.mode               = snapshot.mode or "lerp"
+  Camera.springFreq         = snapshot.springFreq or 4.0
+  Camera.springDamp         = snapshot.springDamp or 0.9
+  Camera._onOffsetChanged   = _copyList(snapshot._onOffsetChanged)
+  Camera._logicalBounds     = _copyBounds(snapshot._logicalBounds)
+
+  _recalculateEffectiveBounds()
+
+  local updateFunc = snapshot._updateFunc
+  if updateFunc == Camera.updateFollow and Camera.target == nil then
+    updateFunc = Camera.updateStatic
+  end
+  Camera._updateFunc = updateFunc
+    or (Camera.target and Camera.updateFollow or Camera.updateStatic)
+
+  -- Force the draw offset and parallax listeners to observe the restored camera.
+  Camera._lastX = round(Camera.x) + 1
+  Camera._lastY = round(Camera.y) + 1
+  Camera._isActive = true
+  _commitOffset(0)
+
+  return true
+end
+
 -- ! Set Bias
 function Camera.setBias(x, y)
   Camera.targetBiasX, Camera.targetBiasY = x or 0, y or 0
@@ -508,11 +598,10 @@ function Camera.updateFollow(dt)
 
   -- Interpolate or set position
   if Camera.mode == "spring" then
-    -- critically damped spring (Tustin-ish simple integrator)
-    -- convert freq,damp to params
+    -- Critically damped spring
     local omega = 2 * pi * Camera.springFreq
     local zeta  = Camera.springDamp
-    -- velocity form
+    -- Velocity form
     local ax = omega * omega * (desiredX - Camera.x) - 2 * zeta * omega * Camera._velocityX
     local ay = omega * omega * (desiredY - Camera.y) - 2 * zeta * omega * Camera._velocityY
     Camera._velocityX = Camera._velocityX + ax * dt
@@ -700,3 +789,41 @@ end
 
 -- Default to static mode
 Camera._updateFunc = Camera.updateStatic
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Camera controls the global draw offset for world-space scenes.
+
+-- Follow a Player
+Camera.reset()
+Camera.setBounds({ x1 = 0, y1 = 0, x2 = 1600, y2 = 960 })
+Camera.setTarget(player, 10)
+Camera.setDeadZone(48, 32)
+
+function GameScene:update(dt)
+  Camera.update(dt)
+end
+
+-- Manual Panning
+Camera.reset()
+Camera.setBounds({ x1 = 0, y1 = 0, x2 = 1200, y2 = 800 })
+Camera.setPosition(200, 120)
+Camera.setPanVelocity(80, 0)
+
+function MapScene:update(dt)
+  Camera.update(dt)
+end
+
+-- Screen and World Coordinates
+local screenX, screenY = Camera.worldToScreen(player.x, player.y)
+local worldX, worldY = Camera.screenToWorld(200, 120)
+
+-- Shake and Stop Following
+Camera.shake(6, 0.35, 18)
+Camera.setTarget(nil)
+
+--]]

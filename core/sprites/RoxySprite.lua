@@ -144,6 +144,15 @@ function RoxySprite:setCollisionsEnabled(flag)
   return self
 end
 
+-- ! Set Scene Pause Collisions Active
+-- Temporarily toggles collision participation without changing desired state.
+function RoxySprite:_setScenePauseCollisionsActive(flag)
+  assert(type(flag) == "boolean", "[RoxySprite:_setScenePauseCollisionsActive] Expected boolean, got " .. tostring(type(flag)))
+
+  _setCollisionsActive(self, flag)
+  return self
+end
+
 -- ! Set Z-Index
 function RoxySprite:setZIndex(zIndex)
   assert(type(zIndex) == "number", "[RoxySprite:setZIndex] Expected number, got " .. tostring(type(zIndex)))
@@ -963,29 +972,57 @@ end
 
 --[[
 
--- Basic sprite creation
-local sprite = RoxySprite({
+RoxySprite wraps Playdate sprites with image, animation, parallax, and scene ownership helpers.
+
+-- Static Image Sprite
+local player = RoxySprite({
   name = "PlayerSprite",
-  view = "images/player-idle"
+  view = "images/player-idle",
 }, scene)
 
--- Animated sprite with spritesheet
-local animatedSprite = RoxySprite({
+player:moveTo(100, 100)
+player:setZIndex(10)
+player:setCenter(0.5, 1.0)
+player:setCollisionsEnabled(false)
+
+-- Full Animation Sprite
+local enemy = RoxySprite({
   name = "Enemy",
   view = "images/enemy-walk",
-  isSheet = true
-})
+  isSheet = true,
+}, scene)
 
--- Simple looping animation
-local simpleSprite = RoxySprite({
+enemy:addAnimation({
+  name = "walk",
+  startFrame = 1,
+  endFrame = 4,
+  loop = true,
+})
+enemy:addAnimation({
+  name = "attack",
+  startFrame = 5,
+  endFrame = 7,
+  next = "walk",
+})
+enemy:setAnimation("walk"):play()
+enemy:setSpeed(1.5)
+enemy:setFrameDuration(0.08)
+enemy:drawSpecificFrame(1, true)
+enemy:stepFrame(1)
+
+-- Simple Looping Spritesheet
+local coin = RoxySprite({
+  name = "Coin",
   view = "images/coin-spin",
   isSheet = true,
-  singleAnim = true,
-  frameDuration = 0.2
-})
+  singleAnimation = true,
+  singleAnimationLoop = true,
+  frameDuration = 0.12,
+}, scene)
+coin:play()
 
--- Parallax background layer
-local backgroundSprite = RoxySprite({
+-- Parallax Background Layer
+local mountains = RoxySprite({
   name = "Mountains",
   view = "images/mountains",
   worldX = 400,
@@ -993,72 +1030,20 @@ local backgroundSprite = RoxySprite({
   parallaxX = 0.3, -- Moves slower than camera
   parallaxY = 0.1,
   parallaxOriginX = 200,
-  parallaxOriginY = 120
-})
+  parallaxOriginY = 120,
+}, scene)
+mountains:setWorldPosition(420, 240)
+mountains:setParallax(0.25, 0.1)
+mountains:setParallaxOrigin(200, 120)
 
--- Setup and positioning
-sprite:moveTo(100, 100)
-sprite:setZIndex(10)
-sprite:setCenter(0.5, 1.0) -- Bottom-center anchor
+-- Scene Ownership and Cleanup
+local looseSprite = RoxySprite({ name = "LooseSprite", view = "images/item" })
+scene:addSprite(looseSprite)
+local screenX, screenY = looseSprite:getScreenPosition()
+local onScreen = looseSprite:isOnScreen()
 
--- Animation control
-animatedSprite:addAnimation({
-  name = "walk",
-  startFrame = 1,
-  endFrame = 4,
-  loop = true
-})
-animatedSprite:addAnimation({
-  name = "attack",
-  startFrame = 5,
-  endFrame = 7,
-  next = "walk"
-})
--- Legacy signature also works:
-animatedSprite:addAnimation("walk", { loop = true })
-animatedSprite:play()
+looseSprite:flipX()
+looseSprite:removeAndClearView()
+looseSprite:destroy()
 
--- Playback control
-sprite:pause()
-sprite:play()
-sprite:setSpeed(2.0) -- Double speed
-sprite:setFrameDuration(0.05) -- 20 FPS
-
--- Parallax control can be added later
-sprite:setParallax(0.5, 0.8)
-sprite:setWorldPosition(200, 150)
-sprite:setParallaxOrigin(100, 75)
-
--- Pooled scene reuse restores parallax updates and desired collisions on add()
-backgroundSprite:remove()
-backgroundSprite:add()
-
-sprite:setCollisionsEnabled(false)
-sprite:remove()
-sprite:add()
-
--- Sprite management
-local looseSprite = RoxySprite({ name = "LooseSprite" })
-looseSprite:add()            -- Add to display list
-looseSprite:remove()         -- Remove from display list
-scene:addSprite(looseSprite) -- Add through scene ownership
-scene:removeSprite(looseSprite)
-looseSprite:destroy()        -- Clean up resources
-
--- Utility methods
-local onScreen = sprite:isOnScreen()
-local screenX, screenY = sprite:getScreenPosition()
-local isParallax = sprite:isParallaxEnabled()
-
--- Flip states
-sprite:flipX()
-sprite:flipY()
-sprite:flipXY()
-sprite:unflip()
-
--- Frame control for animations
-sprite:drawSpecificFrame(5, true) -- Jump to frame 5 and pause
-sprite:stepFrame(1)               -- Step forward one frame
-sprite:stepFrame(-1)              -- Step backward one frame
-
-]]--
+--]]

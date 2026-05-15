@@ -6,20 +6,20 @@ local Sprite    <const> = Graphics.sprite
 local r         <const> = roxy
 local Debug     <const> = r.Debug
 
-local max     <const> = math.max
-local floor   <const> = math.floor
-local clamp   <const> = r.Math.clamp
+local max   <const> = math.max
+local floor <const> = math.floor
+local clamp <const> = r.Math.clamp
 
 local tableUnpack         <const> = table.unpack
 local mergeTableImmutable <const> = r.Table.mergeImmutable
 
 local char <const> = string.char
 
-local setColor          <const> = Graphics.setColor
-local pushContext       <const> = Graphics.pushContext  --#DEBUG
-local popContext        <const> = Graphics.popContext   --#DEBUG
-local newImage          <const> = Graphics.image.new    --#DEBUG
-local fillRect          <const> = Graphics.fillRect
+local setColor    <const> = Graphics.setColor
+local pushContext <const> = Graphics.pushContext  --#DEBUG
+local popContext  <const> = Graphics.popContext   --#DEBUG
+local newImage    <const> = Graphics.image.new    --#DEBUG
+local fillRect    <const> = Graphics.fillRect
 
 -- C-side binding names updated for registered class/object API:
 local new_C           <const> = RoxyParticlesC.new
@@ -76,9 +76,9 @@ local DEFAULT_OPTS <const> = {
   frameRate  = 12,
 }
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Helpers
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 --#DEBUG START
 -- ! Crosshair Image
@@ -114,14 +114,19 @@ local function computeAABB(opts, frameW, frameH)
   )
 end
 
--- ----------------------------------------
--- ! Class Definition & Init
--- ----------------------------------------
+--------------------------------------------------------------------------------
+-- ! Class Definition and Initialize
+--------------------------------------------------------------------------------
 
 class("RoxyParticles").extends(RoxySprite)
 
+-- ! Initialize
 function RoxyParticles:init(x, y, opts)
   RoxySprite.super.init(self)
+  self._roxyScenePausePlayback = false
+  self._roxyScenePauseUpdates = true
+  self._roxyScenePauseCollisions = false
+
   local opts = mergeTableImmutable(DEFAULT_OPTS, (opts or EMPTY_TABLE))
 
   -- Clamp and validate ranges for safety
@@ -182,7 +187,7 @@ function RoxyParticles:init(x, y, opts)
     self:setPattern(opts.pattern)
   end
 
-  -- calculate AABB via C
+  -- Calculate AABB via C
   local left, right, top, bottom, boxW, boxH = computeAABB(opts, self.frameWidth or 0, self.frameHeight or 0)
   self.emitterOffsetX = -left
   self.emitterOffsetY = -top
@@ -207,9 +212,9 @@ function RoxyParticles:init(x, y, opts)
   --#DEBUG END
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Internal Methods
--- ----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Recalculate AABB
 -- Recalculate and apply AABB, reposition sprite
@@ -279,8 +284,8 @@ function RoxyParticles:update()
       -- Deduct the spawned particles from accumulator
       self.accumulator = self.accumulator - actualSpawned
 
-      -- If pool is full and we couldn't spawn anything, reset accumulator
-      -- to prevent it from growing indefinitely
+      -- If pool is full and nothing spawned, reset accumulator
+      -- This prevents it from growing indefinitely.
       if actualSpawned == 0 then
         self.accumulator = 0
       end
@@ -331,9 +336,9 @@ function RoxyParticles:draw()
   --#DEBUG END
 end
 
--- ----------------------------------------
+--------------------------------------------------------------------------------
 -- Public API
--- -----------------------------------------
+--------------------------------------------------------------------------------
 
 -- ! Reset
 -- Completely tear down and re-create the C-side pool so you can emit again
@@ -362,7 +367,7 @@ function RoxyParticles:destroy()
 end
 
 -- ! Burst Emit
--- Instantly spawn `count` particles regardless of rate
+-- Instantly spawn count particles regardless of rate
 function RoxyParticles:emit(count)
   count = floor(count or 1)
   if count <= 0 then return end
@@ -452,7 +457,7 @@ function RoxyParticles:setFrameRate(frameRate)
   self.opts.frameRate = frameRate or DEFAULT_OPTS.frameRate
   -- Push the new FPS into C so spawn/update use it
   setFrameRate_C(self.cpool, self.opts.frameRate)
-  -- Force a redraw so any timing‐sensitive visuals Pick up the new rate immediately
+  -- Force a redraw so any timing-sensitive visuals pick up the new rate immediately
   self:markDirty()
 end
 
@@ -520,7 +525,7 @@ end
 
 -- ! Set Loop
 function RoxyParticles:setLoop(loop)
-  -- false --> 0, true or nil --> 1
+  -- False --> 0, true or nil --> 1
   self.opts.loop = (loop == nil) or loop
 
   -- Push into C
@@ -605,7 +610,7 @@ function RoxyParticles:setPattern(pattern)
     setPattern_C(self.cpool, raw)
     self.opts.pattern = pattern
   elseif type(pattern) == "string" and pattern:match("^%s*{") then
-    -- Hex-list string like "{ 0xaa, 0x55, … }"
+    -- Hex-list string like "{ 0xaa, 0x55, ... }"
     local tbl   = {}
     local count = 0
     -- Each iteration is O(1)
@@ -645,3 +650,63 @@ function RoxyParticles:hasActiveParticles()
   -- Simply return the last-update result
   return self._hasActiveParticles or false
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+RoxyParticles creates sprite-backed particle emitters with C-side simulation.
+
+local Graphics <const> = playdate.graphics
+
+-- Burst Emitter
+local sparks = RoxyParticles(120, 80, {
+  maxCount = 80,
+  lifetime = { 0.25, 0.6 },
+  speed = { 40, 120 },
+  size = { 1, 4 },
+  angleRange = { -120, -60 },
+  color = Graphics.kColorBlack,
+})
+scene:addSprite(sparks)
+sparks:emit(24)
+
+-- Continuous Emitter
+local smoke = RoxyParticles(200, 180, {
+  rate = 12,
+  lifetime = { 1.0, 2.0 },
+  speed = { 8, 18 },
+  accel = { x = 0, y = -8 },
+  size = { 3, 8 },
+  shape = "outline-circle",
+})
+scene:addSprite(smoke)
+smoke:setRate(20)
+smoke:setAngleRange(-100, -80)
+
+-- Imagetable Particles
+local leaves = RoxyParticles(200, 40, {
+  imageTable = Graphics.imagetable.new("images/particles/leaves"),
+  frameMode = "random",
+  loop = false,
+  rate = 8,
+  accel = { x = 6, y = 18 },
+  speed = { 10, 30 },
+})
+scene:addSprite(leaves)
+leaves:setFrameRate(16)
+
+-- Pattern, Finish, and Cleanup
+sparks:setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
+sparks.onFinished = function(emitter)
+  emitter:remove()
+  emitter:destroy()
+end
+
+smoke:clear()
+leaves:reset()
+leaves:setImageTable(nil)
+
+--]]
