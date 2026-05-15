@@ -6,29 +6,31 @@ local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
--- Graphics helpers
-local getDisplayImage <const> = Graphics.getDisplayImage
-
 -- Roxy Framework
 local r     <const> = roxy
 local Scene <const> = r.Scene
 
--- Sprite helpers used during scene switching
+-- Graphics
+local getDisplayImage       <const> = Graphics.getDisplayImage
 local redrawBackground      <const> = Sprite.redrawBackground
 local setBackgroundDrawing  <const> = Sprite.setBackgroundDrawingCallback
-
-local STACK_OP_REPLACE  <const> = 0
-local STACK_OP_PUSH     <const> = 1
-local STACK_OP_POP      <const> = 2
 
 -- Scene management
 local pushRaw     <const> = Scene.pushRaw
 local popRaw      <const> = Scene.popRaw
 local replaceRaw  <const> = Scene.replaceRaw
 
--- Bit-flags that track where we are in the life-cycle
+-- Stack operations
+local STACK_OP_REPLACE  <const> = 0
+local STACK_OP_PUSH     <const> = 1
+local STACK_OP_POP      <const> = 2
+
+-- State flags
 local STATE_MIDPOINT_REACHED  <const> = 1
 local STATE_HOLD_ELAPSED      <const> = 2
+
+-- Utility constants
+local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
 --------------------------------------------------------------------------------
 -- ! Class Definition & Initialization
@@ -36,6 +38,7 @@ local STATE_HOLD_ELAPSED      <const> = 2
 
 class("RoxyTransition").extends(Object)
 
+-- ! Initialize
 function RoxyTransition:init(opts)
   opts = opts or {}
 
@@ -44,7 +47,7 @@ function RoxyTransition:init(opts)
   self.type = opts.type or "Base"
   self.stackOp  = opts.stackOp or STACK_OP_REPLACE
 
-  -- bookkeeping
+  -- Bookkeeping
   self.state = 0
 
   -- Screenshot
@@ -53,14 +56,14 @@ function RoxyTransition:init(opts)
 
   -- Scene references
   self._newScene = nil
-  self._currentScene= nil
+  self._currentScene = nil
 end
 
 --------------------------------------------------------------------------------
 -- Transition Lifecycle
 --------------------------------------------------------------------------------
 
--- !  On Start
+-- ! On Start
 function RoxyTransition:_onStart()
   Log.debug("Transition '" .. self.name .. "' started") --#DEBUG
 
@@ -97,6 +100,9 @@ function RoxyTransition:_onMidpoint()
     end
     if newScene then
       newScene:resume()
+      local backgroundDrawFn = newScene.backgroundDrawFn or NO_OP_BG_DRAW
+      setBackgroundDrawing(backgroundDrawFn)
+      redrawBackground()
     end
   elseif stackOp == STACK_OP_PUSH then
     if oldScene then
@@ -104,6 +110,9 @@ function RoxyTransition:_onMidpoint()
     end
     if newScene then
       newScene:enter()
+      local backgroundDrawFn = newScene.backgroundDrawFn or NO_OP_BG_DRAW
+      setBackgroundDrawing(backgroundDrawFn)
+      redrawBackground()
     end
   else -- Replace
     if oldScene then
@@ -111,7 +120,7 @@ function RoxyTransition:_onMidpoint()
     end
     if newScene then
       newScene:enter()
-      local backgroundDrawFn = newScene.backgroundDrawFn or function() end
+      local backgroundDrawFn = newScene.backgroundDrawFn or NO_OP_BG_DRAW
       setBackgroundDrawing(backgroundDrawFn)
       redrawBackground()
     end
@@ -193,3 +202,69 @@ RoxyTransition.STATE_HOLD_ELAPSED     = STATE_HOLD_ELAPSED
 RoxyTransition.STACK_OP_REPLACE       = STACK_OP_REPLACE
 RoxyTransition.STACK_OP_PUSH          = STACK_OP_PUSH
 RoxyTransition.STACK_OP_POP           = STACK_OP_POP
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+RoxyTransition is the base lifecycle helper for transition effects.
+Subclasses call the lifecycle hooks when their visual timing reaches each phase.
+
+-- Custom Instant Transition
+class("FlashCut").extends(RoxyTransition)
+
+function FlashCut:init(opts)
+  opts = opts or {}
+  FlashCut.super.init(self, {
+    name = opts.name or "FlashCut",
+    type = "Custom",
+    stackOp = opts.stackOp or RoxyTransition.STACK_OP_REPLACE,
+    captureScreenshot = opts.captureScreenshot or false,
+  })
+end
+
+function FlashCut:execute(newScene, currentScene)
+  FlashCut.super.execute(self, newScene, currentScene)
+  self:_onStart()
+  self:_onMidpoint()
+  self:_onHoldElapsed()
+  self:_onComplete()
+end
+
+-- Timed Transition Skeleton
+class("HoldThenCut").extends(RoxyTransition)
+
+function HoldThenCut:init(opts)
+  opts = opts or {}
+  HoldThenCut.super.init(self, {
+    name = opts.name or "HoldThenCut",
+    type = "Custom",
+    stackOp = opts.stackOp or RoxyTransition.STACK_OP_REPLACE,
+    captureScreenshot = true,
+  })
+  self.duration = opts.duration or 0.4
+end
+
+function HoldThenCut:execute(newScene, currentScene)
+  HoldThenCut.super.execute(self, newScene, currentScene)
+  self:_onStart()
+
+  playdate.timer.performAfterDelay(self.duration * 500, function()
+    self:_onMidpoint()
+  end)
+  playdate.timer.performAfterDelay(self.duration * 1000, function()
+    self:_onHoldElapsed()
+    self:_onComplete()
+  end)
+end
+
+-- Register With Transition Module
+roxy.Transition.loadTransitions({
+  FlashCut = FlashCut,
+  HoldThenCut = HoldThenCut,
+})
+roxy.Transition.replaceScene(GameplayScene, "FlashCut")
+
+--]]

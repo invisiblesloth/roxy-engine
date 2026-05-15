@@ -8,6 +8,7 @@ local Sprite    <const> = Graphics.sprite
 local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
 local Camera      <const> = r.Camera
+local Scene       <const> = r.Scene
 
 local round <const> = r.Math.round
 
@@ -61,6 +62,15 @@ local function _removeSpritesFromScene(scene, sprites)
   end
 end
 
+-- ! Helper: Set Scene Pause Classification
+local function _setScenePauseClassification(sprite, playback, updates, collisions)
+  Scene.setSpritePauseClassification(sprite, {
+    playback = playback,
+    updates = updates,
+    collisions = collisions,
+  })
+end
+
 --------------------------------------------------------------------------------
 -- ! Class Definition and Initialize
 --------------------------------------------------------------------------------
@@ -89,7 +99,7 @@ function LayerManager:setScene(scene)
 end
 
 -- ! Add Layer
--- Register/replace layer data. Does NOT create a sprite yet.
+-- Register or replace layer data without creating a sprite yet
 function LayerManager:addLayer(layerData)
   if layerData.visible == nil then layerData.visible = true end
   self.layers[layerData.name] = layerData
@@ -101,7 +111,13 @@ function LayerManager:ensureSprite(name)
   local layer = self.layers[name]; if not layer then return nil end
   if self._opts.wrapInSprites == false then return layer.sprite end
 
+  local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
+  local useParallax = (not layer.layerOptions) or (layer.layerOptions.parallax ~= false)
+  local hasParallax = useParallax and (parallaxX ~= 1 or parallaxY ~= 1)
+
   if layer.sprite then
+    -- Keep classification current before addSprite's same-owner fast path.
+    _setScenePauseClassification(layer.sprite, false, hasParallax, false)
     if self._autoAdd and self._sceneHasAdd then
       self.scene:addSprite(layer.sprite)
     end
@@ -112,10 +128,10 @@ function LayerManager:ensureSprite(name)
   sprite:setTilemap(layer.tilemap)
   if (layer.anchor or self._opts.anchor) == "topLeft" then sprite:setCenter(0, 0) else sprite:setCenter(0.5, 0.5) end
   sprite:setZIndex(layer.zIndex or 0)
+  -- Keep classification current before addSprite's same-owner fast path.
+  _setScenePauseClassification(sprite, false, hasParallax, false)
 
-  local parallaxX, parallaxY = layer.parallaxx or 1, layer.parallaxy or 1
-  local useParallax = (not layer.layerOptions) or (layer.layerOptions.parallax ~= false)
-  if useParallax and (parallaxX ~= 1 or parallaxY ~= 1) then
+  if hasParallax then
     sprite:setIgnoresDrawOffset(true)
     sprite:setUpdatesEnabled(true)
     sprite.update = _createParallaxUpdate(
@@ -411,9 +427,11 @@ end
 
 --[[
 
+LayerManager owns tile layer sprites for RoxyTilemap. Most callers use it through
+RoxyTilemap, but direct usage is useful for advanced tilemap tooling.
+
 local Graphics <const> = playdate.graphics
 
--- Advanced/direct usage; RoxyTilemap usually creates the manager for you.
 local scene = RoxyScene()
 local layers = {}
 local sprites = {}
@@ -424,6 +442,7 @@ local manager = LayerManager({
   anchor = "topLeft",
 }, scene, layers, sprites)
 
+-- Register a Layer
 local imageTable = Graphics.imagetable.new("images/terrain")
 local tilemap = Graphics.tilemap.new()
 tilemap:setImageTable(imageTable)
@@ -443,23 +462,33 @@ manager:addLayer({
   zIndex = 0,
   visible = true,
   anchor = "topLeft",
+  parallaxx = 0.5,
+  parallaxy = 1,
+  parallaxoriginx = 200,
+  parallaxoriginy = 120,
 })
 
-local groundSprite = manager:ensureSprite("Ground")
+-- Sprite Lifecycle and Visibility
+manager:ensureSpritesForAll()
+local groundSprite = manager:getSprite("Ground")
+local groundTilemap = manager:getTilemap("Ground")
+local allLayerSprites = manager:getAllSprites()
+
 manager:hide("Ground")
 manager:show("Ground")
 manager:setOrigin("Ground", 32, 16)
+manager:setOriginForAll(0, 0)
 
--- Runtime image table swap with a compact remap table
+-- Runtime Image Table Swap
 local winterTiles = Graphics.imagetable.new("images/terrain-winter")
 manager:setImageTable("Ground", winterTiles, {
   [1] = 2,
   [2] = 1,
 })
 
--- Detach for pooled scene reuse, or destroy during tilemap teardown.
+-- Cleanup
 manager:detach()
 manager:remove("Ground")
 manager:destroy()
 
-]]
+--]]

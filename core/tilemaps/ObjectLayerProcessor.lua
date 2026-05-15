@@ -10,6 +10,7 @@ local Sprite    <const> = Graphics.sprite
 
 local r           <const> = roxy
 local AssetStore  <const> = r.AssetStore
+local Scene       <const> = r.Scene
 
 local tableCreate <const> = table.create
 local tableInsert <const> = table.insert
@@ -33,6 +34,8 @@ local OBJECT_TAG <const> = 2
 
 local COLOR_BLACK <const> = Graphics.kColorBlack
 
+local EMPTY_TABLE <const> = {}
+
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
@@ -52,6 +55,8 @@ end
 
 -- ! Create Default Object Sprite
 function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fallbackParallaxX, fallbackParallaxY)
+  layerOptions = layerOptions or EMPTY_TABLE
+
   -- Initialize parallax values and object properties
   local parallaxX, parallaxY = 1, 1
   local parallaxOriginX, parallaxOriginY = 0, 0
@@ -135,6 +140,12 @@ function ObjectLayerProcessor.createDefaultObjectSprite(object, layerOptions, fa
     --#DEBUG END
     end
   end
+
+  Scene.setSpritePauseClassification(sprite, {
+    playback = false,
+    updates = hasParallax,
+    collisions = layerOptions.collidable == true,
+  })
 
   -- Track retained image path for cleanup
   sprite._retainedImagePath = didRetain and imagePath or nil

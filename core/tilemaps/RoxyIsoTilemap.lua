@@ -170,14 +170,22 @@ end
 function RoxyIsoTilemap:_createNativeRenderer(layerData)
   if not layerData or not layerData.imageTable or not newTileRenderer_C then return end
 
-  sanitizeTilesInPlace(layerData.tilesFlat, layerData.imageCount)
-
   --#DEBUG START
   if (layerData.tileWidth or 0) <= 0 or (layerData.tileHeight or 0) <= 0
      or (layerData.halfWidth or 0) <= 0 or (layerData.halfHeight or 0) <= 0 then
     Log.error("[RoxyIsoTilemap] Invalid tile metrics; width/height/halves must be > 0")
   end
   --#DEBUG END
+
+  local halfWidth = layerData.halfWidth or 0
+  local halfHeight = layerData.halfHeight or 0
+  if halfWidth ~= floor(halfWidth) or halfHeight ~= floor(halfHeight) then
+    layerData._nativeRenderer = nil
+    Log.warn("[RoxyIsoTilemap] Fractional half-tile metrics; using Lua renderer fallback") --#DEBUG
+    return
+  end
+
+  sanitizeTilesInPlace(layerData.tilesFlat, layerData.imageCount)
 
   layerData._nativeRenderer = newTileRenderer_C(
     1,                        -- Isometric
@@ -1157,10 +1165,6 @@ local row = map:getRowFromScreen(200, 120, "blocks")
 map:drawLayerRows("blocks", 1, row, 1, 12)
 
 local previewImage, offsetX, offsetY = map:getLayerImage("ground", {
-  tileX = 1,
-  tileY = 1,
-  tileWidth = 6,
-  tileHeight = 6,
   compositeLayers = { "blocks" },
 })
 

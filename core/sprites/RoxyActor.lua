@@ -46,6 +46,21 @@ local function _resolveTerminal(self, startName)
   end
 end
 
+-- ! Helper: Manifest Needs Sheet
+-- Returns true when animation manifest fields require a sheet
+local function _manifestNeedsSheet(manifest)
+  return type(manifest) == "table"
+     and manifest.sheet == nil
+     and (
+       manifest.rows ~= nil
+       or manifest.frames ~= nil
+       or manifest.loop ~= nil
+       or manifest.next ~= nil
+       or manifest.default ~= nil
+       or manifest.transitions ~= nil
+     )
+end
+
 --------------------------------------------------------------------------------
 -- Class Definition & Init
 --------------------------------------------------------------------------------
@@ -99,7 +114,7 @@ function RoxyActor:_initializeProperties()
   self.facing       = 1
 
   --#DEBUG START
-  if not self.animation and not self._manifest.sheet then
+  if not self.animation and _manifestNeedsSheet(self._manifest) then
     Log.warn("[RoxyActor:init] No spritesheet/imagetable provided in manifest")
   end
   --#DEBUG END
@@ -113,12 +128,15 @@ function RoxyActor:_setupSheet()
     if sheetType == "string" then
       self:setView(sheet, true, false, false)
     elseif sheetType == "userdata" and sheet.getImage then
-      self:setView(RoxyAnimation.fromImagetable(sheet))
+      self:setView({ imagetable = sheet })
     elseif sheetType == "table" then
-      if sheet.isRoxyAnimation then
-        self:setView(sheet:retain())
+      if sheet.poolKey then
+        -- Pooled descriptors are owned and recycled by RoxySprite
+        self:setView(sheet)
+      elseif sheet.isRoxyAnimation then
+        self:setView(sheet)
       elseif sheet.animation and sheet.animation.isRoxyAnimation then
-        self:setView(sheet.animation:retain())
+        self:setView(sheet.animation)
       --#DEBUG START
       else
         Log.warn("[RoxyActor:init] Unsupported table for 'sheet'")
@@ -126,7 +144,7 @@ function RoxyActor:_setupSheet()
       end
     --#DEBUG START
     else
-      Log.warn("[RoxyActor:init] Unsupported sheet type; expected path, imagetable, RoxyAnimation, or {animation=...}")
+      Log.warn("[RoxyActor:init] Unsupported sheet type; expected path, imagetable, RoxyAnimation, {poolKey=...}, or {animation=...}")
     --#DEBUG END
     end
   end
@@ -198,8 +216,13 @@ end
 -- Helper so we centralize finishing semantics
 function RoxyActor:_finishPlayOnce()
   local fn = self._onPlayOnceFinish
+  local nextState = self.nextState
   self._onPlayOnceFinish = nil
   self._playOnceTerminal = nil
+  self.nextState = nil
+  if nextState then
+    self:setState(nextState)
+  end
   if fn then fn(self) end
 end
 
@@ -273,7 +296,7 @@ function RoxyActor:_maybeSettleHold(stateName)
 end
 
 -- ! Settle Then Default
--- Called when a non-loop clip with no next completes.
+-- Called when a non-loop clip with no next completes
 function RoxyActor:_settleThenDefault(stateName, clip)
   local default = self.defaultState or (self.manifest and self.manifest.default)
   if not (default and self.animations and self.animations[default]) then return end
@@ -352,7 +375,7 @@ function RoxyActor:_onAnimationComplete(stateName)
 end
 
 -- ! Evaluate Condition
--- Optimized condition evaluation with early exit
+-- Evaluates a pre-parsed transition condition
 function RoxyActor:_evaluateCondition(condition, opts)
   local optVal = opts[condition.option]
   if condition.type == "gt" then
@@ -406,7 +429,7 @@ function RoxyActor:setState(stateName, force)
 end
 
 -- ! Queue State
--- Queue up a state change to occur as soon as the current clip finishes.
+-- Queue up a state change to occur as soon as the current clip finishes
 function RoxyActor:queueState(stateName)
   --#DEBUG START
   if type(stateName) ~= "string" then
@@ -425,7 +448,7 @@ function RoxyActor:queueState(stateName)
 end
 
 -- ! Play Once
--- Play a one-shot animation state, then return to the previous/default.
+-- Play a one-shot animation state, then return to the previous/default
 function RoxyActor:playOnce(stateName, onFinish)
   if not self.animation or not self.animations or not self.animations[stateName] then return self end
 
@@ -515,7 +538,7 @@ function RoxyActor:updatePhysics(opts)
   -- Set facing based on desired velocity (intent, not actual)
   self:setFacing(desiredVx)
 
-  -- Cached transition rules with optimized condition checking
+  -- Use pre-parsed transition rules when available
   local cache = self._transitionRulesCache
   if cache and #cache > 0 then
     for _, rule in ipairs(cache) do
@@ -698,9 +721,9 @@ local actor1 = RoxyActor(manifest, scene)               -- 2-arg
 local actor2 = RoxyActor(manifest, "idle", opts, scene) -- 4-arg
 local actor3 = RoxyActor(manifest, "idle", scene)       -- 3-arg
 
--- Asset Pool Integration
+-- Asset Pool Integration (pooled sheet data, private animation state)
 local pooledActor = RoxyActor({
-  sheet = RoxyAnimation.fromPool("shared_character_animations")
+  sheet = { poolKey = "character_sheet_pool", kind = "sheet" }
 }, scene)
 
 -- Cleanup

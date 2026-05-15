@@ -30,15 +30,20 @@ local drawImage     <const> = Graphics.imagetable.drawImage
 --------------------------------------------------------------------------------
 
 -- Roxy core
-local r         <const> = roxy
-local Math      <const> = r.Math
-local Assets    <const> = r.Assets
-local Registry  <const> = r.AssetPoolRegistry
-local Animation <const> = r.Animation
+local r           <const> = roxy
+local Math        <const> = r.Math
+local Cache       <const> = r.Cache
+local AssetStore  <const> = r.AssetStore
+local Assets      <const> = r.Assets
+local Registry    <const> = r.AssetPoolRegistry
+local Animation   <const> = r.Animation
 
 -- Roxy framework function aliases
 local clamp           <const> = Math.clamp
 local truncateDecimal <const> = Math.truncateDecimal
+local getCachedAsset  <const> = Cache.getCachedAsset
+local retainAsset     <const> = AssetStore.retain
+local releaseAsset    <const> = AssetStore.release
 local getAsset        <const> = Assets.getAsset
 local recycleAsset    <const> = Assets.recycleAsset
 local isFromPool      <const> = Registry.isFromPool
@@ -55,19 +60,11 @@ local UNFLIPPED <const> = Graphics.kImageUnflipped
 -- Animation Constants
 --------------------------------------------------------------------------------
 
-local FRAME_DURATION_DEFAULT  <const> = 0.033 -- About 30 FPS
-local MIN_FRAME_DURATION      <const> = 0.016 -- Guard against >60 FPS
-local MAX_FRAME_DURATION      <const> = 10    -- Sensible upper limit (sec)
-local MAX_ANIMATION_SPEED     <const> = 100   -- UI clamp for setSpeed
-
---------------------------------------------------------------------------------
--- Local State Variables
---------------------------------------------------------------------------------
-
--- Track shared animations by imagetable identity (weak keys)
-local _animationCache = setmetatable({}, { __mode = "k" })
--- Cache animations by path to avoid duplicate imagetables
-local _pathCache = setmetatable({}, { __mode = "k" })
+local FRAME_DURATION_DEFAULT        <const> = 0.033 -- About 30 FPS
+local MIN_FRAME_DURATION            <const> = 0.016 -- Guard against >60 FPS
+local MAX_FRAME_DURATION            <const> = 10    -- Sensible upper limit (sec)
+local MAX_ANIMATION_SPEED           <const> = 100   -- UI clamp for setSpeed
+local PATH_IMAGETABLE_CACHE_PREFIX  <const> = "RoxyAnimation.imagetable:"
 
 --------------------------------------------------------------------------------
 -- Class Definition
@@ -79,41 +76,87 @@ class("RoxyAnimation").extends(Object)
 -- Static Factory Methods
 --------------------------------------------------------------------------------
 
+-- ! Helper: Is Image Table
+-- Returns true for Playdate imagetable-like values
+local function _isImageTable(value)
+  local valueType = type(value)
+  if valueType ~= "table" and valueType ~= "userdata" then return false end
+
+  local ok, drawImage = pcall(function() return value.drawImage end)
+  return ok and type(drawImage) == "function"
+end
+
+-- ! Helper: Get Image Table Length
+-- Reads frame count from table length, then Playdate-style getLength()
+local function _getImageTableLength(imagetable)
+  local ok, length = pcall(function() return #imagetable end)
+  if ok and type(length) == "number" and length > 0 then
+    return length
+  end
+
+  if imagetable and type(imagetable.getLength) == "function" then
+    return imagetable:getLength() or 0
+  end
+
+  return 0
+end
+
+-- ! Helper: Get Path Cache Key
+-- Namespaces path-backed imagetable assets inside AssetStore
+local function _getPathCacheKey(path)
+  return PATH_IMAGETABLE_CACHE_PREFIX .. path
+end
+
+RoxyAnimation.PATH_IMAGETABLE_CACHE_PREFIX = PATH_IMAGETABLE_CACHE_PREFIX
+
+-- ! Get Path Cache Key
+-- Returns the AssetStore key used for a path-backed animation imagetable
+function RoxyAnimation.getPathCacheKey(path)
+  return _getPathCacheKey(path)
+end
+
+-- ! From Path
+-- Creates fresh playback state backed by a retained cached imagetable
+function RoxyAnimation.fromPath(path)
+  return RoxyAnimation(path)
+end
+
 -- ! From Image Table
--- Create animation from existing imagetable with reference counting
+-- Creates fresh playback state over an existing imagetable
 function RoxyAnimation.fromImagetable(imagetable)
-  if not (imagetable and imagetable.drawImage) then
-    error("[RoxyAnimation.fromImagetable] Expected imagetable userdata") --#DEBUG
+  if not _isImageTable(imagetable) then
+    error("[RoxyAnimation.fromImagetable] Expected imagetable") --#DEBUG
     return nil
   end
 
-  -- Return existing cached instance with incremented reference count
-  local cached = _animationCache[imagetable]
-  if cached then
-    return cached:retain()
-  end
-
-  -- Create new instance and add to cache
-  local self = RoxyAnimation(imagetable)
-  self._refcount = 1
-  _animationCache[imagetable] = self
-  return self
+  return RoxyAnimation(imagetable)
 end
 
 -- ! From Pool
--- Create animation from Assets pool
+-- Creates fresh playback state over an imagetable checked out of an Assets pool
 function RoxyAnimation.fromPool(poolKey)
   local imagetable = getAsset(poolKey)
   if not imagetable then
-    error("[RoxyAnimation.fromPool] No asset for key: ", tostring(poolKey))
+    error("[RoxyAnimation.fromPool] No asset for key: " .. tostring(poolKey))
     return nil
   end
-  local animation = RoxyAnimation.fromImagetable(imagetable)
-  if animation then
-    animation._pooledKey = poolKey
-    animation._pooledAsset = imagetable
-    animation._pooledAssetKind = "imagetable"
+
+  local ok, animation = pcall(function()
+    return RoxyAnimation.fromImagetable(imagetable)
+  end)
+
+  if not ok then
+    -- Return checked-out image data before rethrowing construction errors
+    if isFromPool(imagetable) then
+      recycleAsset(poolKey, imagetable)
+    end
+    error(animation, 2)
   end
+
+  animation._pooledKey = poolKey
+  animation._pooledAsset = imagetable
+  animation._pooledAssetKind = "imagetable"
+  animation._pooledAssetRecycled = false
   return animation
 end
 
@@ -129,37 +172,48 @@ function RoxyAnimation:init(view)
   local viewType = type(view)
   if viewType == "string" then
     return self:_initFromPath(view)
-  elseif viewType == "userdata" and view and view.drawImage then
+  elseif _isImageTable(view) then
     return self:_initFromImagetable(view)
   else
-    error("[RoxyAnimation:init] Expected string path or imagetable userdata (got " .. viewType .. ")")
+    error("[RoxyAnimation:init] Expected string path or imagetable (got " .. viewType .. ")")
   end
 end
 
 -- ! Initialize From Path
--- Initialize from file path with caching
+-- Initialize fresh animation state from a retained cached imagetable
 function RoxyAnimation:_initFromPath(path)
-  -- Check path cache to avoid duplicate imagetables
-  local cached = _pathCache[path]
-  if cached then
-    return cached:retain()
+  if type(path) ~= "string" or path == "" then
+    error("[RoxyAnimation:_initFromPath] Expected non-empty path")
   end
 
-  local imagetable = newImagetable(path)
+  local cacheKey = _getPathCacheKey(path)
+  -- Cache only image data; each animation keeps private playback state
+  local retained = retainAsset(cacheKey, function()
+    return newImagetable(path)
+  end)
+  if not retained then
+    error("[RoxyAnimation:_initFromPath] Failed to retain imagetable from: " .. path)
+    return
+  end
+
+  local imagetable = getCachedAsset(cacheKey)
   if not imagetable then
-    error("[RoxyAnimation:_initFromPath] Failed to create imagetable from: " .. path)
+    releaseAsset(cacheKey)
+    error("[RoxyAnimation:_initFromPath] Failed to get retained imagetable from: " .. path)
+    return
+  end
+  if not _isImageTable(imagetable) then
+    releaseAsset(cacheKey)
+    error("[RoxyAnimation:_initFromPath] Retained asset is not an imagetable: " .. path)
     return
   end
 
   self:_initCommon()
   self.imagetable = imagetable
-  self._length = #imagetable
-  self._refcount = 1
-  self._path = path -- Store for cache cleanup
-
-  -- Add to both caches
-  _pathCache[path] = self
-  _animationCache[imagetable] = self
+  self._length = _getImageTableLength(imagetable)
+  self._path = path
+  self._retainedPath = cacheKey
+  self._retainedPathReleased = false
 end
 
 -- ! Initialize From Image Table
@@ -167,8 +221,7 @@ end
 function RoxyAnimation:_initFromImagetable(imagetable)
   self:_initCommon()
   self.imagetable = imagetable
-  self._length = #imagetable
-  self._refcount = 1
+  self._length = _getImageTableLength(imagetable)
 end
 
 -- ! Initialize Common
@@ -182,9 +235,15 @@ function RoxyAnimation:_initCommon()
   self.isFirstCycle     = true
   self.isReversed       = false
   self.accumulator      = 0
+  self._refcount        = 1
+  self._destroyed       = false
+  self._path            = nil
+  self._retainedPath    = nil
+  self._retainedPathReleased = true
   self._pooledKey       = nil
   self._pooledAsset     = nil
   self._pooledAssetKind = nil
+  self._pooledAssetRecycled = true
 end
 
 --------------------------------------------------------------------------------
@@ -194,6 +253,7 @@ end
 -- ! Retain
 -- Increment reference count and return self for chaining
 function RoxyAnimation:retain()
+  if self._destroyed then return self end
   self._refcount = (self._refcount or 0) + 1
   return self
 end
@@ -201,31 +261,38 @@ end
 -- ! Release
 -- Decrement reference count, cleanup when reaches zero
 function RoxyAnimation:release()
-  if not self._refcount then return end
+  if self._destroyed or not self._refcount then return end
 
   self._refcount -= 1
   if self._refcount <= 0 then
-    self:_cleanupCaches()
-    self:_recyclePooledAsset()
     self:destroy()
   end
 end
 
--- ! Cleanup Caches
--- Remove from both caches when reference count reaches zero
-function RoxyAnimation:_cleanupCaches()
-  _animationCache[self.imagetable] = nil
-  if self._path then
-    _pathCache[self._path] = nil
+-- ! Is Destroyed
+-- Returns true after this animation has been destroyed
+function RoxyAnimation:isDestroyed()
+  return self._destroyed == true
+end
+
+-- ! Release Retained Path
+-- Releases a retained path imagetable exactly once
+function RoxyAnimation:_releaseRetainedPath()
+  if self._retainedPath and not self._retainedPathReleased then
+    releaseAsset(self._retainedPath)
+    self._retainedPathReleased = true
   end
+  self._retainedPath = nil
 end
 
 -- ! Recycle Pooled Asset
+-- Returns a checked-out pooled imagetable exactly once
 function RoxyAnimation:_recyclePooledAsset()
   local pooledAsset = self._pooledAsset
-  if pooledAsset and self._pooledKey and isFromPool(pooledAsset) then
+  if pooledAsset and self._pooledKey and not self._pooledAssetRecycled and isFromPool(pooledAsset) then
     recycleAsset(self._pooledKey, pooledAsset)
   end
+  self._pooledAssetRecycled = true
   self._pooledAsset = nil
   self._pooledKey = nil
   self._pooledAssetKind = nil
@@ -488,6 +555,12 @@ function RoxyAnimation:jumpToFrame(frame)
   return self
 end
 
+-- ! Jump To Specific Frame
+-- Legacy alias for jumpToFrame
+function RoxyAnimation:jumpToSpecificFrame(frame)
+  return self:jumpToFrame(frame)
+end
+
 -- ! Step Frame
 -- Step forward or backward by one frame with wrapping
 function RoxyAnimation:stepFrame(direction)
@@ -731,9 +804,13 @@ end
 -- ! Destroy
 -- Clean up resources and break references
 function RoxyAnimation:destroy()
-  -- Clear callback to prevent retention cycles
+  if self._destroyed then return end
+
+  self._destroyed = true
+  self:_releaseRetainedPath()
   self:_recyclePooledAsset()
 
+  -- Clear callback to prevent retention cycles
   if self.currentAnimation and self.currentAnimation.onCompleteCallback then
     self.currentAnimation.onCompleteCallback = nil
   end
@@ -752,6 +829,7 @@ function RoxyAnimation:destroy()
   self._refcount = nil
   self._length = nil
   self._path = nil
+  self._retainedPath = nil
 end
 
 --------------------------------------------------------------------------------
@@ -809,12 +887,13 @@ if myAnimation:isPlaying() then
   Log.debug("Current frame:", myAnimation:getCurrentFrame())          --#DEBUG
 end
 
--- Factory Methods for Asset Management
+-- Factory Methods share image data while returning fresh playback state
+local pathAnimation = RoxyAnimation.fromPath("images/shared-sheet")
 local poolAnimation = RoxyAnimation.fromPool("character_animations")
 local existingImagetable = playdate.graphics.imagetable.new("images/shared-sheet")
-local sharedAnimation = RoxyAnimation.fromImagetable(existingImagetable)
+local tableAnimation = RoxyAnimation.fromImagetable(existingImagetable)
 
--- Reference Counting (for shared resources)
+-- Explicit sharing is opt-in by retaining a known animation instance
 local myAnimation2 = myAnimation:retain() -- Increment reference count
 myAnimation:release()                     -- Decrement reference count
 myAnimation2:release()                    -- Final release cleans up resources

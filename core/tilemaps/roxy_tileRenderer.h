@@ -21,7 +21,8 @@ typedef struct {
     LuaUDObject*    imageTableUserData; // Retained UD to keep it alive
     int             imageCount;
 
-    // Precomputed per-index offsets (1-based)
+    // Precomputed per-index images and offsets (1-based)
+    LCDBitmap** images; // [imageCount + 1], cells owned by imageTable
     int16_t* offsetX; // [imageCount + 1]
     int16_t* offsetY; // [imageCount + 1]
 
