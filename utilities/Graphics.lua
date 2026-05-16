@@ -13,8 +13,9 @@ local PLAYDATE_HEIGHT <const>       = 240 -- Native Playdate screen height (px)
 
 -- ! Get Refresh Rate
 -- Returns cached display refresh rate, or 30 FPS fallback on failure.
-function RoxyGraphics.getRefreshRate()
-  if not RoxyGraphics.refreshRate then
+-- Pass forceRefresh=true after changing playdate.display refresh rate.
+function RoxyGraphics.getRefreshRate(forceRefresh)
+  if forceRefresh or not RoxyGraphics.refreshRate then
     local success, rate = pcall(Display.getRefreshRate)
     RoxyGraphics.refreshRate = success and rate or DEFAULT_REFRESH_RATE
     --#DEBUG START
