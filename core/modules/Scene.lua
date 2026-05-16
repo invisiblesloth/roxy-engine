@@ -41,6 +41,8 @@ local stack
 local updateList
 local bgList
 local drawList
+local stackHiddenScenes
+local stackHiddenSceneList
 
 --------------------------------------------------------------------------------
 -- Utilities
@@ -68,7 +70,7 @@ function Scene.setSpritePauseClassification(sprite, opts)
     newMask = SCENE_PAUSE_ALL
   else
     if type(opts) ~= "table" then
-      Log.error("[Scene.setSpritePauseClassification] Expected table or nil", 2)
+      error("[Scene.setSpritePauseClassification] Expected table or nil", 3)
     end
 
     local playback = opts.playback
@@ -77,13 +79,13 @@ function Scene.setSpritePauseClassification(sprite, opts)
 
     -- Validate in all builds; silent coercion makes pause state difficult to trace.
     if playback ~= nil and type(playback) ~= "boolean" then
-      Log.error("[Scene.setSpritePauseClassification] playback must be a boolean when supplied", 2)
+      error("[Scene.setSpritePauseClassification] playback must be a boolean when supplied", 3)
     end
     if updates ~= nil and type(updates) ~= "boolean" then
-      Log.error("[Scene.setSpritePauseClassification] updates must be a boolean when supplied", 2)
+      error("[Scene.setSpritePauseClassification] updates must be a boolean when supplied", 3)
     end
     if collisions ~= nil and type(collisions) ~= "boolean" then
-      Log.error("[Scene.setSpritePauseClassification] collisions must be a boolean when supplied", 2)
+      error("[Scene.setSpritePauseClassification] collisions must be a boolean when supplied", 3)
     end
 
     newMask = SCENE_PAUSE_NONE
@@ -103,10 +105,74 @@ function Scene.setSpritePauseClassification(sprite, opts)
   return sprite
 end
 
-if type(Sprite.setPauseClassification) ~= "function" then
-  function Sprite:setPauseClassification(opts)
-    return Scene.setSpritePauseClassification(self, opts)
+-- ! Utility: Set Scene Stack Sprites Hidden
+local function setSceneStackSpritesHidden(scene, hidden)
+  local setter = scene and scene._setSceneStackSpritesHidden
+  if type(setter) == "function" then
+    setter(scene, hidden == true)
   end
+end
+
+-- ! Utility: Restore All Stack Hidden Scenes
+local function restoreAllStackHiddenScenes()
+  local hiddenList = stackHiddenSceneList
+  if hiddenList then
+    for i = #hiddenList, 1, -1 do
+      local scene = hiddenList[i]
+      if scene then
+        setSceneStackSpritesHidden(scene, false)
+      end
+    end
+  end
+
+  stackHiddenScenes = {}
+  stackHiddenSceneList = {}
+end
+
+-- ! Utility: Sync Stack Sprite Visibility
+local function syncStackSpriteVisibility(sceneStack, depth)
+  local blockingIndex = nil
+
+  for i = depth, 1, -1 do
+    local scene = sceneStack[i]
+    if scene and scene.blocksLowerDraw == true then
+      blockingIndex = i
+      break
+    end
+  end
+
+  local nextHiddenScenes = {}
+  local nextHiddenSceneList = {}
+  local nextHiddenCount = 0
+  local hideThrough = blockingIndex and blockingIndex - 1 or 0
+
+  for i = 1, hideThrough do
+    local scene = sceneStack[i]
+    if scene and nextHiddenScenes[scene] ~= true then
+      nextHiddenScenes[scene] = true
+      nextHiddenCount += 1
+      nextHiddenSceneList[nextHiddenCount] = scene
+
+      if not stackHiddenScenes or stackHiddenScenes[scene] ~= true then
+        setSceneStackSpritesHidden(scene, true)
+      end
+    end
+  end
+
+  local hiddenList = stackHiddenSceneList
+  if hiddenList then
+    for i = #hiddenList, 1, -1 do
+      local scene = hiddenList[i]
+      if scene and nextHiddenScenes[scene] ~= true then
+        setSceneStackSpritesHidden(scene, false)
+      end
+    end
+  end
+
+  stackHiddenScenes = nextHiddenScenes
+  stackHiddenSceneList = nextHiddenSceneList
+
+  return blockingIndex or 1
 end
 
 -- ! Utility: Rebuild Lists
@@ -122,6 +188,7 @@ local function rebuildLists()
   local bList = bgList
   local dList = drawList
   local depth = #sceneStack
+  local startIndex = syncStackSpriteVisibility(sceneStack, depth)
 
   -- Early out for empty stack
   if depth == 0 then
@@ -146,16 +213,6 @@ local function rebuildLists()
   end
 
   -- (2) Build draw list honoring scene stacking rules
-  -- Find the highest scene that blocks lower draw, scanning from top downward.
-  local startIndex = 1
-  for i = depth, 1, -1 do
-    local scene = sceneStack[i]
-    if scene and scene.blocksLowerDraw == true then
-      startIndex = i
-      break
-    end
-  end
-
   -- Collect visible scenes from startIndex --> top (bottom-to-top draw order)
   for i = startIndex, depth do
     local scene = sceneStack[i]
@@ -217,12 +274,16 @@ end
 --------------------------------------------------------------------------------
 
 function Scene.init()
+  restoreAllStackHiddenScenes()
+
   -- Clear registered scenes, stack and lists
   scenes = {}     -- Registered scenes
   stack = {}      -- Scene stack
   updateList = {} -- Pre-filtered update list
   bgList = {}     -- Pre-filtered bg update lists
   drawList = {}   -- Pre-filtered draw list
+  stackHiddenScenes = {}
+  stackHiddenSceneList = {}
 
   Scene.currentScene = nil -- Currently active scene (top of stack)
 
@@ -243,11 +304,11 @@ function Scene.registerScenes(...)
     local sceneName, sceneTable = args[1], args[2]
 
     if type(sceneName) ~= "string" then
-      Log.error("[Scene.registerScenes] First argument must be a string scene name.", 2) --#DEBUG
+      error("[Scene.registerScenes] First argument must be a string scene name.", 2) --#DEBUG
       return
     end
     if type(sceneTable) ~= "table" then
-      Log.error("[Scene.registerScenes] Second argument must be a table.", 2) --#DEBUG
+      error("[Scene.registerScenes] Second argument must be a table.", 2) --#DEBUG
       return
     end
 
@@ -260,17 +321,17 @@ function Scene.registerScenes(...)
     local sceneTable = args[1]
 
     if type(sceneTable) ~= "table" then
-      Log.error("[Scene.registerScenes] Single argument must be a table of scenes.", 2) --#DEBUG
+      error("[Scene.registerScenes] Single argument must be a table of scenes.", 2) --#DEBUG
       return
     end
 
     for name, table in pairs(sceneTable) do
       -- TODO: Should the if statement be removed from release build or just the error log?
       if type(name) ~= "string" then
-        Log.error("[Scene.registerScenes] Skipping scene - key is not a string.", 2) --#DEBUG
+        error("[Scene.registerScenes] Skipping scene - key is not a string.", 2) --#DEBUG
         return
       elseif type(table) ~= "table" then
-        Log.error("[Scene.registerScenes] Skipping scene '" .. tostring(name) .. "' - value is not a table.", 2) --#DEBUG
+        error("[Scene.registerScenes] Skipping scene '" .. tostring(name) .. "' - value is not a table.", 2) --#DEBUG
         return
       else
         scenes[name] = table
@@ -279,7 +340,7 @@ function Scene.registerScenes(...)
     return
   end
 
-  Log.error("[Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
+  error("[Scene.registerScenes] Invalid parameters to roxy.Scene.registerScenes.", 2) --#DEBUG
 end
 
 --------------------------------------------------------------------------------
@@ -289,7 +350,7 @@ end
 -- ! Replace Scene Raw
 function Scene.replaceRaw(newScene)
   if type(newScene) ~= "table" then
-    Log.error("[Scene.replaceRaw] A valid scene table must be provided.", 2) --#DEBUG
+    error("[Scene.replaceRaw] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
@@ -308,7 +369,7 @@ end
 -- ! Replace Scene
 function Scene.replaceScene(newScene)
   if type(newScene) ~= "table" then
-    Log.error("[Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
+    error("[Scene.replaceScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
@@ -328,13 +389,13 @@ end
 -- ! Push Scene Raw
 function Scene.pushRaw(newScene)
   if type(newScene) ~= "table" then
-    Log.error("[Scene.pushRaw] A valid scene table must be provided.", 2) --#DEBUG
+    error("[Scene.pushRaw] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
   -- Soft stack overflow cap
   if #stack >= MAX_SCENE_DEPTH then
-    Log.error("[Scene.pushRaw] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
+    error("[Scene.pushRaw] Stack depth exceeded (limit: " .. MAX_SCENE_DEPTH .. ")", 2) --#DEBUG
     return
   end
 
@@ -348,7 +409,7 @@ end
 -- ! Push Scene
 function Scene.pushScene(newScene)
   if type(newScene) ~= "table" then
-    Log.error("[Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
+    error("[Scene.pushScene] A valid scene table must be provided.", 2) --#DEBUG
     return
   end
 
@@ -365,7 +426,7 @@ end
 function Scene.popRaw()
   local depth = #stack
   if depth == 0 then
-    Log.warn("[Scene.popRaw] Stack already empty.")
+    Log.warn("[Scene.popRaw] Stack already empty.") --#DEBUG
     Scene.currentScene = nil
     rebuildLists()
     return
@@ -445,22 +506,28 @@ end
 
 --[[
 
-Scene manages registration, stack flow, background updates, and sprite pause classification.
+Scene manages registration, stack flow, stack visibility, background updates, and sprite pause classification.
 
 -- Register and Start Scenes
 Scene.init()
 Scene.registerScenes({
-  Title    = TitleScene,
-  Gameplay = GameplayScene,
-  Pause    = PauseScene,
+  Title     = TitleScene,
+  Gameplay  = GameplayScene,
+  Pause     = PauseScene,
+  Inventory = InventoryScene,
 })
 
 Scene.replaceScene(TitleScene)
 
--- Stack a Pause Scene
+-- Stack Overlay and Full-Screen Scenes
+PauseScene.blocksLowerDraw = false -- Keep lower draw and scene-owned sprites visible
 Scene.pushScene(PauseScene)
 local currentScene = Scene.getCurrentScene()
 local depth = Scene.getStackDepth()
+Scene.popScene()
+
+InventoryScene.blocksLowerDraw = true -- Hide lower draw and scene-owned sprites
+Scene.pushScene(InventoryScene)
 Scene.popScene()
 
 -- Keep a Background Scene Updating
@@ -473,10 +540,10 @@ local player = RoxySprite({ name = "player" })
 player:setPauseClassification(nil) -- Default dynamic behavior
 
 local decoration = playdate.graphics.sprite.new()
-decoration:setPauseClassification({}) -- Static; skip pause/resume work
+Scene.setSpritePauseClassification(decoration, {}) -- Static; skip pause/resume work
 
 local parallaxLayer = playdate.graphics.sprite.new()
-parallaxLayer:setPauseClassification({ updates = true })
+Scene.setSpritePauseClassification(parallaxLayer, { updates = true })
 
 local wall = playdate.graphics.sprite.new()
 Scene.setSpritePauseClassification(wall, { collisions = true })

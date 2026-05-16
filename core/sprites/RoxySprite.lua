@@ -13,6 +13,7 @@ local newImageTable     <const> = Graphics.imagetable.new
 local r       <const> = roxy
 local Assets  <const> = r.Assets
 local Camera  <const> = r.Camera
+local Scene   <const> = r.Scene
 
 local round <const> = r.Math.round
 
@@ -121,6 +122,11 @@ end
 --------------------------------------------------------------------------------
 -- Sprite Setup
 --------------------------------------------------------------------------------
+
+-- ! Set Pause Classification
+function RoxySprite:setPauseClassification(opts)
+  return Scene.setSpritePauseClassification(self, opts)
+end
 
 -- ! Set Ignores Draw Offset
 function RoxySprite:setIgnoresDrawOffset(flag)
@@ -984,6 +990,7 @@ player:moveTo(100, 100)
 player:setZIndex(10)
 player:setCenter(0.5, 1.0)
 player:setCollisionsEnabled(false)
+player:setPauseClassification(nil) -- Default dynamic scene pause behavior
 
 -- Full Animation Sprite
 local enemy = RoxySprite({
