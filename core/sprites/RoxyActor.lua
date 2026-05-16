@@ -1,31 +1,46 @@
 -- core/sprites/RoxyActor.lua
 
--- Math functions
+--------------------------------------------------------------------------------
+-- RoxyActor - State-Driven Animated Sprite Actor
+--------------------------------------------------------------------------------
+--
+-- Builds on RoxySprite with manifest-driven animation states, transition rules,
+-- one-shot animation handling, facing, and optional physics integration.
+--
+-- Key Features:
+--  - Flexible manifest construction with optional scene and sprite options
+--  - Row-based RoxyAnimation clip setup with frameRate/frameDuration metadata
+--  - State, queued-state, and playOnce helpers
+--  - Transition-rule evaluation for updatePhysics
+--  - Reversible physics update integration
+--
+-- Manifest Contract:
+--  - sheet may be a path, imagetable, RoxyAnimation, pool descriptor, or wrapper
+--  - rows map state names to row numbers or explicit start/finish ranges
+--  - frameDuration and frameRate are forwarded to RoxyAnimation clip config
+--
+--------------------------------------------------------------------------------
+
 local abs   <const> = math.abs
 local floor <const> = math.floor
 local max   <const> = math.max
 local min   <const> = math.min
 
--- Table functions
 local tableInsert <const> = table.insert
 
--- Core Playdate
-local pd        <const> = playdate
-local Graphics  <const> = pd.graphics
+local pd <const> = playdate
 
--- Timer functions
 local performAfterDelay <const> = pd.timer.performAfterDelay
 
--- Roxy core
 local r <const> = roxy
 
 --------------------------------------------------------------------------------
--- Helpers
+-- Private Helper Functions
 --------------------------------------------------------------------------------
 
 -- ! Resolve Terminal
--- When starting a one-shot, find the last NON-looping clip in the .next chain.
--- Stops before a loop, on missing next, or on cycles.
+-- Finds the last non-looping clip in a one-shot .next chain
+-- Stops before a loop, missing next, or cycle
 local function _resolveTerminal(self, startName)
   local seen, prev = {}, nil
   local name = startName
@@ -62,16 +77,21 @@ local function _manifestNeedsSheet(manifest)
 end
 
 --------------------------------------------------------------------------------
--- Class Definition & Init
+-- Class Definition
 --------------------------------------------------------------------------------
 
 class("RoxyActor").extends(RoxySprite)
+
+--------------------------------------------------------------------------------
+-- Initialization
+--------------------------------------------------------------------------------
 
 -- ! Initialize
 -- Manifest may include:
 --   sheet, rows, frames, loop, next, default, transitions
 -- Sprite options (forwarded to RoxySprite) may include:
---   name, worldX, worldY, parallaxX, parallaxY, parallaxOriginX, parallaxOriginY, view, isSheet, singleAnimation, frameDuration
+--   name, worldX, worldY, parallaxX, parallaxY, parallaxOriginX,
+--   parallaxOriginY, view, isSheet, singleAnimation, frameDuration, frameRate
 function RoxyActor:init(manifest, defaultState, opts, scene)
   self:_parseInitArgs(manifest, defaultState, opts, scene)
 
@@ -171,6 +191,7 @@ function RoxyActor:_buildAnimationsFromRows()
         next          = doNext[stateName],
         speed         = (type(info) == "table") and info.speed or nil,
         frameDuration = (type(info) == "table") and info.frameDuration or nil,
+        frameRate     = (type(info) == "table") and info.frameRate or nil,
         onCompleteCallback = function() self:_onAnimationComplete(stateName) end,
       }
     end
@@ -622,118 +643,62 @@ end
 --------------------------------------------------------------------------------
 
 --[[
+RoxyActor builds a state-driven animated RoxySprite from a manifest.
 
--- Basic Setup with Manifest
 local playerManifest = {
-  sheet = "images/player-spritesheet", -- Path to spritesheet
+  sheet = "images/player",
+  frames = 8,
   rows = {
-    idle = 1, -- Row 1 for idle animation
-    run = 2,  -- Row 2 for running
-    jump = 3, -- Row 3 for jumping
-    fall = 4  -- Row 4 for falling
-  },
-  frames = 8, -- 8 frames per row
-  default = "idle", -- Starting state
-  loop = {
-    idle = true,
-    run = true,
-    jump = false, -- One-shot animation
-    fall = false
-  },
-  next = {
-    jump = "fall",  -- Jump chains to fall
-    fall = "idle"   -- Fall returns to idle
-  }
-}
-
-local player = RoxyActor(playerManifest)
-
--- Advanced Manifest with Transition Rules
-local advancedManifest = {
-  sheet = "images/character",
-  rows = {
-    idle = { start = 1, finish = 4, speed = 1 },
-    run = { start = 9, finish = 16, speed = 2 },
+    idle = { start = 1, finish = 4, frameRate = 12 },
+    run = { start = 9, finish = 16, frameRate = "display" },
     jump = { start = 17, finish = 24, frameDuration = 0.05 },
-    attack = { start = 25, finish = 32 }
+    fall = 4,
+    attack = { start = 33, finish = 40, frameRate = 18 },
   },
   default = "idle",
+  loop = { jump = false, fall = false, attack = false },
+  next = {
+    jump = "fall",
+    fall = "idle",
+  },
   transitions = {
-    { state = "run", vxGreaterThan = 10, onGround = true },
+    { state = "run", intentVXGreaterThan = 0, onGround = true },
     { state = "jump", vy = -50, onGround = false },
     { state = "fall", vyGreaterThan = 0, onGround = false },
-    { state = "idle", vx = 0, onGround = true }
-  }
+    { state = "idle", intentVX = 0, onGround = true },
+  },
 }
-local advancedActor = RoxyActor(advancedManifest)
 
--- State Management
-player:setState("run")        -- Immediate state change
-player:queueState("jump")     -- Queue next state
-player:setState("idle", true) -- Force restart even if already idle
+local player = RoxyActor(playerManifest, "idle", {
+  name = "player",
+  worldX = 120,
+  worldY = 80,
+}, scene)
 
--- One-Shot Animations
+player:setState("run")
+player:queueState("idle")
 player:playOnce("attack", function(actor)
-  Log.debug("Attack animation completed!")
-  -- Automatically returns to previous state
+  Log.debug("[PlayerActor] attack finished") --#DEBUG
 end)
 
--- Physics Integration
-local physicsBody = RoxyPhysicsBody({ -- placeholder: provided by caller
-  x = 100, y = 100,
-  width = 32, height = 48
-})
-
-player:addPhysics(physicsBody)
-
--- Custom updatePhysics override
-function player:updatePhysics(opts)
-  opts = opts or {}
-
-  if opts.isAttacking then
-    if self.currentState ~= "attack" then
-      self:playOnce("attack")
-    end
-  else
-    -- Reuse the built-in transition logic from RoxyActor
-    RoxyActor.updatePhysics(self, opts)
-  end
-end
-
--- Manual Physics Updates
 player:updatePhysics({
-  vx = 15,            -- Current horizontal velocity
-  vy = -20,           -- Current vertical velocity
-  intentVX = 25,      -- Desired horizontal velocity (for facing)
-  onGround = false,   -- Ground collision state
-  isSliding = true,   -- Custom condition
-  healthAtLeast = 50  -- Custom condition with suffix
+  vx = 15,
+  vy = -20,
+  intentVX = 25,
+  onGround = false,
+  healthAtLeast = 50,
 })
 
--- Facing Direction
-player:setFacing(20) -- Positive = right, negative = left
+-- Optional physics object supplied by the caller
+player:addPhysics(playerBody)
+player:clearPhysics()
 
--- Multiple Initialization Patterns
-local manifest = playerManifest
-local scene = currentScene -- placeholder: provided by caller
-local opts = { worldX = 120, worldY = 80 }
-local actor1 = RoxyActor(manifest, scene)               -- 2-arg
-local actor2 = RoxyActor(manifest, "idle", opts, scene) -- 4-arg
-local actor3 = RoxyActor(manifest, "idle", scene)       -- 3-arg
-
--- Asset Pool Integration (pooled sheet data, private animation state)
+-- Pooled sheet descriptors keep private playback state per actor
 local pooledActor = RoxyActor({
   sheet = { poolKey = "character_sheet_pool", kind = "sheet" }
 }, scene)
 
 -- Cleanup
-player:clearPhysics() -- Remove physics integration
-player:remove()       -- Remove from scene
-player:destroy()      -- Full cleanup
-
--- Querying Actor State
-if player.currentState == "jump" then
-  Log.debug("Player is jumping!")
-end
-
+pooledActor:remove()
+player:remove()
 --]]

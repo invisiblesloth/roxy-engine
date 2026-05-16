@@ -1,5 +1,27 @@
 -- core/sprites/RoxySprite.lua
 
+--------------------------------------------------------------------------------
+-- RoxySprite - Scene-Aware Sprite, Animation, and Parallax Wrapper
+--------------------------------------------------------------------------------
+--
+-- Extends Playdate sprites with Roxy scene ownership, view management,
+-- animation helpers, simple spritesheet playback, parallax positioning,
+-- pause classification, and pooled asset cleanup.
+--
+-- Key Features:
+--  - Static image, simple spritesheet, full RoxyAnimation, and pooled views
+--  - frameRate config with frameDuration compatibility for simple animations
+--  - Scene-aware pause, update, collision, and remove behavior
+--  - Camera-relative parallax positioning
+--  - Retained and pooled view-resource lifecycle cleanup
+--
+-- Timing Contract:
+--  - Simple animations default to 30 FPS when no cadence is provided
+--  - frameDuration is stored as seconds per animation frame
+--  - frameDuration takes precedence when both frameDuration and frameRate are set
+--
+--------------------------------------------------------------------------------
+
 local floor <const> = math.floor
 
 local pd        <const> = playdate
@@ -10,16 +32,19 @@ local performAfterDelay <const> = pd.timer.performAfterDelay
 local newImage          <const> = Graphics.image.new
 local newImageTable     <const> = Graphics.imagetable.new
 
-local r       <const> = roxy
-local Assets  <const> = r.Assets
-local Camera  <const> = r.Camera
+local r             <const> = roxy
+local Assets        <const> = r.Assets
+local Camera        <const> = r.Camera
+local Scene         <const> = r.Scene
+local RoxyGraphics  <const> = r.Graphics
 
-local round <const> = r.Math.round
+local clamp <const> = r.Math.clamp
 
-local getAsset      <const> = Assets.getAsset
-local recycleAsset  <const> = Assets.recycleAsset
-local getPosition   <const> = Camera.getPosition
-local worldToScreen <const> = Camera.worldToScreen
+local getAsset        <const> = Assets.getAsset
+local recycleAsset    <const> = Assets.recycleAsset
+local getPosition     <const> = Camera.getPosition
+local worldToScreen   <const> = Camera.worldToScreen
+local getRefreshRate  <const> = RoxyGraphics.getRefreshRate
 
 local UNFLIPPED   <const> = Graphics.kImageUnflipped
 local FLIPPED_X   <const> = Graphics.kImageFlippedX
@@ -27,7 +52,6 @@ local FLIPPED_Y   <const> = Graphics.kImageFlippedY
 local FLIPPED_X_Y <const> = Graphics.kImageFlippedXY
 
 local MS_PER_SECOND <const> = 1000
-
 local DELAY_DEFAULT <const> = 1 -- Seconds
 
 local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
@@ -38,8 +62,13 @@ local SCREEN_TOP_LIMIT    <const> = 0
 local SCREEN_RIGHT_LIMIT  <const> = DISPLAY_WIDTH
 local SCREEN_BOTTOM_LIMIT <const> = DISPLAY_HEIGHT
 
+local FRAME_RATE_DEFAULT      <const> = 30
+local FRAME_DURATION_DEFAULT  <const> = 1 / FRAME_RATE_DEFAULT
+local MIN_FRAME_DURATION      <const> = 0.016
+local MAX_FRAME_DURATION      <const> = 10
+
 --------------------------------------------------------------------------------
--- Helpers
+-- Private Helper Functions
 --------------------------------------------------------------------------------
 
 -- ! Helper: Has Parallax
@@ -55,11 +84,67 @@ local function _setCollisionsActive(sprite, flag)
   RoxySprite.super.setCollisionsEnabled(sprite, flag)
 end
 
+-- ! Helper: Resolve Simple Frame Rate
+local function _resolveSimpleFrameRate(frameRate, fallbackDuration, label, warnOnInvalid)
+  local frameRateType = type(frameRate)
+  if frameRateType == "number" and frameRate > 0 then
+    return 1 / frameRate
+  end
+
+  if frameRate == "display" then
+    local displayRate = getRefreshRate(true)
+    if type(displayRate) == "number" and displayRate > 0 then
+      return 1 / displayRate
+    end
+    if warnOnInvalid then
+      Log.warn("[" .. label .. "] frameRate=\"display\" could not resolve a positive display refresh rate, got " .. tostring(displayRate)) --#DEBUG
+    end
+    return fallbackDuration
+  end
+
+  if warnOnInvalid then
+    Log.warn("[" .. label .. "] frameRate must be a positive number or \"display\", got " .. frameRateType) --#DEBUG
+  end
+  return fallbackDuration
+end
+
+-- ! Helper: Resolve Simple Frame Duration Config
+local function _resolveSimpleFrameDuration(frameDuration, frameRate, fallbackDuration, label)
+  if frameDuration ~= nil then
+    return frameDuration
+  end
+  if frameRate ~= nil then
+    return _resolveSimpleFrameRate(frameRate, fallbackDuration, label, true)
+  end
+  return fallbackDuration
+end
+
+-- ! Helper: Resolve Simple Frame Rate Setter
+local function _resolveSimpleFrameRateSetter(frameRate)
+  assert(
+    (type(frameRate) == "number" and frameRate > 0) or frameRate == "display",
+    "[RoxySprite:setFrameRate] Frame rate must be a positive number or \"display\""
+  )
+
+  if frameRate == "display" then
+    local displayRate = getRefreshRate(true)
+    assert(type(displayRate) == "number" and displayRate > 0,
+           "[RoxySprite:setFrameRate] Display refresh rate must be a positive number")
+    return 1 / displayRate
+  end
+
+  return 1 / frameRate
+end
+
 --------------------------------------------------------------------------------
--- Class Definition and Init
+-- Class Definition
 --------------------------------------------------------------------------------
 
 class("RoxySprite").extends(Sprite)
+
+--------------------------------------------------------------------------------
+-- Initialization
+--------------------------------------------------------------------------------
 
 -- ! Initialize
 function RoxySprite:init(options, scene)
@@ -108,7 +193,8 @@ function RoxySprite:init(options, scene)
       options.isSheet,
       options.singleAnimation,
       options.singleAnimationLoop ~= false,
-      options.frameDuration or 0.1
+      options.frameDuration,
+      options.frameRate
     )
   end
 
@@ -121,6 +207,11 @@ end
 --------------------------------------------------------------------------------
 -- Sprite Setup
 --------------------------------------------------------------------------------
+
+-- ! Set Pause Classification
+function RoxySprite:setPauseClassification(opts)
+  return Scene.setSpritePauseClassification(self, opts)
+end
 
 -- ! Set Ignores Draw Offset
 function RoxySprite:setIgnoresDrawOffset(flag)
@@ -347,6 +438,7 @@ local function _setupSimpleAnimation(sprite, imagetable, frameDuration, loop)
   if not frameDuration or frameDuration <= 0 then
     error("[RoxySprite:setView] frameDuration must be > 0 for simpleAnimation", 3)
   end
+  frameDuration = clamp(frameDuration, MIN_FRAME_DURATION, MAX_FRAME_DURATION)
 
   sprite.simpleAnimation = {
     imagetable    = imagetable,
@@ -369,12 +461,10 @@ local function _setupSimpleAnimation(sprite, imagetable, frameDuration, loop)
 end
 
 -- ! Set View
-function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration)
-  --#DEBUG START
+function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnimationLoop, frameDuration, frameRate)
   if self._destroyed then
     error("[RoxySprite:setView] Cannot set view on destroyed sprite", 2)
   end
-  --#DEBUG END
 
   if not view then
     self:setVisible(false)
@@ -432,7 +522,13 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
       if singleAnimation then
         -- Simple looping spritesheet
         local imagetable = newImageTable(view)
-        _setupSimpleAnimation(self, imagetable, frameDuration or 0.1, singleAnimationLoop ~= false)
+        local resolvedFrameDuration = _resolveSimpleFrameDuration(
+          frameDuration,
+          frameRate,
+          FRAME_DURATION_DEFAULT,
+          "RoxySprite:setView"
+        )
+        _setupSimpleAnimation(self, imagetable, resolvedFrameDuration, singleAnimationLoop ~= false)
       else
         -- Full RoxyAnimation
         self.animation = RoxyAnimation(view) -- Path-based constructor
@@ -460,7 +556,13 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     -- Handle ImageTable or Image userdata
     if view.drawImage then
       -- ImageTable - treat as simple animation
-      _setupSimpleAnimation(self, view, frameDuration or 0.1, singleAnimationLoop ~= false)
+      local resolvedFrameDuration = _resolveSimpleFrameDuration(
+        frameDuration,
+        frameRate,
+        FRAME_DURATION_DEFAULT,
+        "RoxySprite:setView"
+      )
+      _setupSimpleAnimation(self, view, resolvedFrameDuration, singleAnimationLoop ~= false)
     elseif view.draw then
       -- Image
       self:setImage(view)
@@ -713,6 +815,9 @@ function RoxySprite:getFrameDuration()
   if self.animation then
     return self.animation:getFrameDuration()
   end
+  if self.simpleAnimation then
+    return self.simpleAnimation.frameDuration
+  end
   return nil
 end
 
@@ -723,6 +828,8 @@ function RoxySprite:setFrameDuration(frameDuration, currentOnly)
 
   if self.animation then
     self.animation:setFrameDuration(frameDuration, currentOnly)
+  elseif self.simpleAnimation then
+    self.simpleAnimation.frameDuration = clamp(frameDuration, MIN_FRAME_DURATION, MAX_FRAME_DURATION)
   --#DEBUG START
   else
     Log.warn("[RoxySprite:setFrameDuration] Sprite has no animation system")
@@ -730,6 +837,19 @@ function RoxySprite:setFrameDuration(frameDuration, currentOnly)
   end
 
   return self
+end
+
+-- ! Get Frame Rate
+function RoxySprite:getFrameRate()
+  local frameDuration = self:getFrameDuration()
+  if not frameDuration or frameDuration <= 0 then return nil end
+  return 1 / frameDuration
+end
+
+-- ! Set Frame Rate
+function RoxySprite:setFrameRate(frameRate, currentOnly)
+  local frameDuration = _resolveSimpleFrameRateSetter(frameRate)
+  return self:setFrameDuration(frameDuration, currentOnly)
 end
 
 --------------------------------------------------------------------------------
@@ -971,10 +1091,8 @@ end
 --------------------------------------------------------------------------------
 
 --[[
-
 RoxySprite wraps Playdate sprites with image, animation, parallax, and scene ownership helpers.
 
--- Static Image Sprite
 local player = RoxySprite({
   name = "PlayerSprite",
   view = "images/player-idle",
@@ -984,8 +1102,8 @@ player:moveTo(100, 100)
 player:setZIndex(10)
 player:setCenter(0.5, 1.0)
 player:setCollisionsEnabled(false)
+player:setPauseClassification(nil) -- Default dynamic scene pause behavior
 
--- Full Animation Sprite
 local enemy = RoxySprite({
   name = "Enemy",
   view = "images/enemy-walk",
@@ -997,37 +1115,39 @@ enemy:addAnimation({
   startFrame = 1,
   endFrame = 4,
   loop = true,
+  frameRate = 10,
 })
 enemy:addAnimation({
   name = "attack",
   startFrame = 5,
   endFrame = 7,
   next = "walk",
+  frameRate = "display",
 })
 enemy:setAnimation("walk"):play()
 enemy:setSpeed(1.5)
-enemy:setFrameDuration(0.08)
+enemy:setFrameRate(12) -- Applies to all full-animation clips
 enemy:drawSpecificFrame(1, true)
 enemy:stepFrame(1)
 
--- Simple Looping Spritesheet
 local coin = RoxySprite({
   name = "Coin",
   view = "images/coin-spin",
   isSheet = true,
   singleAnimation = true,
   singleAnimationLoop = true,
-  frameDuration = 0.12,
+  frameRate = "display",
 }, scene)
+-- Omit frameRate/frameDuration for the 30 FPS simple-animation default
 coin:play()
+coin:setFrameRate(15)
 
--- Parallax Background Layer
 local mountains = RoxySprite({
   name = "Mountains",
   view = "images/mountains",
   worldX = 400,
   worldY = 240,
-  parallaxX = 0.3, -- Moves slower than camera
+  parallaxX = 0.3,
   parallaxY = 0.1,
   parallaxOriginX = 200,
   parallaxOriginY = 120,
@@ -1036,14 +1156,19 @@ mountains:setWorldPosition(420, 240)
 mountains:setParallax(0.25, 0.1)
 mountains:setParallaxOrigin(200, 120)
 
--- Scene Ownership and Cleanup
+-- After registering an image pool with Assets.registerPool
+local pooledItem = RoxySprite({
+  name = "PooledItem",
+  view = { poolKey = "item_image_pool", kind = "image" },
+}, scene)
+
 local looseSprite = RoxySprite({ name = "LooseSprite", view = "images/item" })
 scene:addSprite(looseSprite)
 local screenX, screenY = looseSprite:getScreenPosition()
 local onScreen = looseSprite:isOnScreen()
 
 looseSprite:flipX()
+pooledItem:clearView()
 looseSprite:removeAndClearView()
-looseSprite:destroy()
-
+enemy:destroy()
 --]]

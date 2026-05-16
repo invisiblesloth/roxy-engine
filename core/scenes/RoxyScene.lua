@@ -13,6 +13,8 @@ local Scene   <const> = r.Scene
 local tableInsert <const> = table.insert
 local tableRemove <const> = table.remove
 local setMetatable <const> = setmetatable
+local rawGet <const> = rawget
+local rawSet <const> = rawset
 
 local clearScreen         <const> = Graphics.clear
 local setColor            <const> = Graphics.setColor
@@ -58,20 +60,20 @@ local SCENE_PAUSE_PLAYBACK_COLLISIONS <const> = SCENE_PAUSE_PLAYBACK + SCENE_PAU
 local SCENE_PAUSE_UPDATES_COLLISIONS <const> = SCENE_PAUSE_UPDATES + SCENE_PAUSE_COLLISIONS
 local SCENE_PAUSE_ALL <const> = Scene._SCENE_PAUSE_ALL
 
-local RESTORE_UPDATES     <const> = 1
-local RESTORE_COLLISIONS  <const> = 2
-local SHOULD_PLAY         <const> = 4
-local SNAPSHOT_STATE_MASK <const> = 7
-local SNAPSHOT_STATE_BITS <const> = 3
-local SNAPSHOT_UPDATES_OFF <const> = SCENE_PAUSE_UPDATES << SNAPSHOT_STATE_BITS
-local SNAPSHOT_UPDATES_ON <const> = SNAPSHOT_UPDATES_OFF + RESTORE_UPDATES
+local RESTORE_UPDATES         <const> = 1
+local RESTORE_COLLISIONS      <const> = 2
+local SHOULD_PLAY             <const> = 4
+local SNAPSHOT_STATE_MASK     <const> = 7
+local SNAPSHOT_STATE_BITS     <const> = 3
+local SNAPSHOT_UPDATES_OFF    <const> = SCENE_PAUSE_UPDATES << SNAPSHOT_STATE_BITS
+local SNAPSHOT_UPDATES_ON     <const> = SNAPSHOT_UPDATES_OFF + RESTORE_UPDATES
 local SNAPSHOT_COLLISIONS_OFF <const> = SCENE_PAUSE_COLLISIONS << SNAPSHOT_STATE_BITS
-local SNAPSHOT_COLLISIONS_ON <const> = SNAPSHOT_COLLISIONS_OFF + RESTORE_COLLISIONS
-local SNAPSHOT_ALL_BASE <const> = SCENE_PAUSE_ALL << SNAPSHOT_STATE_BITS
+local SNAPSHOT_COLLISIONS_ON  <const> = SNAPSHOT_COLLISIONS_OFF + RESTORE_COLLISIONS
+local SNAPSHOT_ALL_BASE       <const> = SCENE_PAUSE_ALL << SNAPSHOT_STATE_BITS
 
-local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
-local getSpritePauseMask <const> = Scene._getSpritePauseMask
-local luaType <const> = type
+local NO_OP_BG_DRAW       <const> = function(x, y, width, height) end
+local getSpritePauseMask  <const> = Scene._getSpritePauseMask
+local luaType             <const> = type
 
 local _colorCallbacks = {} -- Cache: color --> fn
 local _imageCallbacks = setMetatable({}, { __mode = "k" }) -- Cache: image --> fn, weak keys
@@ -432,6 +434,187 @@ local function _pruneScenePauseSnapshotList(scene, sprites)
   end
 end
 
+-- ! Helper: Read Scene Stack Sprite Visibility
+local function _readSceneStackSpriteVisibility(sprite)
+  local reader = sprite and sprite.isVisible
+  if luaType(reader) ~= "function" then return true end
+
+  local value = reader(sprite)
+  return value ~= false and value ~= 0
+end
+
+-- ! Helper: Scene Stack Visibility SetVisible Wrapper
+local function _sceneStackVisibilitySetVisible(sprite, value)
+  if not sprite or sprite._roxySceneStackVisibilityOwner == nil then
+    local setter = sprite and sprite._roxySceneStackSavedSetVisible
+    if luaType(setter) == "function" then return setter(sprite, value) end
+    return
+  end
+
+  sprite._roxySceneStackWasVisible = value ~= false
+
+  local setter = sprite._roxySceneStackSavedSetVisible
+  if luaType(setter) == "function" then return setter(sprite, false) end
+end
+
+-- ! Helper: Scene Stack Visibility IsVisible Wrapper
+local function _sceneStackVisibilityIsVisible(sprite)
+  if sprite and sprite._roxySceneStackVisibilityOwner ~= nil then
+    return sprite._roxySceneStackWasVisible ~= false
+  end
+
+  local reader = sprite and sprite._roxySceneStackSavedIsVisible
+  if luaType(reader) == "function" then return reader(sprite) end
+  return true
+end
+
+-- ! Helper: Mark Scene Stack Visibility Snapshot Pruned
+local function _markSceneStackVisibilitySnapshotPruned(scene, sprite)
+  local snapshotList = scene and scene._sceneStackVisibilitySnapshotList
+  if not snapshotList then return end
+
+  for i = #snapshotList, 1, -1 do
+    if snapshotList[i] == sprite then
+      snapshotList[i] = false
+      return
+    end
+  end
+end
+
+-- ! Helper: Prune Scene Stack Visibility Snapshot List
+local function _pruneSceneStackVisibilitySnapshotList(scene, sprites)
+  local snapshotList = scene._sceneStackVisibilitySnapshotList
+  if not snapshotList or not sprites then return end
+
+  for i = #snapshotList, 1, -1 do
+    if sprites[snapshotList[i]] == true then
+      snapshotList[i] = false
+    end
+  end
+end
+
+-- ! Helper: Clear Scene Stack Visibility Snapshot
+local function _clearSceneStackVisibilitySnapshot(scene, sprite, pruneList)
+  if not scene or not sprite then return end
+
+  if sprite._roxySceneStackVisibilityOwner ~= scene then
+    if pruneList ~= false then _markSceneStackVisibilitySnapshotPruned(scene, sprite) end
+    return
+  end
+
+  local desiredVisible = sprite._roxySceneStackWasVisible ~= false
+  local savedSetVisible = sprite._roxySceneStackSavedSetVisible
+  local savedIsVisible = sprite._roxySceneStackSavedIsVisible
+  local setVisibleWasOwn = sprite._roxySceneStackSetVisibleWasOwn == true
+  local isVisibleWasOwn = sprite._roxySceneStackIsVisibleWasOwn == true
+
+  if rawGet(sprite, "setVisible") == _sceneStackVisibilitySetVisible then
+    if setVisibleWasOwn then
+      rawSet(sprite, "setVisible", savedSetVisible)
+    else
+      rawSet(sprite, "setVisible", nil)
+    end
+  end
+
+  if rawGet(sprite, "isVisible") == _sceneStackVisibilityIsVisible then
+    if isVisibleWasOwn then
+      rawSet(sprite, "isVisible", savedIsVisible)
+    else
+      rawSet(sprite, "isVisible", nil)
+    end
+  end
+
+  local currentSetter = sprite.setVisible
+
+  sprite._roxySceneStackVisibilityOwner = nil
+  sprite._roxySceneStackWasVisible = nil
+  sprite._roxySceneStackSavedSetVisible = nil
+  sprite._roxySceneStackSetVisibleWasOwn = nil
+  sprite._roxySceneStackSavedIsVisible = nil
+  sprite._roxySceneStackIsVisibleWasOwn = nil
+
+  if luaType(currentSetter) == "function" then
+    currentSetter(sprite, desiredVisible)
+  end
+
+  if pruneList ~= false then
+    _markSceneStackVisibilitySnapshotPruned(scene, sprite)
+  end
+end
+
+-- ! Helper: Hide Scene Sprite For Stack
+local function _hideSceneSpriteForStack(scene, sprite)
+  if not scene or not sprite or sprite.scene ~= scene then return end
+
+  if sprite._roxySceneStackVisibilityOwner == scene then
+    local setter = sprite._roxySceneStackSavedSetVisible
+    if luaType(setter) == "function" then setter(sprite, false) end
+    return
+  end
+
+  local oldOwner = sprite._roxySceneStackVisibilityOwner
+  if oldOwner then
+    _clearSceneStackVisibilitySnapshot(oldOwner, sprite)
+  end
+
+  local ownSetVisible = rawGet(sprite, "setVisible")
+  local ownIsVisible = rawGet(sprite, "isVisible")
+  local setVisibleWasOwn = ownSetVisible ~= nil
+  local isVisibleWasOwn = ownIsVisible ~= nil
+  local savedSetVisible = setVisibleWasOwn and ownSetVisible or sprite.setVisible
+  local savedIsVisible = isVisibleWasOwn and ownIsVisible or sprite.isVisible
+
+  sprite._roxySceneStackVisibilityOwner = scene
+  sprite._roxySceneStackWasVisible = _readSceneStackSpriteVisibility(sprite)
+  sprite._roxySceneStackSavedSetVisible = savedSetVisible
+  sprite._roxySceneStackSetVisibleWasOwn = setVisibleWasOwn
+  sprite._roxySceneStackSavedIsVisible = savedIsVisible
+  sprite._roxySceneStackIsVisibleWasOwn = isVisibleWasOwn
+
+  rawSet(sprite, "setVisible", _sceneStackVisibilitySetVisible)
+  rawSet(sprite, "isVisible", _sceneStackVisibilityIsVisible)
+
+  local snapshotList = scene._sceneStackVisibilitySnapshotList
+  if not snapshotList then
+    snapshotList = {}
+    scene._sceneStackVisibilitySnapshotList = snapshotList
+  end
+  snapshotList[#snapshotList + 1] = sprite
+
+  if luaType(savedSetVisible) == "function" then
+    savedSetVisible(sprite, false)
+  end
+end
+
+-- ! Helper: Hide Scene Sprites For Stack
+local function _hideSceneSpritesForStack(scene)
+  if not scene then return end
+  scene._sceneStackSpritesHidden = true
+
+  if not scene._didEnter then return end
+
+  local sprites = scene.sprites
+  for i = #sprites, 1, -1 do
+    _hideSceneSpriteForStack(scene, sprites[i])
+  end
+end
+
+-- ! Helper: Restore Scene Sprites For Stack
+local function _restoreSceneSpritesForStack(scene)
+  if not scene then return end
+  scene._sceneStackSpritesHidden = false
+
+  local snapshotList = scene._sceneStackVisibilitySnapshotList
+  if snapshotList then
+    for i = #snapshotList, 1, -1 do
+      local sprite = snapshotList[i]
+      if sprite then _clearSceneStackVisibilitySnapshot(scene, sprite, false) end
+    end
+  end
+
+  scene._sceneStackVisibilitySnapshotList = {}
+end
+
 -- ! Helper: Pause Scene Sprite
 -- Snapshots update, collision, and playback state before any mutation.
 local function _pauseSceneSprite(scene, sprite, pauseMask)
@@ -616,8 +799,9 @@ local function _resumeRegisteredSceneSprite(scene, sprite, pruneList)
   _resumeSceneSprite(scene, sprite, nil, pruneList)
 end
 
--- ! Helper: Restore Scene Pause Before Unregister
+-- ! Helper: Restore Scene State Before Unregister
 local function _restoreScenePauseBeforeUnregister(scene, sprite, pruneList)
+  _clearSceneStackVisibilitySnapshot(scene, sprite, pruneList)
   _resumeRegisteredSceneSprite(scene, sprite, pruneList)
 end
 
@@ -729,6 +913,8 @@ function RoxyScene:init(background)
   self._spriteAutoAddIndex = {}
   self._pauseSpriteSnapshots = {}
   self._pauseSpriteSnapshotList = {}
+  self._sceneStackSpritesHidden = false
+  self._sceneStackVisibilitySnapshotList = {}
   self._sequenceAutoStartQueue = {}
   self._roxyCameraActivated = false
   self._roxyScenePauseCameraSnapshot = nil
@@ -759,6 +945,9 @@ function RoxyScene:enter()
   for i = 1, #spriteQueue do
     local sprite = spriteQueue[i]
     sprite:add()
+    if self._sceneStackSpritesHidden then
+      _hideSceneSpriteForStack(self, sprite)
+    end
     if self.isPaused then
       _pauseRegisteredSceneSprite(self, sprite)
     end
@@ -1155,6 +1344,8 @@ function RoxyScene:cleanup()
   self._spriteAutoAddQueue = {}
   self._spriteAutoAddIndex = {}
   self._sequenceAutoStartQueue = {}
+  self._sceneStackSpritesHidden = false
+  self._sceneStackVisibilitySnapshotList = {}
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -1231,6 +1422,15 @@ function RoxyScene:_spritePauseClassificationDidChange(sprite, oldMask, newMask)
   end
 end
 
+-- ! Set Scene Stack Sprites Hidden
+function RoxyScene:_setSceneStackSpritesHidden(hidden)
+  if hidden == true then
+    _hideSceneSpritesForStack(self)
+  else
+    _restoreSceneSpritesForStack(self)
+  end
+end
+
 -- ! Add Sprite
 function RoxyScene:addSprite(sprite)
   if not sprite then return end
@@ -1266,6 +1466,9 @@ function RoxyScene:addSprite(sprite)
   if self._didEnter then
     -- Scene is active -- attach immediately
     sprite:add()
+    if self._sceneStackSpritesHidden then
+      _hideSceneSpriteForStack(self, sprite)
+    end
   else
     -- Scene isn't active yet -- queue for enter()
     _appendIndexed(self._spriteAutoAddQueue, self._spriteAutoAddIndex, sprite)
@@ -1345,11 +1548,13 @@ function RoxyScene:_unregisterSprites(sprites, removeFromDisplay)
     end
   end
   _pruneScenePauseSnapshotList(self, targets)
+  _pruneSceneStackVisibilitySnapshotList(self, targets)
 end
 
 -- ! Remove All Sprites
 function RoxyScene:removeAllSprites()
   local sprites = self.sprites
+  local wasStackHidden = self._sceneStackSpritesHidden == true
 
   self.sprites = {}
   self._spriteSet = {}
@@ -1366,6 +1571,8 @@ function RoxyScene:removeAllSprites()
   end
   self._pauseSpriteSnapshots = {}
   self._pauseSpriteSnapshotList = {}
+  self._sceneStackSpritesHidden = wasStackHidden
+  self._sceneStackVisibilitySnapshotList = {}
 
   for i = #sprites, 1, -1 do
     local sprite = sprites[i]
@@ -1562,7 +1769,7 @@ end
 
 --[[
 
-RoxyScene owns scene lifecycle, input, sprites, tilemaps, sequences, camera setup, and pause state.
+RoxyScene owns scene lifecycle, input, sprites, tilemaps, sequences, camera setup, stack visibility, and pause state.
 
 -- Gameplay Scene
 local Graphics <const> = playdate.graphics
@@ -1573,6 +1780,7 @@ class("GameplayScene").extends(RoxyScene)
 
 function GameplayScene:init()
   GameplayScene.super.init(self, COLOR_WHITE)
+  self.blocksLowerDraw = true
 
   self.inputHandler = {
     BButtonDown = function()
@@ -1589,7 +1797,7 @@ function GameplayScene:start()
   self:addSprite(self.player)
 
   self.marker = Graphics.sprite.new()
-  self.marker:setPauseClassification({}) -- Static; skip scene pause work
+  roxy.Scene.setSpritePauseClassification(self.marker, {})
   self:addSprite(self.marker)
 
   self.map = self:spawnTilemap("assets/maps/level-01.json", {
@@ -1623,8 +1831,12 @@ end
 -- Overlay Scene
 local pauseScene = RoxyScene(Graphics.kColorBlack)
 pauseScene.isVisible = true
-pauseScene.blocksLowerDraw = false
+pauseScene.blocksLowerDraw = false -- Keep lower draw and scene-owned sprites visible
 pauseScene.updateBackground = true
+
+-- Full-Screen Pushed Scene
+local inventoryScene = RoxyScene(COLOR_WHITE)
+inventoryScene.blocksLowerDraw = true -- Hide lower draw and scene-owned sprites
 
 -- Manual Ownership
 local scene = RoxyScene()

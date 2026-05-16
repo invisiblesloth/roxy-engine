@@ -1,44 +1,48 @@
 -- core/animations/RoxyAnimation.lua
 
 --------------------------------------------------------------------------------
--- Standard Lua Function Aliases
+-- RoxyAnimation - Spritesheet Playback and Shared Image Data
+--------------------------------------------------------------------------------
+--
+-- Manages named frame ranges over a Playdate imagetable. Each instance owns
+-- private playback state while factory helpers can share retained image data
+-- to reduce memory pressure.
+--
+-- Key Features:
+--  - Path, imagetable, and pool-backed construction
+--  - Named clips with speed, loop, chaining, nextDelay, and callbacks
+--  - frameRate config with frameDuration compatibility
+--  - Optional display refresh-rate resolution for animation cadence
+--  - Retain/release lifecycle for shared image data
+--
+-- Timing Contract:
+--  - frameDuration is the runtime cadence in seconds per animation frame
+--  - frameRate is converted to frameDuration when config or setter code runs
+--  - frameDuration takes precedence when both frameDuration and frameRate are set
+--
 --------------------------------------------------------------------------------
 
--- Math functions
 local max   <const> = math.max
 local min   <const> = math.min
 local fmod  <const> = math.fmod
 
---------------------------------------------------------------------------------
--- Playdate SDK Aliases
---------------------------------------------------------------------------------
-
--- Core Playdate
 local pd        <const> = playdate
 local Object    <const> = pd.object
 local Graphics  <const> = pd.graphics
 
--- Timer functions
 local performAfterDelay <const> = pd.timer.performAfterDelay
-
--- Graphics functions
 local newImagetable <const> = Graphics.imagetable.new
 local drawImage     <const> = Graphics.imagetable.drawImage
 
---------------------------------------------------------------------------------
--- Roxy Framework Aliases
---------------------------------------------------------------------------------
+local r             <const> = roxy
+local Math          <const> = r.Math
+local Cache         <const> = r.Cache
+local AssetStore    <const> = r.AssetStore
+local Assets        <const> = r.Assets
+local Registry      <const> = r.AssetPoolRegistry
+local Animation     <const> = r.Animation
+local RoxyGraphics  <const> = r.Graphics
 
--- Roxy core
-local r           <const> = roxy
-local Math        <const> = r.Math
-local Cache       <const> = r.Cache
-local AssetStore  <const> = r.AssetStore
-local Assets      <const> = r.Assets
-local Registry    <const> = r.AssetPoolRegistry
-local Animation   <const> = r.Animation
-
--- Roxy framework function aliases
 local clamp           <const> = Math.clamp
 local truncateDecimal <const> = Math.truncateDecimal
 local getCachedAsset  <const> = Cache.getCachedAsset
@@ -48,32 +52,19 @@ local getAsset        <const> = Assets.getAsset
 local recycleAsset    <const> = Assets.recycleAsset
 local isFromPool      <const> = Registry.isFromPool
 local updateAnimation <const> = Animation.update -- C Function
+local getRefreshRate  <const> = RoxyGraphics.getRefreshRate
 
---------------------------------------------------------------------------------
--- Graphics Constants
---------------------------------------------------------------------------------
-
--- Image flip states
 local UNFLIPPED <const> = Graphics.kImageUnflipped
 
---------------------------------------------------------------------------------
--- Animation Constants
---------------------------------------------------------------------------------
-
-local FRAME_DURATION_DEFAULT        <const> = 0.033 -- About 30 FPS
+local FRAME_RATE_DEFAULT            <const> = 30
+local FRAME_DURATION_DEFAULT        <const> = 1 / FRAME_RATE_DEFAULT
 local MIN_FRAME_DURATION            <const> = 0.016 -- Guard against >60 FPS
 local MAX_FRAME_DURATION            <const> = 10    -- Sensible upper limit (sec)
 local MAX_ANIMATION_SPEED           <const> = 100   -- UI clamp for setSpeed
 local PATH_IMAGETABLE_CACHE_PREFIX  <const> = "RoxyAnimation.imagetable:"
 
 --------------------------------------------------------------------------------
--- Class Definition
---------------------------------------------------------------------------------
-
-class("RoxyAnimation").extends(Object)
-
---------------------------------------------------------------------------------
--- Static Factory Methods
+-- Private Helper Functions
 --------------------------------------------------------------------------------
 
 -- ! Helper: Is Image Table
@@ -107,7 +98,58 @@ local function _getPathCacheKey(path)
   return PATH_IMAGETABLE_CACHE_PREFIX .. path
 end
 
+-- ! Helper: Resolve Frame Rate
+local function _resolveFrameRate(frameRate, fallbackDuration, label, warnOnInvalid)
+  local frameRateType = type(frameRate)
+  if frameRateType == "number" and frameRate > 0 then
+    return 1 / frameRate
+  end
+
+  if frameRate == "display" then
+    local displayRate = getRefreshRate(true)
+    if type(displayRate) == "number" and displayRate > 0 then
+      return 1 / displayRate
+    end
+    if warnOnInvalid then
+      Log.warn("[" .. label .. "] frameRate=\"display\" could not resolve a positive display refresh rate, got " .. tostring(displayRate)) --#DEBUG
+    end
+    return fallbackDuration
+  end
+
+  if warnOnInvalid then
+    Log.warn("[" .. label .. "] frameRate must be a positive number or \"display\", got " .. frameRateType) --#DEBUG
+  end
+  return fallbackDuration
+end
+
+-- ! Helper: Resolve Frame Duration Config
+local function _resolveFrameDurationConfig(opts, fallbackDuration, label)
+  if opts.frameDuration ~= nil then
+    return opts.frameDuration
+  end
+  if opts.frameRate ~= nil then
+    return _resolveFrameRate(opts.frameRate, fallbackDuration, label, true)
+  end
+  return fallbackDuration
+end
+
+-- ! Helper: Resolve Frame Rate Setter
+local function _resolveFrameRateSetter(frameRate, label)
+  local duration = _resolveFrameRate(frameRate, nil, label, true)
+  return duration and clamp(duration, MIN_FRAME_DURATION, MAX_FRAME_DURATION) or nil
+end
+
+--------------------------------------------------------------------------------
+-- Class Definition
+--------------------------------------------------------------------------------
+
+class("RoxyAnimation").extends(Object)
+
 RoxyAnimation.PATH_IMAGETABLE_CACHE_PREFIX = PATH_IMAGETABLE_CACHE_PREFIX
+
+--------------------------------------------------------------------------------
+-- Static Factory Methods
+--------------------------------------------------------------------------------
 
 -- ! Get Path Cache Key
 -- Returns the AssetStore key used for a path-backed animation imagetable
@@ -125,7 +167,7 @@ end
 -- Creates fresh playback state over an existing imagetable
 function RoxyAnimation.fromImagetable(imagetable)
   if not _isImageTable(imagetable) then
-    error("[RoxyAnimation.fromImagetable] Expected imagetable") --#DEBUG
+    error("[RoxyAnimation.fromImagetable] Expected imagetable")
     return nil
   end
 
@@ -353,7 +395,7 @@ function RoxyAnimation:_buildAnimationConfig(opts)
     next                = opts.next,
     onCompleteCallback  = opts.onCompleteCallback or opts.onComplete,
     speed               = opts.speed or 1,
-    frameDuration       = opts.frameDuration or FRAME_DURATION_DEFAULT
+    frameDuration       = _resolveFrameDurationConfig(opts, FRAME_DURATION_DEFAULT, "RoxyAnimation:addAnimation")
   }
 
   -- Ensure start <= end (swap if needed)
@@ -474,6 +516,14 @@ function RoxyAnimation:getFrameDuration()
   return self.currentAnimation and self.currentAnimation.frameDuration or nil
 end
 
+-- ! Get Frame Rate
+-- Get current frame rate in frames per second
+function RoxyAnimation:getFrameRate()
+  local frameDuration = self:getFrameDuration()
+  if not frameDuration or frameDuration <= 0 then return nil end
+  return 1 / frameDuration
+end
+
 -- ! Set Frame Duration
 -- Set frame duration (affects all animations unless currentOnly=true)
 function RoxyAnimation:setFrameDuration(frameDuration, currentOnly)
@@ -493,6 +543,14 @@ function RoxyAnimation:setFrameDuration(frameDuration, currentOnly)
   end
 
   return self
+end
+
+-- ! Set Frame Rate
+-- Set frame rate (affects all animations unless currentOnly=true)
+function RoxyAnimation:setFrameRate(frameRate, currentOnly)
+  local frameDuration = _resolveFrameRateSetter(frameRate, "RoxyAnimation:setFrameRate")
+  if not frameDuration then return self end
+  return self:setFrameDuration(frameDuration, currentOnly)
 end
 
 -- ! Validate Frame Duration Input
@@ -837,75 +895,67 @@ end
 --------------------------------------------------------------------------------
 
 --[[
+RoxyAnimation manages spritesheet playback state over retained or shared imagetables.
 
--- Basic Usage
-local myAnimation = RoxyAnimation("path/to/spritesheet")
-myAnimation:addAnimation({
+-- Path-backed animation with named clips
+local playerAnimation = RoxyAnimation("images/player")
+playerAnimation:addAnimation({
   name = "idle",
   startFrame = 1,
   endFrame = 4,
   loop = true,
-  speed = 1
+  frameRate = 12,
 })
-
--- Multiple Animations with Chaining
-myAnimation:addAnimation({
-  name = "walk",
+:addAnimation({
+  name = "run",
   startFrame = 5,
   endFrame = 12,
-  loop = true
+  frameRate = "display",
 })
 :addAnimation({
   name = "jump",
   startFrame = 13,
   endFrame = 20,
   loop = false,
-  next = "idle", -- Auto-transition back to idle
+  next = "idle",
+  nextDelay = 0.1,
+  frameRate = 12,
+  frameDuration = 0.05, -- Takes precedence over frameRate
   onComplete = function()
-    Log.debug("Jump completed!") --#DEBUG
-  end
+    Log.debug("[PlayerAnimation] jump complete") --#DEBUG
+  end,
 })
 
--- Frame Control
-myAnimation:setAnimation("walk")
-myAnimation:jumpToFrame(8)
-myAnimation:stepFrame(1)      -- Step forward
-myAnimation:stepFrame("back") -- Step backward
+playerAnimation:setAnimation("idle")
+playerAnimation:setSpeed(1.25)
+playerAnimation:setFrameRate(10, true)
 
--- Playback Control
-myAnimation:setSpeed(2)         -- Double speed for all animations
-myAnimation:setSpeed(0.5, true) -- Half speed for current animation only
-myAnimation:reverse()           -- Play backwards
-myAnimation:stop()              -- Stop playback
+-- Manual frame control
+playerAnimation:setAnimation("run")
+playerAnimation:jumpToFrame(8)
+playerAnimation:stepFrame(1)
+playerAnimation:stepFrame("back")
+playerAnimation:reverse()
 
 -- Delayed Start
-myAnimation:startWithDelay(1500, "jump") -- Start jump animation after 1500 ms
+playerAnimation:startWithDelay(1500, "jump")
 
--- Animation Queries
-if myAnimation:isPlaying() then
-  Log.debug("Current animation:", myAnimation:getCurrentAnimation())  --#DEBUG
-  Log.debug("Current frame:", myAnimation:getCurrentFrame())          --#DEBUG
-end
-
--- Factory Methods share image data while returning fresh playback state
-local pathAnimation = RoxyAnimation.fromPath("images/shared-sheet")
-local poolAnimation = RoxyAnimation.fromPool("character_animations")
-local existingImagetable = playdate.graphics.imagetable.new("images/shared-sheet")
+-- Factory helpers share image data while returning fresh playback state
+local sharedPathAnimation = RoxyAnimation.fromPath("images/player")
+local existingImagetable = playdate.graphics.imagetable.new("images/player")
 local tableAnimation = RoxyAnimation.fromImagetable(existingImagetable)
 
--- Explicit sharing is opt-in by retaining a known animation instance
-local myAnimation2 = myAnimation:retain() -- Increment reference count
-myAnimation:release()                     -- Decrement reference count
-myAnimation2:release()                    -- Final release cleans up resources
-
--- In your update loop
+-- Update and draw from your sprite or scene loop
 function MySprite:update()
   self.animation:update()
 end
 
--- In your draw method
 function MySprite:draw()
   self.animation:draw(self.x, self.y, self.flip)
 end
 
+-- Release retained image data when the owner is done
+sharedPathAnimation:release()
+tableAnimation:release()
+playerAnimation:release()
 --]]
