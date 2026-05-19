@@ -11,7 +11,6 @@ local Config    <const> = r.Config
 local Assets    <const> = r.Assets
 local Registry  <const> = r.AssetPoolRegistry
 local Ease      <const> = r.EasingFunctions
-local Scene     <const> = r.Scene
 
 -- Config
 local getTransitionConfig <const> = Config.getTransitionConfig
@@ -45,16 +44,8 @@ local STACK_OP_POP      <const> = RoxyTransition.STACK_OP_POP
 -- Transition binding cache
 local transitionBindingCache = {}
 
-local function resolveTransitionBinding(bindingName)
-  local fn = transitionBindingCache[bindingName]
-  if fn then return fn end
-
-  local transition = roxy and roxy.Transition
-  fn = transition and transition[bindingName]
-  assert(type(fn) == "function", "[TransitionBinding] missing roxy.Transition." .. bindingName)
-  transitionBindingCache[bindingName] = fn
-  return fn
-end
+-- CrossDissolve pattern cache
+local patternCache = {}
 
 -- Graphics constants
 local COLOR_BLACK       <const> = Graphics.kColorBlack
@@ -62,7 +53,6 @@ local COLOR_WHITE       <const> = Graphics.kColorWhite
 local DITHER_BAYER_8X8  <const> = Image.kDitherTypeBayer8x8
 
 -- Easing constants
-local FLAT_EASING    <const> = Ease.flat
 local LINEAR_EASING <const> = Ease.linear
 
 -- Defaults
@@ -96,12 +86,43 @@ local EMPTY_TABLE       <const> = {}
 -- Helpers
 --------------------------------------------------------------------------------
 
+-- ! Resolve Transition Binding
+-- Resolve and cache a transition draw binding
+local function resolveTransitionBinding(bindingName)
+  local fn = transitionBindingCache[bindingName]
+  if fn then return fn end
+
+  local transition = roxy and roxy.Transition
+  fn = transition and transition[bindingName]
+  assert(type(fn) == "function", "[TransitionBinding] missing roxy.Transition." .. bindingName)
+  transitionBindingCache[bindingName] = fn
+  return fn
+end
+
+-- ! Get Pattern Cache Bucket
+-- Return the pattern cache bucket for an effective dither and patch size
+local function getPatternCacheBucket(dither, patchSize)
+  local byDither = patternCache[dither]
+  if not byDither then
+    byDither = {}
+    patternCache[dither] = byDither
+  end
+
+  local byPatchSize = byDither[patchSize]
+  if not byPatchSize then
+    byPatchSize = {}
+    byDither[patchSize] = byPatchSize
+  end
+
+  return byPatchSize
+end
+
 -- ! Initialize Asset Pool
 -- Initialize asset pools (called once per module)
 local function initializeAssetPool()
   ensurePool(
-    SEQUENCE_POOL_KEY,  -- key
-    1,                  -- initialCount
+    SEQUENCE_POOL_KEY,  -- Key
+    1,                  -- Initial Count
     function() return RoxySequence() end, {
       maxSize = 4,
       growthFactor = 1
@@ -166,6 +187,7 @@ function CrossDissolve:init(opts)
 
   -- Screenshots
   self._screenshot = nil
+  self._drawFrame = nil
 end
 
 --------------------------------------------------------------------------------
@@ -179,6 +201,10 @@ function CrossDissolve:_createPatternArray()
   local dither = self.dither
   local fadeSteps = self.fadeSteps
   local patchSize = self.patchSize
+  local patternBucket = getPatternCacheBucket(dither, patchSize)
+  local cachedPatterns = patternBucket[fadeSteps]
+  if cachedPatterns then return cachedPatterns end
+
   local oneOverSteps = 1 / (fadeSteps - 1)
   local tiles = ceil(TILE_SIZE / patchSize)
 
@@ -207,6 +233,7 @@ function CrossDissolve:_createPatternArray()
     patterns[i] = tileImage
   end
 
+  patternBucket[fadeSteps] = patterns
   return patterns
 end
 
@@ -265,6 +292,7 @@ end
 function CrossDissolve:execute(newScene, currentScene)
   CrossDissolve.super.execute(self, newScene, currentScene)
 
+  self._drawFrame = resolveTransitionBinding("crossDissolveDrawFrame")
   self:_setupSequence()
   self._screenshot = getDisplayImage()
   self:_onStart()
@@ -290,7 +318,11 @@ function CrossDissolve:draw()
   -- Calculate pattern index based on alpha value
   local idx = min(fadeSteps, floor(alpha * fadeStepsMinus1) + 1)
   local pattern = patterns[idx]
-  local drawFrame = resolveTransitionBinding("crossDissolveDrawFrame")
+  local drawFrame = self._drawFrame
+  if not drawFrame then
+    drawFrame = resolveTransitionBinding("crossDissolveDrawFrame")
+    self._drawFrame = drawFrame
+  end
   drawFrame(screenshot, pattern)
 end
 
@@ -305,6 +337,7 @@ function CrossDissolve:cleanup()
 
   self.patterns = nil
   self._screenshot = nil
+  self._drawFrame = nil
 
   Log.debug("Transition '" .. self.name .. "' cleanup completed") --#DEBUG
 end
@@ -314,3 +347,50 @@ end
 function CrossDissolve:warmUpAssetPool()
   initializeAssetPool()
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+CrossDissolve mixes scene swaps with tiled dither masks.
+Masks are cached internally for matching effective dither, fadeSteps, and patchSize values.
+
+-- Basic Scene Change
+roxy.Transition.replaceScene(GameplayScene, "CrossDissolve", {
+  duration = 0.35,
+  dither = playdate.graphics.image.kDitherTypeBayer4x4,
+  fadeSteps = 17,
+  patchSize = 8,
+})
+
+-- Push / Pop Flow
+roxy.Transition.pushScene(PauseScene, "CrossDissolve", {
+  duration = 0.25,
+  captureScreenshot = true,
+})
+roxy.Transition.popScene("CrossDissolve", {
+  duration = 0.2,
+})
+
+-- Config-Driven Defaults
+roxy.Config.applyOverrides({
+  transitions = {
+    overrides = {
+      CrossDissolve = {
+        duration = 0.4,
+        dither = playdate.graphics.image.kDitherTypeBayer8x8,
+        fadeSteps = 32,
+        patchSize = 8,
+      },
+    },
+  },
+})
+roxy.Transition.reloadTransitionsWithNewConfig()
+roxy.Transition.replaceScene(TitleScene, "CrossDissolve")
+
+-- Optional Asset Pool Warm-Up
+CrossDissolve:warmUpAssetPool()
+
+--]]
