@@ -277,6 +277,10 @@ function RoxyAnimation:_initCommon()
   self.isFirstCycle     = true
   self.isReversed       = false
   self.accumulator      = 0
+  self._completeFired   = false
+  self._pendingNext     = nil
+  self._switchNextTick  = nil
+  self._tailHoldSec     = 0
   self._refcount        = 1
   self._destroyed       = false
   self._path            = nil
@@ -412,8 +416,9 @@ function RoxyAnimation:_buildAnimationConfig(opts)
   animation.exitTime = (opts.exitTime ~= nil) and max(0, min(1, opts.exitTime)) or 1.0
   animation.nextDelay = (type(opts.nextDelay) == "number" and opts.nextDelay > 0) and opts.nextDelay or 0
 
-  -- Precompute frame count for performance
+  -- Precompute frame counts for performance
   animation.range = animation.endFrame - animation.startFrame + 1
+  animation.progressDenominator = max(1, animation.endFrame - animation.startFrame)
 
   return animation
 end
@@ -441,6 +446,8 @@ function RoxyAnimation:setAnimation(name, nextContinuity, unlessThisAnimation)
   -- Reset cycle state unless continuing from previous animation
   if not nextContinuity then
     self:resetAnimationStart()
+  else
+    self:_clearCompletionState()
   end
 
   return self
@@ -451,6 +458,7 @@ end
 function RoxyAnimation:stop()
   self.currentAnimation = nil
   self.currentName = nil
+  self:_clearCompletionState()
   return self
 end
 
@@ -466,7 +474,20 @@ end
 function RoxyAnimation:resetAnimationStart()
   self.isFirstCycle = true
   self.accumulator = 0
+  if self.currentAnimation then
+    self.currentFrame = self.currentAnimation.startFrame
+  end
+  self:_clearCompletionState()
   return self
+end
+
+-- ! Clear Completion State
+-- Reset completion guards and any deferred completion transition
+function RoxyAnimation:_clearCompletionState()
+  self._completeFired = false
+  self._pendingNext = nil
+  self._switchNextTick = nil
+  self._tailHoldSec = 0
 end
 
 --------------------------------------------------------------------------------
@@ -755,21 +776,28 @@ end
 -- ! Handle Non-Loop Completion
 -- Handle completion behavior for non-looping animations
 function RoxyAnimation:_handleNonLoopCompletion(animation)
+  if self._completeFired then return end
+
   local exitTime  = animation.exitTime or 1
   local nextDelay = animation.nextDelay or 0
 
   -- Compute normalized progress 0..1
-  local range = animation.endFrame - animation.startFrame
-  local denominator = (range ~= 0) and range or 1
+  local denominator = animation.progressDenominator or 1
   local progressed = self.isReversed
     and (animation.endFrame - self.currentFrame)
     or  (self.currentFrame - animation.startFrame)
   local progress = progressed / denominator
 
   if progress >= exitTime then
+    self._completeFired = true
+
     -- Fire onComplete once we reach exitTime
     if type(animation.onCompleteCallback) == "function" then
       animation.onCompleteCallback()
+    end
+
+    if self.currentAnimation ~= animation then
+      return
     end
 
     if animation.next then
