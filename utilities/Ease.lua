@@ -54,7 +54,7 @@ roxy.EasingMap = {
 
 -- ! Component Phase Mappings
 -- Maps compound easings (e.g., inOut) to their enter/exit components.
-local componentFunctions = {
+local componentFunctions <const> = {
   [Ease.inOutQuad]    = { enter = Ease.inQuad,      exit = Ease.outQuad     },
   [Ease.inOutCubic]   = { enter = Ease.inCubic,     exit = Ease.outCubic    },
   [Ease.inOutQuart]   = { enter = Ease.inQuart,     exit = Ease.outQuart    },
@@ -80,7 +80,7 @@ local componentFunctions = {
 
 -- ! Reverse Function Map
 -- Maps 'in' <--> 'out' easing variants for reversing direction.
-local reverseFunctions = {
+local reverseFunctions <const> = {
   [Ease.inQuad]     = Ease.outQuad,
   [Ease.inCubic]    = Ease.outCubic,
   [Ease.inQuart]    = Ease.outQuart,
