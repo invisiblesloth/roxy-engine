@@ -1,62 +1,24 @@
 -- core/modules/AssetStore.lua
 
---------------------------------------------------------------------------------
--- AssetStore - Reference-Counted Asset Management
---------------------------------------------------------------------------------
---
--- Provides high-level asset loading and lifecycle management with automatic
--- reference counting. Integrates with roxy.Cache for storage and implements
--- retain/release semantics for memory-efficient asset sharing.
---
--- Key Features:
---  - Reference counting for shared asset lifecycle management
---  - Loader function support for asset initialization
---  - Cached image and imagetable loading with path validation
---  - Integration with roxy.Cache for centralized asset storage
---
---------------------------------------------------------------------------------
-
---------------------------------------------------------------------------------
--- Global Table Initialization
---------------------------------------------------------------------------------
+-- Provides reference-counted asset caching with image and imagetable helpers
 
 roxy = roxy or {}
 roxy.AssetStore = roxy.AssetStore or {}
 local AssetStore <const> = roxy.AssetStore
 
---------------------------------------------------------------------------------
--- Playdate SDK Aliases
---------------------------------------------------------------------------------
-
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
-
---------------------------------------------------------------------------------
--- Playdate SDK Function Aliases
---------------------------------------------------------------------------------
 
 local newImage      <const> = Graphics.image.new
 local newImagetable <const> = Graphics.imagetable.new
 
---------------------------------------------------------------------------------
--- Roxy Framework Aliases
---------------------------------------------------------------------------------
-
 local r     <const> = roxy
 local Cache <const> = r.Cache
-
---------------------------------------------------------------------------------
--- Roxy Framework Function Aliases
---------------------------------------------------------------------------------
 
 local getCachedAsset    <const> = Cache.getCachedAsset
 local cacheAsset        <const> = Cache.cacheAsset
 local evictAsset        <const> = Cache.evictAsset
 local getIsAssetCached  <const> = Cache.getIsAssetCached
-
---------------------------------------------------------------------------------
--- Local State Variables
---------------------------------------------------------------------------------
 
 -- Reference count table for asset retention tracking
 local referenceCount = {}
@@ -67,10 +29,9 @@ local referenceCount = {}
 
 -- ! Retain Asset
 -- Increments the reference count for an asset and caches it if not already stored
---  @param path          Unique path string identifying the asset
---  @param assetOrThunk  Either a concrete asset value or a thunk function that creates it
---
---  @return Boolean true on success
+-- @param path Unique path string identifying the asset
+-- @param assetOrThunk Concrete asset value or thunk function that creates it
+-- @return Boolean true on success
 
 function AssetStore.retain(path, assetOrThunk)
   if type(path) ~= "string" or path == "" then
@@ -103,11 +64,15 @@ end
 
 -- ! Release Asset
 -- Decrements the reference count for an asset and evicts it when count reaches zero
---  @param path Unique path string identifying the asset to release
---
---  @return None
+-- @param path Non-empty path string identifying the asset to release
+-- @return None
 
 function AssetStore.release(path)
+  if type(path) ~= "string" or path == "" then
+    Log.warn("[AssetStore.release] Invalid or missing path: " .. tostring(path)) --#DEBUG
+    return
+  end
+
   local count = referenceCount[path]
   if not count then return end
 
@@ -121,9 +86,8 @@ end
 
 -- ! Get Imagetable
 -- Loads and caches an imagetable asset
---  @param path File path string to the imagetable resource
---
---  @return The imagetable instance, or nil if path is invalid or loading fails
+-- @param path File path string to the imagetable resource
+-- @return Imagetable instance, or nil if path is invalid or loading fails
 
 function AssetStore.getImagetable(path)
   if type(path) ~= "string" or path == "" then
@@ -148,9 +112,8 @@ end
 
 -- ! Get Image Cached
 -- Loads and caches an image asset
---  @param path File path string to the image resource
---
---  @return The image instance, or nil if path is invalid or loading fails
+-- @param path File path string to the image resource
+-- @return Image instance, or nil if path is invalid or loading fails
 
 function AssetStore.getImageCached(path)
   if type(path) ~= "string" or path == "" then
