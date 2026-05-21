@@ -1,52 +1,16 @@
 -- core/modules/Assets.lua
 
---------------------------------------------------------------------------------
--- Assets - Roxy Asset Pool Management System
---------------------------------------------------------------------------------
---
--- Provides object pooling for efficient reuse of expensive game assets like
--- sprites, images, and other resources. Reduces garbage collection pressure
--- and improves performance by pre-allocating and recycling objects.
---
--- Key Features:
---  - Dynamic pool registration with custom loader functions
---  - Automatic pool growth up to configurable max size
---  - Configurable initial size, max size, and growth factor
---  - Asset recycling to minimize allocations
---  - Pool availability and capacity tracking
---  - Integration with AssetPoolRegistry for declarative setup
---
--- Usage Pattern:
---  1. Register pool with Assets.registerPool(key, count, loader, options)
---  2. Acquire asset with Assets.getAsset(key)
---  3. Use asset in game logic
---  4. Return asset with Assets.recycleAsset(key, asset)
---
--- Pool Key Contract:
---  - key must be a non-empty string
---  - key cannot have leading/trailing whitespace
---  - key-shape validation in getAsset/recycleAsset is debug-only in stripped
---    release builds; production still fails soft via pool lookup/ownership checks
---
---------------------------------------------------------------------------------
+-- Manages reusable asset pools with lazy growth and ownership checks
+-- Pool keys must be non-empty strings without leading or trailing whitespace
+-- Key-shape checks in getAsset/recycleAsset strip from release; lookups fail soft
 
 roxy = roxy or {}
 roxy.Assets = roxy.Assets or {}
 local Assets <const> = roxy.Assets
 
---------------------------------------------------------------------------------
--- Standard Lua Function Aliases
---------------------------------------------------------------------------------
-
--- Math functions
 local min <const> = math.min
 
--- String functions
-local stringFormat <const> = string.format
-
---------------------------------------------------------------------------------
--- Local State Variables
---------------------------------------------------------------------------------
+local stringFormat <const> = string.format --#DEBUG
 
 -- Asset pool registry (indexed by pool key)
 local pools = {}
@@ -59,9 +23,11 @@ local Registry
 -- Helpers
 --------------------------------------------------------------------------------
 
+--#DEBUG START
 local function _formatPoolKeyValue(key)
   return stringFormat("%q", tostring(key))
 end
+--#DEBUG END
 
 local function _isValidPoolKey(key)
   if type(key) ~= "string" then return false end
@@ -76,12 +42,11 @@ end
 
 -- ! Register Pool
 -- Registers a new asset pool with initial allocation and growth configuration
---  @param key            Non-empty string key (no leading/trailing whitespace)
---  @param initialCount   Number of assets to pre-allocate (default 1)
---  @param loaderFunction Function that creates and returns a new asset instance
---  @param options        Optional table with maxSize and growthFactor fields
---
---  @return Boolean true if registration succeeded, false on invalid key/duplicate/invalid loader
+-- @param key Non-empty string key with no leading/trailing whitespace
+-- @param initialCount Number of assets to pre-allocate, defaults to 1
+-- @param loaderFunction Function that creates and returns a new asset instance
+-- @param options Optional table with maxSize and positive integer growthFactor fields
+-- @return Boolean true if registration succeeded
 
 function Assets.registerPool(key, initialCount, loaderFunction, options)
   if not _isValidPoolKey(key) then
@@ -123,10 +88,10 @@ function Assets.registerPool(key, initialCount, loaderFunction, options)
 
   -- Create pool metadata structure
   local pool = {
-    assets = {},                -- Array of available assets
-    loader = loaderFunction,    -- Factory function for new assets
-    availableCount = 0,         -- Number of assets currently available
-    totalSize = 0,              -- Total allocated assets (in-use + available)
+    assets = {},              -- Array of available assets
+    loader = loaderFunction,  -- Factory function for new assets
+    availableCount = 0,       -- Number of assets currently available
+    totalSize = 0,            -- Total allocated assets (in-use + available)
     initialCount = initialCountValue,
     maxSize = maxSizeValue,
     growthFactor = growthFactorValue,
@@ -161,14 +126,14 @@ end
 
 -- ! Get Asset
 -- Retrieves an available asset from the pool, growing the pool if needed
---  @param key Non-empty string key for the pool (no leading/trailing whitespace)
---
---  @return Asset instance if available, nil if key invalid/pool exhausted/unregistered
+-- @param key Non-empty string key with no leading/trailing whitespace
+-- @return Asset instance if available, otherwise nil
 
 function Assets.getAsset(key)
+  -- Hot path: release builds rely on pool lookup to fail soft
   --#DEBUG START
   if not _isValidPoolKey(key) then
-    Log.warn("[Assets.getAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    Log.warn("[Assets.getAsset] invalid pool key: " .. _formatPoolKeyValue(key))
     return nil
   end
   --#DEBUG END
@@ -188,7 +153,7 @@ function Assets.getAsset(key)
     assets[i] = nil
 
     pool.availableCount -= 1
-    return Registry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
+    return Registry.markFromPoolDirect(asset, key) -- Internal: key already validated, asset guaranteed non-nil
   else
     -- Pool exhausted, attempt to grow if under max capacity
     if pool.totalSize < pool.maxSize then
@@ -212,7 +177,7 @@ function Assets.getAsset(key)
         assets[i] = nil
 
         pool.availableCount -= 1
-        return Registry.markFromPoolDirect(asset, key) -- INTERNAL: key already validated, asset guaranteed non-nil
+        return Registry.markFromPoolDirect(asset, key) -- Internal: key already validated, asset guaranteed non-nil
       else
         Log.warn("[Assets.getAsset] Pool '" .. tostring(key) .. "' is empty after attempting to grow.") --#DEBUG
         return nil
@@ -226,15 +191,15 @@ end
 
 -- ! Recycle Asset
 -- Returns an asset to the pool for reuse
---  @param key   Non-empty string key for the pool (no leading/trailing whitespace)
---  @param asset Asset instance to return to the pool
---
---  @return Boolean true if recycled successfully, false on invalid key/reject conditions
+-- @param key Non-empty string key with no leading/trailing whitespace
+-- @param asset Asset instance to return to the pool
+-- @return Boolean true if recycled successfully
 
 function Assets.recycleAsset(key, asset)
+  -- Hot path: release builds rely on lookup and ownership checks to fail soft
   --#DEBUG START
   if not _isValidPoolKey(key) then
-    Log.warn("[Assets.recycleAsset] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    Log.warn("[Assets.recycleAsset] invalid pool key: " .. _formatPoolKeyValue(key))
     return false
   end
   --#DEBUG END
@@ -249,8 +214,9 @@ function Assets.recycleAsset(key, asset)
     Log.warn("[Assets.recycleAsset] Attempted to recycle a nil asset to pool: " .. tostring(key)) --#DEBUG
     return false
   end
+
   -- Prevent double-recycle and foreign assets from entering the wrong pool.
-  -- INTERNAL: single-lookup replaces isFromPool + getPoolKey + clearFromPool sequence
+  -- Internal: single-lookup replaces isFromPool + getPoolKey + clearFromPool sequence
   local originKey, isPooled = Registry.getOriginKey(asset)
   if not isPooled or originKey == nil then
     Log.warn("[Assets.recycleAsset] Attempted to recycle a non-pooled asset to pool: " .. tostring(key)) --#DEBUG
@@ -272,19 +238,14 @@ end
 
 -- ! Get Is Pool Registered
 -- Checks if a pool with the given key exists
---  @param key Non-empty string key for the pool (no leading/trailing whitespace)
---
---  @return Boolean true if pool is registered, false otherwise
+-- @param key Pool key to check
+-- @return Boolean true if pool is registered
 
 function Assets.getIsPoolRegistered(key)
   return pools[key] ~= nil
 end
 
---------------------------------------------------------------------------------
--- Roxy Framework Imports
---------------------------------------------------------------------------------
-
--- Asset Pool Registry helper
+-- AssetPoolRegistry depends on the asset pool functions above at import time.
 import "libraries/roxy/core/modules/AssetPoolRegistry"
 Registry = roxy.AssetPoolRegistry
 
