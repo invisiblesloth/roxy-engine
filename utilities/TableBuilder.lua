@@ -3,8 +3,12 @@
 local pd      <const> = playdate
 local Object  <const> = pd.object
 
-local tableInsert     <const> = table.insert
-local mergeImmutable  <const> = roxy.Table.mergeImmutable
+local r     <const> = roxy
+local Table <const> = r.Table
+
+local tableInsert <const> = table.insert
+
+local mergeImmutable <const> = Table.mergeImmutable
 
 class("TableBuilder").extends(Object)
 

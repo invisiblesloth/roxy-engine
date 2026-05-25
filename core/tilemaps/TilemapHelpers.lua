@@ -4,7 +4,8 @@ roxy = roxy or {}
 roxy.TilemapHelpers = roxy.TilemapHelpers or {}
 local TilemapHelpers <const> = roxy.TilemapHelpers
 
-local r <const> = roxy
+local r             <const> = roxy
+local RoxyGraphics  <const> = r.Graphics
 
 local floor <const> = math.floor
 local abs   <const> = math.abs
@@ -15,13 +16,17 @@ local stringRep   <const> = string.rep
 local stringPack  <const> = string.pack
 
 local tableUnpack <const> = table.unpack
+local tableCreate <const> = table.create
 
-local DISPLAY_WIDTH  <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT <const> = r.Graphics.displayHeight
+local DISPLAY_WIDTH  <const> = RoxyGraphics.displayWidth
+local DISPLAY_HEIGHT <const> = RoxyGraphics.displayHeight
 
 local NATIVE_SYNC_CHUNK_CELLS <const> = 512
 local MAX_PACK_FORMAT_CACHE_CELLS <const> = 2048
+
 local packU16Formats = {}
+-- Shared scratch for the single-threaded native range sync path
+local packTilesU16RangeScratch = tableCreate and tableCreate(NATIVE_SYNC_CHUNK_CELLS, 0) or {}
 
 local function packU16Format(count)
   if count <= MAX_PACK_FORMAT_CACHE_CELLS then
@@ -81,7 +86,7 @@ end
 function TilemapHelpers.packTilesU16Range(tiles, startIndex, count)
   if not tiles or not startIndex or startIndex < 1 or not count or count <= 0 then return nil end
   local format = packU16Format(count)
-  local temp = {}
+  local temp = count <= NATIVE_SYNC_CHUNK_CELLS and packTilesU16RangeScratch or {}
   local sourceIndex = startIndex
   for outputIndex = 1, count do
     local v = tiles[sourceIndex] or 0

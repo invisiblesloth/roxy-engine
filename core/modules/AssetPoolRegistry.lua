@@ -1,57 +1,35 @@
 -- core/modules/AssetPoolRegistry.lua
 
---------------------------------------------------------------------------------
--- AssetPoolRegistry - Asset Pool Registration and Lifecycle Management
---------------------------------------------------------------------------------
---
--- Provides centralized pool registration for Roxy asset types, including
--- tracking mechanisms for identifying pooled assets and ensuring consistent
--- pool initialization across the framework.
---
--- Key Features:
---  - Pool registration with lazy initialization
---  - Weak-reference tagging for pool-sourced assets
---  - Ownership tracking by origin pool key
---  - Convenience wrappers for path-based and object-based pools
---  - Integration with roxy.Assets core pooling system
---
--- Pool Key Contract:
---  - key must be a non-empty string
---  - key cannot have leading/trailing whitespace
---
---------------------------------------------------------------------------------
+-- Tracks asset pool ownership with weak keys and wraps pool registration
+-- Pool keys must be non-empty strings without leading or trailing whitespace
 
 roxy = roxy or {}
 roxy.AssetPoolRegistry = roxy.AssetPoolRegistry or {}
 local Registry <const> = roxy.AssetPoolRegistry
 
---------------------------------------------------------------------------------
--- Roxy Framework Function Aliases
---------------------------------------------------------------------------------
+-- Imported by Assets.lua after asset pool functions exist, so these aliases
+-- intentionally capture the current Assets table and methods
+local r       <const> = roxy
+local Assets  <const> = r.Assets
 
--- Asset functions
-local Assets              <const> = roxy.Assets
+local stringFormat <const> = string.format --#DEBUG
+
 local getIsPoolRegistered <const> = Assets.getIsPoolRegistered
 local registerPool        <const> = Assets.registerPool
 
--- String functions
-local stringFormat        <const> = string.format
-
---------------------------------------------------------------------------------
--- Local State Variables
---------------------------------------------------------------------------------
-
--- Weak-key map to remember pooled ownership by origin pool key.
--- value: string pool key (owned)
+-- Weak-key map to remember pooled ownership by origin pool key
+-- Value: string pool key (owned)
 local poolTag = setmetatable({}, { __mode = "k" })
 
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
 
+--#DEBUG START
 local function _formatPoolKeyValue(key)
   return stringFormat("%q", tostring(key))
 end
+--#DEBUG END
 
 local function _isValidPoolKey(key)
   if type(key) ~= "string" then return false end
@@ -138,7 +116,7 @@ end
 function Registry.markFromPoolDirect(asset, key)
   --#DEBUG START
   if type(key) ~= "string" then
-    Log.warn("[AssetPoolRegistry.markFromPoolDirect] invalid pool key: " .. _formatPoolKeyValue(key)) --#DEBUG
+    Log.warn("[AssetPoolRegistry.markFromPoolDirect] invalid pool key: " .. _formatPoolKeyValue(key))
     return asset
   end
   --#DEBUG END
@@ -152,8 +130,8 @@ end
 --  @param asset Asset instance to check
 --
 --  @return originKey, isPooled (two values)
---    (string, true)  — asset is owned by the named pool
---    (nil,    false) — asset is not tagged at all
+--    (string, true)  - asset is owned by the named pool
+--    (nil,    false) - asset is not tagged at all
 
 function Registry.getOriginKey(asset)
   local tag = poolTag[asset]
@@ -163,7 +141,7 @@ end
 
 -- ! Clear From Pool Direct
 -- Fast-path tag removal. Skips nil-asset guard.
--- Caller contract: asset ~= nil.
+-- Caller contract: asset ~= nil
 --  @param asset Asset instance to untag
 
 function Registry.clearFromPoolDirect(asset)
@@ -217,7 +195,7 @@ function Registry.ensurePool(key, initialCount, loader, options)
 end
 
 -- ! Ensure For Path
--- Convenience wrapper for path-based asset pools (images, sounds, etc)
+-- Convenience wrapper for path-based asset pools (images, sounds, and similar)
 --  @param key         Non-empty string key for the pool (no leading/trailing whitespace)
 --  @param assetPath   File path to the asset resource
 --  @param constructor Function that creates the asset (e.g., playdate.graphics.image.new)
@@ -248,3 +226,62 @@ function Registry.ensureForObject(key, object, opts)
     opts
   )
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+AssetPoolRegistry wraps pool registration and tracks asset ownership.
+
+local Registry <const> = roxy.AssetPoolRegistry
+local Assets   <const> = roxy.Assets
+
+-- Register or Ensure a Pool
+Registry.ensurePool("particles/smoke", 2, function()
+  return playdate.graphics.image.new("images/particle-smoke")
+end, {
+  maxSize = 6,
+  growthFactor = 2,
+})
+
+local smoke = Assets.getAsset("particles/smoke")
+if Registry.isFromPool(smoke) then
+  Assets.recycleAsset(Registry.getPoolKey(smoke), smoke)
+end
+
+-- Path-Based Pool
+Registry.ensureForPath(
+  "ui/button",
+  "images/ui-button",
+  playdate.graphics.image.new,
+  {
+    initialCount = 1,
+    maxSize = 3,
+  }
+)
+
+local buttonImage = Assets.getAsset("ui/button")
+Assets.recycleAsset("ui/button", buttonImage)
+
+-- Object Pool
+local sharedBadge = playdate.graphics.image.new("images/badge")
+Registry.ensureForObject("ui/badge", sharedBadge, {
+  initialCount = 1,
+  maxSize = 1,
+})
+
+local badge = Assets.getAsset("ui/badge")
+Assets.recycleAsset("ui/badge", badge)
+
+-- Manual Ownership Tags
+local previewImage = playdate.graphics.image.new("images/preview")
+Registry.markFromPool(previewImage, "manual/preview")
+
+local originKey, isPooled = Registry.getOriginKey(previewImage)
+if isPooled then
+  Registry.clearFromPool(previewImage)
+end
+
+--]]
