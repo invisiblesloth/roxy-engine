@@ -75,12 +75,11 @@ Camera._screenBottom      = DISPLAY_HEIGHT  -- Cached screen bottom boundary
 Camera._targetX           = 0     -- Target x position
 Camera._targetY           = 0     -- Target y position
 Camera._logicalBounds     = nil   -- { x1, y1, x2, y2 } - developer-set bounds (before bias expansion)
-Camera._bounds            = nil   -- { x1, y1, x2, y2 } - effective bounds (after bias expansion)
 Camera._hasBounds         = false -- Whether bounds are active
-Camera._minX              = 0     -- Minimum x bound (effective)
-Camera._minY              = 0     -- Minimum y bound (effective)
-Camera._maxX              = 0     -- Maximum x bound (effective)
-Camera._maxY              = 0     -- Maximum y bound (effective)
+Camera._minX              = 0     -- Minimum effective x bound
+Camera._minY              = 0     -- Minimum effective y bound
+Camera._maxX              = 0     -- Maximum effective x bound
+Camera._maxY              = 0     -- Maximum effective y bound
 Camera._shakeAmplitude    = 0     -- Shake intensity (pixels)
 Camera._shakeFrequency    = 0     -- Shake oscillations per second
 Camera._shakeAngularFreq  = 0     -- Cached angular frequency (frequency * 2 * pi)
@@ -148,7 +147,6 @@ end
 -- Expands logical bounds by bias amount so camera can apply bias without hitting bounds
 local function _recalculateEffectiveBounds()
   if not Camera._logicalBounds then
-    Camera._bounds = nil
     Camera._hasBounds = false
     Camera._minX = 0
     Camera._minY = 0
@@ -160,18 +158,16 @@ local function _recalculateEffectiveBounds()
   local bounds = Camera._logicalBounds
 
   -- Shift bounds by bias to maintain symmetric movement range
-  Camera._bounds = {
-    x1 = bounds.x1 + Camera.targetBiasX,
-    y1 = bounds.y1 + Camera.targetBiasY,
-    x2 = bounds.x2 + Camera.targetBiasX,
-    y2 = bounds.y2 + Camera.targetBiasY
-  }
+  local x1 = bounds.x1 + Camera.targetBiasX
+  local y1 = bounds.y1 + Camera.targetBiasY
+  local x2 = bounds.x2 + Camera.targetBiasX
+  local y2 = bounds.y2 + Camera.targetBiasY
 
   -- Update cached min/max for clamping
-  Camera._minX = min(Camera._bounds.x1, Camera._bounds.x2)
-  Camera._maxX = max(Camera._bounds.x1, Camera._bounds.x2)
-  Camera._minY = min(Camera._bounds.y1, Camera._bounds.y2)
-  Camera._maxY = max(Camera._bounds.y1, Camera._bounds.y2)
+  Camera._minX = min(x1, x2)
+  Camera._maxX = max(x1, x2)
+  Camera._minY = min(y1, y2)
+  Camera._maxY = max(y1, y2)
   Camera._hasBounds = true
 end
 
@@ -338,7 +334,6 @@ function Camera.setBounds(bounds)
   if not bounds or type(bounds.x1) ~= "number" or type(bounds.y1) ~= "number" or type(bounds.x2) ~= "number" or type(bounds.y2) ~= "number" then
     Log.error("[Camera.setBounds] Invalid bounds: expected {x1, y1, x2, y2} with numbers", 2) --#DEBUG
     Camera._logicalBounds = nil
-    Camera._bounds = nil
     Camera._hasBounds = false
     Camera._minX, Camera._minY = 0, 0
     Camera._maxX, Camera._maxY = 0, 0
@@ -353,7 +348,6 @@ end
 -- Clears the camera bounds
 function Camera.clearBounds()
   Camera._logicalBounds = nil
-  Camera._bounds = nil
   Camera._hasBounds = false
   Camera._minX = 0
   Camera._minY = 0
@@ -378,7 +372,6 @@ function Camera.reset()
   Camera._targetY           = 0
   Camera.target             = nil
   Camera._logicalBounds     = nil
-  Camera._bounds            = nil
   Camera._hasBounds         = false
   Camera._minX              = 0
   Camera._minY              = 0
