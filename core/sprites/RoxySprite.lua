@@ -1,36 +1,14 @@
 -- core/sprites/RoxySprite.lua
 
---------------------------------------------------------------------------------
--- RoxySprite - Scene-Aware Sprite, Animation, and Parallax Wrapper
---------------------------------------------------------------------------------
---
--- Extends Playdate sprites with Roxy scene ownership, view management,
--- animation helpers, simple spritesheet playback, parallax positioning,
--- pause classification, and pooled asset cleanup.
---
--- Key Features:
---  - Static image, simple spritesheet, full RoxyAnimation, and pooled views
---  - frameRate config with frameDuration compatibility for simple animations
---  - Scene-aware pause, update, collision, and remove behavior
---  - Camera-relative parallax positioning
---  - Retained and pooled view-resource lifecycle cleanup
---
--- Timing Contract:
---  - Simple animations default to 30 FPS when no cadence is provided
---  - frameDuration is stored as seconds per animation frame
---  - frameDuration takes precedence when both frameDuration and frameRate are set
---
---------------------------------------------------------------------------------
+-- Extends Playdate sprites with scene ownership, view management, and animation helpers
+-- Supports simple spritesheets, pooled assets, pause classification, and parallax positioning
+-- Simple animations store frameDuration in seconds; frameRate is a convenience input
 
 local floor <const> = math.floor
 
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
-
-local performAfterDelay <const> = pd.timer.performAfterDelay
-local newImage          <const> = Graphics.image.new
-local newImageTable     <const> = Graphics.imagetable.new
 
 local r             <const> = roxy
 local Assets        <const> = r.Assets
@@ -40,11 +18,15 @@ local RoxyGraphics  <const> = r.Graphics
 
 local clamp <const> = r.Math.clamp
 
-local getAsset        <const> = Assets.getAsset
-local recycleAsset    <const> = Assets.recycleAsset
-local getPosition     <const> = Camera.getPosition
-local worldToScreen   <const> = Camera.worldToScreen
-local getRefreshRate  <const> = RoxyGraphics.getRefreshRate
+local performAfterDelay <const> = pd.timer.performAfterDelay
+local newImage          <const> = Graphics.image.new
+local newImageTable     <const> = Graphics.imagetable.new
+local getAsset          <const> = Assets.getAsset
+local recycleAsset      <const> = Assets.recycleAsset
+local getPosition       <const> = Camera.getPosition
+local getShakeOffset    <const> = Camera.getShakeOffset
+local worldToScreen     <const> = Camera.worldToScreen
+local getRefreshRate    <const> = RoxyGraphics.getRefreshRate
 
 local UNFLIPPED   <const> = Graphics.kImageUnflipped
 local FLIPPED_X   <const> = Graphics.kImageFlippedX
@@ -54,8 +36,8 @@ local FLIPPED_X_Y <const> = Graphics.kImageFlippedXY
 local MS_PER_SECOND <const> = 1000
 local DELAY_DEFAULT <const> = 1 -- Seconds
 
-local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+local DISPLAY_WIDTH   <const> = RoxyGraphics.displayWidth
+local DISPLAY_HEIGHT  <const> = RoxyGraphics.displayHeight
 
 local SCREEN_LEFT_LIMIT   <const> = 0
 local SCREEN_TOP_LIMIT    <const> = 0
@@ -121,15 +103,15 @@ end
 
 -- ! Helper: Resolve Simple Frame Rate Setter
 local function _resolveSimpleFrameRateSetter(frameRate)
-  assert(
-    (type(frameRate) == "number" and frameRate > 0) or frameRate == "display",
-    "[RoxySprite:setFrameRate] Frame rate must be a positive number or \"display\""
-  )
+  if not ((type(frameRate) == "number" and frameRate > 0) or frameRate == "display") then
+    error("[RoxySprite:setFrameRate] Frame rate must be a positive number or \"display\"", 3)
+  end
 
   if frameRate == "display" then
     local displayRate = getRefreshRate(true)
-    assert(type(displayRate) == "number" and displayRate > 0,
-           "[RoxySprite:setFrameRate] Display refresh rate must be a positive number")
+    if type(displayRate) ~= "number" or displayRate <= 0 then
+      error("[RoxySprite:setFrameRate] Display refresh rate must be a positive number", 3)
+    end
     return 1 / displayRate
   end
 
@@ -215,7 +197,9 @@ end
 
 -- ! Set Ignores Draw Offset
 function RoxySprite:setIgnoresDrawOffset(flag)
-  assert(type(flag) == "boolean", "[RoxySprite:setIgnoresDrawOffset] Expected boolean, got " .. tostring(type(flag)))
+  if type(flag) ~= "boolean" then
+    error("[RoxySprite:setIgnoresDrawOffset] Expected boolean, got " .. tostring(type(flag)), 2)
+  end
 
   self._ignoresDrawOffset = flag
   RoxySprite.super.setIgnoresDrawOffset(self, flag)
@@ -225,7 +209,9 @@ end
 -- ! Set Collisions Enabled
 -- Sets the desired collision state and applies it immediately
 function RoxySprite:setCollisionsEnabled(flag)
-  assert(type(flag) == "boolean", "[RoxySprite:setCollisionsEnabled] Expected boolean, got " .. tostring(type(flag)))
+  if type(flag) ~= "boolean" then
+    error("[RoxySprite:setCollisionsEnabled] Expected boolean, got " .. tostring(type(flag)), 2)
+  end
 
   self._collisionsEnabled = flag
   if flag == false then
@@ -238,7 +224,9 @@ end
 -- ! Set Scene Pause Collisions Active
 -- Temporarily toggles collision participation without changing desired state.
 function RoxySprite:_setScenePauseCollisionsActive(flag)
-  assert(type(flag) == "boolean", "[RoxySprite:_setScenePauseCollisionsActive] Expected boolean, got " .. tostring(type(flag)))
+  if type(flag) ~= "boolean" then
+    error("[RoxySprite:_setScenePauseCollisionsActive] Expected boolean, got " .. tostring(type(flag)), 2)
+  end
 
   _setCollisionsActive(self, flag)
   return self
@@ -246,7 +234,9 @@ end
 
 -- ! Set Z-Index
 function RoxySprite:setZIndex(zIndex)
-  assert(type(zIndex) == "number", "[RoxySprite:setZIndex] Expected number, got " .. tostring(type(zIndex)))
+  if type(zIndex) ~= "number" then
+    error("[RoxySprite:setZIndex] Expected number, got " .. tostring(type(zIndex)), 2)
+  end
 
   RoxySprite.super.setZIndex(self, zIndex)
   return self
@@ -254,7 +244,9 @@ end
 
 -- ! Set Size
 function RoxySprite:setSize(width, height)
-  assert(type(width) == "number" and type(height) == "number", "[RoxySprite:setSize] Width and height must be numbers")
+  if type(width) ~= "number" or type(height) ~= "number" then
+    error("[RoxySprite:setSize] Width and height must be numbers", 2)
+  end
 
   RoxySprite.super.setSize(self, width, height)
   return self
@@ -262,7 +254,9 @@ end
 
 -- ! Set Center
 function RoxySprite:setCenter(x, y)
-  assert(type(x) == "number" and type(y) == "number", "[RoxySprite:setCenter] Center coordinates must be numbers")
+  if type(x) ~= "number" or type(y) ~= "number" then
+    error("[RoxySprite:setCenter] Center coordinates must be numbers", 2)
+  end
 
   RoxySprite.super.setCenter(self, x, y)
   return self
@@ -270,7 +264,9 @@ end
 
 -- ! Move To
 function RoxySprite:moveTo(x, y)
-  assert(type(x) == "number" and type(y) == "number", "[RoxySprite:moveTo] Coordinates must be numbers")
+  if type(x) ~= "number" or type(y) ~= "number" then
+    error("[RoxySprite:moveTo] Coordinates must be numbers", 2)
+  end
 
   RoxySprite.super.moveTo(self, x, y)
   return self
@@ -432,7 +428,9 @@ end
 
 -- ! Helper: Setup simple animation with validation
 local function _setupSimpleAnimation(sprite, imagetable, frameDuration, loop)
-  assert(imagetable, "[RoxySprite:setView] Failed to load imagetable for simpleAnimation")
+  if not imagetable then
+    error("[RoxySprite:setView] Failed to load imagetable for simpleAnimation", 3)
+  end
 
   -- Validate frame duration to prevent infinite update loops
   if not frameDuration or frameDuration <= 0 then
@@ -645,7 +643,9 @@ function RoxySprite:addAnimation(optsOrName, legacyOpts)
   local hasValidName = type(animationOpts) == "table"
     and type(animationOpts.name) == "string"
     and animationOpts.name ~= ""
-  assert(hasValidName, "[RoxySprite:addAnimation] Animation name must be a non-empty string")
+  if not hasValidName then
+    error("[RoxySprite:addAnimation] Animation name must be a non-empty string", 2)
+  end
 
   if self.animation then
     self.animation:addAnimation(animationOpts)
@@ -660,7 +660,7 @@ end
 -- ! Set Animation
 function RoxySprite:setAnimation(name, nextContinuity, unlessThisAnimation)
   if not name or type(name) ~= "string" then
-    assert(type(name) == "string" and name ~= "", "[RoxySprite:setAnimation] Animation name must be a non-empty string")
+    error("[RoxySprite:setAnimation] Animation name must be a non-empty string", 2)
   end
 
   if self.animation then
@@ -797,7 +797,9 @@ end
 
 -- ! Set Speed
 function RoxySprite:setSpeed(speed, currentOnly)
-  assert(type(speed) == "number", "[RoxySprite:setSpeed] Speed must be a number")
+  if type(speed) ~= "number" then
+    error("[RoxySprite:setSpeed] Speed must be a number", 2)
+  end
 
   if self.animation then
     self.animation:setSpeed(speed, currentOnly)
@@ -823,8 +825,9 @@ end
 
 -- ! Set Frame Duration
 function RoxySprite:setFrameDuration(frameDuration, currentOnly)
-  assert(type(frameDuration) == "number" and frameDuration > 0,
-         "[RoxySprite:setFrameDuration] Frame duration must be a positive number")
+  if type(frameDuration) ~= "number" or frameDuration <= 0 then
+    error("[RoxySprite:setFrameDuration] Frame duration must be a positive number", 2)
+  end
 
   if self.animation then
     self.animation:setFrameDuration(frameDuration, currentOnly)
@@ -917,9 +920,10 @@ function RoxySprite:update()
     local parallaxY = self.parallaxY or 1
     local parallaxOriginX = self.parallaxOriginX or 0
     local parallaxOriginY = self.parallaxOriginY or 0
+    local shakeX, shakeY = getShakeOffset()
 
-    local spriteX = floor(parallaxOriginX + (worldX - cameraX) * parallaxX + 0.5)
-    local spriteY = floor(parallaxOriginY + (worldY - cameraY) * parallaxY + 0.5)
+    local spriteX = floor(parallaxOriginX + (worldX - cameraX) * parallaxX - shakeX + 0.5)
+    local spriteY = floor(parallaxOriginY + (worldY - cameraY) * parallaxY - shakeY + 0.5)
     self:moveTo(spriteX, spriteY)
   end
 
@@ -1155,6 +1159,7 @@ local mountains = RoxySprite({
 mountains:setWorldPosition(420, 240)
 mountains:setParallax(0.25, 0.1)
 mountains:setParallaxOrigin(200, 120)
+roxy.Camera.shake(6, 0.35, 18) -- Parallax sprites include committed camera shake automatically
 
 -- After registering an image pool with Assets.registerPool
 local pooledItem = RoxySprite({

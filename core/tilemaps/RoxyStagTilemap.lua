@@ -4,9 +4,11 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r       <const> = roxy
-local Camera  <const> = r.Camera
-local Cache   <const> = roxy.Cache
+local r               <const> = roxy
+local Camera          <const> = r.Camera
+local Cache           <const> = r.Cache
+local RoxyGraphics    <const> = r.Graphics
+local TilemapHelpers  <const> = r.TilemapHelpers
 
 local min   <const> = math.min
 local max   <const> = math.max
@@ -40,13 +42,13 @@ local evictAsset        <const> = Cache.evictAsset
 local clearCache        <const> = Cache.clearCache
 
 local getCameraPosition <const> = Camera.getPosition
+local getShakeOffset    <const> = Camera.getShakeOffset
 local setCameraBounds   <const> = Camera.setBounds
 
 local _isoDrawOffsets   <const> = RoxyTilemap._isoDrawOffsets
 local _beginManualDraw  <const> = RoxyTilemap._beginManualDraw
 local _endManualDraw    <const> = RoxyTilemap._endManualDraw
 
-local TilemapHelpers          <const> = r.TilemapHelpers
 local visibleLayerRect        <const> = TilemapHelpers.visibleLayerRect
 local chunkIndicesForRect     <const> = TilemapHelpers.chunkIndicesForRect
 local findFirstAvailableLayer <const> = TilemapHelpers.findFirstAvailableLayer
@@ -73,8 +75,8 @@ local FLOAT_EPSILON        <const> = 0.000001
 local PREFETCH_RINGS  <const> = 1  -- 1 ring beyond visible
 local BUILD_BUDGET    <const> = 2  -- Build at most 2 chunks per frame
 
-local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+local DISPLAY_WIDTH   <const> = RoxyGraphics.displayWidth
+local DISPLAY_HEIGHT  <const> = RoxyGraphics.displayHeight
 
 local COLOR_CLEAR <const> = Graphics.kColorClear
 
@@ -287,7 +289,7 @@ function RoxyStagTilemap:_createNativeRenderer(layerData)
   --#DEBUG START
   if (layerData.tileWidth or 0) <= 0 or (layerData.tileHeight or 0) <= 0
      or (layerData.halfWidth or 0) <= 0 or (layerData.halfHeight or 0) <= 0 then
-    Log.error("[RoxyStagTilemap] Invalid tile metrics; width/height/halves must be > 0")
+    error("[RoxyStagTilemap] Invalid tile metrics; width/height/halves must be > 0")
   end
   --#DEBUG END
 
@@ -796,12 +798,13 @@ function RoxyStagTilemap:worldToScreen(worldX, worldY, layerData)
   local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+  local shakeX, shakeY = getShakeOffset()
 
   local screenX = originX + worldX * tileWidth + shiftX
   local screenY = originY + worldY * halfHeight
 
-  return round(screenX + pivotAdjustX - cameraX * parallaxX),
-         round(screenY + pivotAdjustY - cameraY * parallaxY)
+  return round(screenX + pivotAdjustX - cameraX * parallaxX - shakeX),
+         round(screenY + pivotAdjustY - cameraY * parallaxY - shakeY)
 end
 
 -- ! Screen to World
@@ -819,9 +822,10 @@ function RoxyStagTilemap:screenToWorld(screenX, screenY, layerData)
   local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+  local shakeX, shakeY = getShakeOffset()
 
-  local deltaX = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
-  local deltaY = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
+  local deltaX = (screenX + shakeX + cameraX * parallaxX) - (originX + pivotAdjustX)
+  local deltaY = (screenY + shakeY + cameraY * parallaxY) - (originY + pivotAdjustY)
 
   local worldY = deltaY / halfHeight
   local row0 = floor(worldY + FLOAT_EPSILON)
@@ -980,7 +984,11 @@ end
 -- Draw all visible layers in z-order, with smart skipping
 function RoxyStagTilemap:drawVisible()
   local cameraX, cameraY = getCameraPosition()
-  local cameraUnchanged = (self._lastCameraX == cameraX) and (self._lastCameraY == cameraY)
+  local shakeX, shakeY = getShakeOffset()
+  local cameraUnchanged = (self._lastCameraX == cameraX)
+    and (self._lastCameraY == cameraY)
+    and (self._lastShakeX == shakeX)
+    and (self._lastShakeY == shakeY)
   local hasWarmWork = self:_hasWarmWork()
 
   -- Do not early-out if we are within a forced-draw window
@@ -989,6 +997,7 @@ function RoxyStagTilemap:drawVisible()
   end
 
   self._lastCameraX, self._lastCameraY = cameraX, cameraY
+  self._lastShakeX, self._lastShakeY = shakeX, shakeY
   self._frameDirty = false -- We will render now; clear until something changes again
 
   -- Consume one forced frame if active
@@ -1072,6 +1081,7 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
     local parallaxOriginX       = layerData.parallaxoriginx or 0
     local parallaxOriginY       = layerData.parallaxoriginy or 0
     local cameraX, cameraY      = _cameraPositionFor(self)
+    local shakeX, shakeY        = getShakeOffset()
 
     local tr = layerData._nativeRenderer
     if tr then
@@ -1079,7 +1089,7 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
       tr:drawRows(
         rowStart, rowEnd,
         minX, maxX,
-        originX, originY,
+        originX - shakeX, originY - shakeY,
         parallaxX, parallaxY,
         parallaxOriginX, parallaxOriginY,
         cameraX, cameraY
@@ -1133,6 +1143,7 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
   local pivotAdjustX          = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY          = parallaxOriginY * (1 - parallaxY)
   local cameraX, cameraY      = _cameraPositionFor(self)
+  local shakeX, shakeY        = getShakeOffset()
   local halfWidth, halfHeight = layerData.halfWidth, layerData.halfHeight
 
   layerData._imageCache  = layerData._imageCache  or {}
@@ -1142,8 +1153,8 @@ function RoxyStagTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, max
     local row0 = tileY - 1
     local rowShiftX = _rowShiftX_for_row0(self, row0, halfWidth)
 
-    local baseScreenX = round(originX + rowShiftX + pivotAdjustX - cameraX * parallaxX)
-    local baseScreenY = round(originY + row0 * halfHeight + pivotAdjustY - cameraY * parallaxY)
+    local baseScreenX = round(originX + rowShiftX + pivotAdjustX - cameraX * parallaxX - shakeX)
+    local baseScreenY = round(originY + row0 * halfHeight + pivotAdjustY - cameraY * parallaxY - shakeY)
 
     local currentX = baseScreenX + (minX - 1) * tileWidth
     local rowIndex = row0 * stride + minX
@@ -1239,6 +1250,11 @@ map:markTilesDirty("ground", 8, 10, 2, 2)
 
 local row = map:getRowFromScreen(200, 120, "ground")
 map:drawLayerRows("ground", 1, row, 1, 16)
+
+roxy.Camera.shake(6, 0.35, 18)
+-- Projection helpers include committed camera shake offsets
+local screenX, screenY = map:worldToScreen(8, 10, map.layers.ground)
+local worldX, worldY = map:screenToWorld(screenX, screenY, map.layers.ground)
 
 local previewImage, offsetX, offsetY = map:getLayerImage("ground")
 

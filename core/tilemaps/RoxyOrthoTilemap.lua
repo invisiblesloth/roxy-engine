@@ -4,9 +4,11 @@ local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
-local r       <const> = roxy
-local Camera  <const> = r.Camera
-local Cache   <const> = r.Cache
+local r               <const> = roxy
+local Camera          <const> = r.Camera
+local Cache           <const> = r.Cache
+local RoxyGraphics    <const> = r.Graphics
+local TilemapHelpers  <const> = r.TilemapHelpers
 
 local min   <const> = math.min
 local max   <const> = math.max
@@ -26,13 +28,13 @@ local clear         <const> = Graphics.clear
 
 local addDirtyRect      <const> = Sprite.addDirtyRect
 local getCameraPosition <const> = Camera.getPosition
+local getShakeOffset    <const> = Camera.getShakeOffset
 
 local newCacheBucket  <const> = Cache.newBucket
 local getOrLoadAsset  <const> = Cache.getOrLoadAsset
 local evictAsset      <const> = Cache.evictAsset
 local clearCache      <const> = Cache.clearCache
 
-local TilemapHelpers          <const> = r.TilemapHelpers
 local visibleLayerRect        <const> = TilemapHelpers.visibleLayerRect
 local chunkIndicesForRect     <const> = TilemapHelpers.chunkIndicesForRect
 local findFirstAvailableLayer <const> = TilemapHelpers.findFirstAvailableLayer
@@ -43,8 +45,8 @@ local DEFAULT_CHUNK_CACHE   <const> = 200
 local DEFAULT_CHUNK_OVERLAP <const> = 32
 local ROUNDING_GUARD_TILES  <const> = 1
 
-local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
+local DISPLAY_WIDTH   <const> = RoxyGraphics.displayWidth
+local DISPLAY_HEIGHT  <const> = RoxyGraphics.displayHeight
 
 local COLOR_CLEAR <const> = Graphics.kColorClear
 
@@ -174,9 +176,10 @@ function RoxyOrthoTilemap:_getVisibleTileBoundsFast(layerData, cameraX, cameraY)
   local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+  local shakeX, shakeY = getShakeOffset()
 
-  local screenX = round(originX + pivotAdjustX - cameraX * parallaxX)
-  local screenY = round(originY + pivotAdjustY - cameraY * parallaxY)
+  local screenX = round(originX + pivotAdjustX - cameraX * parallaxX - shakeX)
+  local screenY = round(originY + pivotAdjustY - cameraY * parallaxY - shakeY)
   local sourceX, sourceY = -screenX, -screenY
 
   local tileMargin = 0
@@ -337,12 +340,13 @@ function RoxyOrthoTilemap:worldToScreen(worldX, worldY, layerData)
   local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+  local shakeX, shakeY = getShakeOffset()
 
   local orthoX = originX + worldX * tileWidth
   local orthoY = originY + worldY * tileHeight
 
-  return round(orthoX + pivotAdjustX - cameraX * parallaxX),
-         round(orthoY + pivotAdjustY - cameraY * parallaxY)
+  return round(orthoX + pivotAdjustX - cameraX * parallaxX - shakeX),
+         round(orthoY + pivotAdjustY - cameraY * parallaxY - shakeY)
 end
 
 -- ! Screen to World (orthogonal)
@@ -356,9 +360,10 @@ function RoxyOrthoTilemap:screenToWorld(screenX, screenY, layerData)
   local parallaxOriginY = layerData.parallaxoriginy or 0
   local pivotAdjustX = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY = parallaxOriginY * (1 - parallaxY)
+  local shakeX, shakeY = getShakeOffset()
 
-  local deltaX = (screenX + cameraX * parallaxX) - (originX + pivotAdjustX)
-  local deltaY = (screenY + cameraY * parallaxY) - (originY + pivotAdjustY)
+  local deltaX = (screenX + shakeX + cameraX * parallaxX) - (originX + pivotAdjustX)
+  local deltaY = (screenY + shakeY + cameraY * parallaxY) - (originY + pivotAdjustY)
 
   local worldX = deltaX / tileWidth
   local worldY = deltaY / tileHeight
@@ -681,6 +686,11 @@ map:setTileAt("Ground", 12, 8, 4, true)
 map:markTilesDirty("Ground", 10, 8, 3, 2)
 
 local row = map:getRowFromScreen(200, 120, "Ground")
+
+roxy.Camera.shake(6, 0.35, 18)
+-- Projection helpers include committed camera shake offsets
+local screenX, screenY = map:worldToScreen(12, 8, map.layers.Ground)
+local worldX, worldY = map:screenToWorld(screenX, screenY, map.layers.Ground)
 
 local previewImage, offsetX, offsetY = map:getLayerImage("Ground", {
   tileX = 1,
