@@ -89,6 +89,11 @@ Camera._deadZoneHalfH     = 0     -- Cached half height for performance
 Camera._isActive          = true  -- Ensure initial update
 Camera._updateFunc        = nil   -- Default to static mode (set after functions defined)
 Camera._followIdleValid   = false -- Whether the follow fast-path cache can be used
+Camera._springCoeffFreq   = nil   -- Spring frequency used to build cached coefficients
+Camera._springCoeffDamp   = nil   -- Spring damping used to build cached coefficients
+Camera._springOmega       = nil   -- Cached spring angular frequency
+Camera._springOmegaSq     = nil   -- Cached spring angular frequency squared
+Camera._springDamping     = nil   -- Cached spring damping coefficient
 
 -- Parallax listeners
 Camera._onOffsetChanged = {}
@@ -102,6 +107,41 @@ Camera._onOffsetChanged = {}
 local function _invalidateFollowIdle()
   Camera._followIdleValid = false
   Camera._followIdleTarget = nil
+end
+
+-- ! Invalidate Spring Coefficients
+-- Clears derived spring-mode coefficients so they rebuild from public settings
+local function _invalidateSpringCoefficients()
+  Camera._springCoeffFreq = nil
+  Camera._springCoeffDamp = nil
+  Camera._springOmega = nil
+  Camera._springOmegaSq = nil
+  Camera._springDamping = nil
+end
+
+-- ! Has Fresh Spring Coefficients
+-- Returns true when cached spring coefficients match public settings
+local function _hasFreshSpringCoefficients()
+  return Camera._springCoeffFreq == Camera.springFreq
+    and Camera._springCoeffDamp == Camera.springDamp
+    and Camera._springOmega ~= nil
+    and Camera._springOmegaSq ~= nil
+    and Camera._springDamping ~= nil
+end
+
+-- ! Refresh Spring Coefficients
+-- Rebuilds derived spring-mode coefficients when public settings change
+local function _refreshSpringCoefficients()
+  if not _hasFreshSpringCoefficients() then
+    local springFreq = Camera.springFreq
+    local springDamp = Camera.springDamp
+    local omega = 2 * pi * springFreq
+    Camera._springCoeffFreq = springFreq
+    Camera._springCoeffDamp = springDamp
+    Camera._springOmega = omega
+    Camera._springOmegaSq = omega * omega
+    Camera._springDamping = 2 * springDamp * omega
+  end
 end
 
 -- ! Apply Shake
@@ -282,6 +322,8 @@ local function _canSkipFollow(px, py, dt)
     and Camera._isActive == Camera._followIdleIsActive
     and Camera.smoothing == Camera._followIdleSmoothing
     and Camera.mode == Camera._followIdleMode
+    -- Let spring rebuild if any derived coefficient is missing.
+    and (Camera.mode ~= "spring" or _hasFreshSpringCoefficients())
     and Camera.springFreq == Camera._followIdleSpringFreq
     and Camera.springDamp == Camera._followIdleSpringDamp
     and Camera.targetBiasX == Camera._followIdleTargetBiasX
@@ -584,6 +626,7 @@ function Camera.reset()
   Camera.mode               = "lerp"
   Camera.springFreq         = 4.0
   Camera.springDamp         = 0.9
+  _invalidateSpringCoefficients()
   Camera._onOffsetChanged   = {}
 
   -- Immediate screen-space reset
@@ -661,6 +704,7 @@ function Camera._restoreState(snapshot)
   Camera.mode               = snapshot.mode or "lerp"
   Camera.springFreq         = snapshot.springFreq or 4.0
   Camera.springDamp         = snapshot.springDamp or 0.9
+  _invalidateSpringCoefficients()
   Camera._onOffsetChanged   = _copyList(snapshot._onOffsetChanged)
   Camera._logicalBounds     = _copyBounds(snapshot._logicalBounds)
 
@@ -763,12 +807,12 @@ function Camera.updateFollow(dt)
 
   -- Interpolate or set position
   if Camera.mode == "spring" then
-    -- Critically damped spring
-    local omega = 2 * pi * Camera.springFreq
-    local zeta  = Camera.springDamp
+    _refreshSpringCoefficients()
+    local omegaSq = Camera._springOmegaSq
+    local damping = Camera._springDamping
     -- Velocity form
-    local ax = omega * omega * (desiredX - Camera.x) - 2 * zeta * omega * Camera._velocityX
-    local ay = omega * omega * (desiredY - Camera.y) - 2 * zeta * omega * Camera._velocityY
+    local ax = omegaSq * (desiredX - Camera.x) - damping * Camera._velocityX
+    local ay = omegaSq * (desiredY - Camera.y) - damping * Camera._velocityY
     Camera._velocityX = Camera._velocityX + ax * dt
     Camera._velocityY = Camera._velocityY + ay * dt
     Camera.x = Camera.x + Camera._velocityX * dt
@@ -979,6 +1023,12 @@ Camera.setDeadZone(48, 32)
 function GameScene:update(dt)
   Camera.update(dt)
 end
+
+-- Spring Follow Feel
+Camera.setMode("spring")
+Camera.springFreq = 4.0
+Camera.springDamp = 0.9
+Camera.setTarget(player, 0)
 
 -- Manual Panning
 Camera.reset()
