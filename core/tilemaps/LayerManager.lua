@@ -15,10 +15,11 @@ local tableRemove <const> = table.remove
 
 local round <const> = r.Math.round
 
-local newSprite <const> = Sprite.new
-local retain    <const> = AssetStore.retain
-local release   <const> = AssetStore.release
-local getTable  <const> = AssetStore.getImagetable
+local newSprite      <const> = Sprite.new
+local retain         <const> = AssetStore.retain
+local release        <const> = AssetStore.release
+local getTable       <const> = AssetStore.getImagetable
+local getShakeOffset <const> = Camera.getShakeOffset
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -29,9 +30,10 @@ local getTable  <const> = AssetStore.getImagetable
 local function _createParallaxUpdate(origin, parallaxX, parallaxY, pivotAdjustX, pivotAdjustY)
   return function(sprite)
     local cameraX, cameraY = Camera.getPosition()
+    local shakeX, shakeY = getShakeOffset()
 
-    local screenX = round(origin.x + pivotAdjustX - cameraX * parallaxX)
-    local screenY = round(origin.y + pivotAdjustY - cameraY * parallaxY)
+    local screenX = round(origin.x + pivotAdjustX - cameraX * parallaxX - shakeX)
+    local screenY = round(origin.y + pivotAdjustY - cameraY * parallaxY - shakeY)
 
     local currentX, currentY = sprite:getPosition()
     if screenX ~= currentX or screenY ~= currentY then
@@ -588,6 +590,7 @@ manager:setOrigin("Ground", 32, 16)
 
 roxy.Camera.setPosition(40, 16)
 manager:setOrigin("Clouds", 12, 8) -- Applied on the next parallax sprite update
+roxy.Camera.shake(6, 0.35, 18) -- Managed parallax sprites include committed camera shake automatically
 
 -- Runtime Image Table Swap
 local winterTiles = Graphics.imagetable.new("images/terrain-winter")

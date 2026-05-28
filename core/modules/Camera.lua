@@ -4,6 +4,15 @@ roxy = roxy or {}
 roxy.Camera = roxy.Camera or {}
 local Camera <const> = roxy.Camera
 
+local pd        <const> = playdate
+local Graphics  <const> = pd.graphics
+local Sprite    <const> = Graphics.sprite
+local Timer     <const> = pd.timer
+
+local r             <const> = roxy
+local RoxyGraphics  <const> = r.Graphics
+local Math          <const> = r.Math
+
 local abs <const> = math.abs
 local min <const> = math.min
 local max <const> = math.max
@@ -11,30 +20,17 @@ local sin <const> = math.sin
 local cos <const> = math.cos
 local pi  <const> = math.pi
 
-local tableRemove <const> = table.remove
-local tableInsert <const> = table.insert
-
-local pd        <const> = playdate
-local Graphics  <const> = pd.graphics
-local Sprite    <const> = Graphics.sprite
-local Timer     <const> = pd.timer
-
 local performAfterDelay <const> = Timer.performAfterDelay
+local setDrawOffset     <const> = Graphics.setDrawOffset
+local redrawBackground  <const> = Sprite.redrawBackground
+local clamp             <const> = Math.clamp
+local lerp              <const> = Math.lerp
+local round             <const> = Math.roundInt
 
-local setDrawOffset <const> = Graphics.setDrawOffset
-
-local redrawBackground <const> = Sprite.redrawBackground
-
-local r <const> = roxy
-
-local clamp <const> = r.Math.clamp
-local lerp  <const> = r.Math.lerp
-local round <const> = r.Math.roundInt
-
-local DISPLAY_WIDTH   <const> = r.Graphics.displayWidth
-local DISPLAY_HEIGHT  <const> = r.Graphics.displayHeight
-local CENTER_X        <const> = r.Graphics.displayWidthCenter
-local CENTER_Y        <const> = r.Graphics.displayHeightCenter
+local DISPLAY_WIDTH   <const> = RoxyGraphics.displayWidth
+local DISPLAY_HEIGHT  <const> = RoxyGraphics.displayHeight
+local CENTER_X        <const> = RoxyGraphics.displayWidthCenter
+local CENTER_Y        <const> = RoxyGraphics.displayHeightCenter
 
 local CAMERA_SPEED_DEFAULT  <const> = 120   -- Default pan velocity (pixels per second)
 local FRICTION_DEFAULT      <const> = 0.85  -- Default friction factor (0 to 1, higher = slower stop)
@@ -75,22 +71,29 @@ Camera._screenBottom      = DISPLAY_HEIGHT  -- Cached screen bottom boundary
 Camera._targetX           = 0     -- Target x position
 Camera._targetY           = 0     -- Target y position
 Camera._logicalBounds     = nil   -- { x1, y1, x2, y2 } - developer-set bounds (before bias expansion)
-Camera._bounds            = nil   -- { x1, y1, x2, y2 } - effective bounds (after bias expansion)
 Camera._hasBounds         = false -- Whether bounds are active
-Camera._minX              = 0     -- Minimum x bound (effective)
-Camera._minY              = 0     -- Minimum y bound (effective)
-Camera._maxX              = 0     -- Maximum x bound (effective)
-Camera._maxY              = 0     -- Maximum y bound (effective)
+Camera._minX              = 0     -- Minimum effective x bound
+Camera._minY              = 0     -- Minimum effective y bound
+Camera._maxX              = 0     -- Maximum effective x bound
+Camera._maxY              = 0     -- Maximum effective y bound
 Camera._shakeAmplitude    = 0     -- Shake intensity (pixels)
 Camera._shakeFrequency    = 0     -- Shake oscillations per second
 Camera._shakeAngularFreq  = 0     -- Cached angular frequency (frequency * 2 * pi)
 Camera._shakeTimer        = 0     -- Tracks elapsed shake time
+Camera._shakeOffsetX      = 0     -- Last committed shake x offset
+Camera._shakeOffsetY      = 0     -- Last committed shake y offset
 Camera._deadZoneWidth     = 0     -- Dead zone width (pixels, 0 = disabled)
 Camera._deadZoneHeight    = 0     -- Dead zone height (pixels, 0 = disabled)
 Camera._deadZoneHalfW     = 0     -- Cached half width for performance
 Camera._deadZoneHalfH     = 0     -- Cached half height for performance
 Camera._isActive          = true  -- Ensure initial update
 Camera._updateFunc        = nil   -- Default to static mode (set after functions defined)
+Camera._followIdleValid   = false -- Whether the follow fast-path cache can be used
+Camera._springCoeffFreq   = nil   -- Spring frequency used to build cached coefficients
+Camera._springCoeffDamp   = nil   -- Spring damping used to build cached coefficients
+Camera._springOmega       = nil   -- Cached spring angular frequency
+Camera._springOmegaSq     = nil   -- Cached spring angular frequency squared
+Camera._springDamping     = nil   -- Cached spring damping coefficient
 
 -- Parallax listeners
 Camera._onOffsetChanged = {}
@@ -98,6 +101,48 @@ Camera._onOffsetChanged = {}
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
+
+-- ! Invalidate Follow Idle
+-- Clears the cached no-op follow state used by the idle fast path
+local function _invalidateFollowIdle()
+  Camera._followIdleValid = false
+  Camera._followIdleTarget = nil
+end
+
+-- ! Invalidate Spring Coefficients
+-- Clears derived spring-mode coefficients so they rebuild from public settings
+local function _invalidateSpringCoefficients()
+  Camera._springCoeffFreq = nil
+  Camera._springCoeffDamp = nil
+  Camera._springOmega = nil
+  Camera._springOmegaSq = nil
+  Camera._springDamping = nil
+end
+
+-- ! Has Fresh Spring Coefficients
+-- Returns true when cached spring coefficients match public settings
+local function _hasFreshSpringCoefficients()
+  return Camera._springCoeffFreq == Camera.springFreq
+    and Camera._springCoeffDamp == Camera.springDamp
+    and Camera._springOmega ~= nil
+    and Camera._springOmegaSq ~= nil
+    and Camera._springDamping ~= nil
+end
+
+-- ! Refresh Spring Coefficients
+-- Rebuilds derived spring-mode coefficients when public settings change
+local function _refreshSpringCoefficients()
+  if not _hasFreshSpringCoefficients() then
+    local springFreq = Camera.springFreq
+    local springDamp = Camera.springDamp
+    local omega = 2 * pi * springFreq
+    Camera._springCoeffFreq = springFreq
+    Camera._springCoeffDamp = springDamp
+    Camera._springOmega = omega
+    Camera._springOmegaSq = omega * omega
+    Camera._springDamping = 2 * springDamp * omega
+  end
+end
 
 -- ! Apply Shake
 -- Advances the internal shake timer and returns rounded shake offsets (x, y)
@@ -118,11 +163,16 @@ end
 
 -- ! Commit Offset
 -- Rounds the camera position, applies shake, commits draw offset, updates screen bounds
--- invalidates conversion caches when the offset changes, and maintains _isActive
+-- Invalidates conversion caches when the offset changes, and maintains _isActive
 local function _commitOffset(dt)
   local newX = round(Camera.x)
   local newY = round(Camera.y)
-  local shakeX, shakeY = (Camera.shakeDuration > 0) and _applyShake(dt) or 0, 0
+  local shakeX, shakeY = 0, 0
+  if Camera.shakeDuration > 0 then
+    shakeX, shakeY = _applyShake(dt)
+  end
+  Camera._shakeOffsetX = shakeX
+  Camera._shakeOffsetY = shakeY
   local totalOffsetX = newX + shakeX
   local totalOffsetY = newY + shakeY
   local lastX, lastY = Camera._lastX, Camera._lastY
@@ -144,11 +194,22 @@ local function _commitOffset(dt)
   end
 end
 
+-- ! Is Follow Offset Committed
+-- Returns true when the draw-offset cache already reflects the raw camera position
+local function _isFollowOffsetCommitted()
+  local lastX, lastY = Camera._lastX, Camera._lastY
+  return round(Camera.x) == lastX
+    and round(Camera.y) == lastY
+    and Camera._screenLeft == lastX
+    and Camera._screenTop == lastY
+    and Camera._screenRight == lastX + DISPLAY_WIDTH
+    and Camera._screenBottom == lastY + DISPLAY_HEIGHT
+end
+
 -- ! Recalculate Effective Bounds
 -- Expands logical bounds by bias amount so camera can apply bias without hitting bounds
 local function _recalculateEffectiveBounds()
   if not Camera._logicalBounds then
-    Camera._bounds = nil
     Camera._hasBounds = false
     Camera._minX = 0
     Camera._minY = 0
@@ -160,18 +221,16 @@ local function _recalculateEffectiveBounds()
   local bounds = Camera._logicalBounds
 
   -- Shift bounds by bias to maintain symmetric movement range
-  Camera._bounds = {
-    x1 = bounds.x1 + Camera.targetBiasX,
-    y1 = bounds.y1 + Camera.targetBiasY,
-    x2 = bounds.x2 + Camera.targetBiasX,
-    y2 = bounds.y2 + Camera.targetBiasY
-  }
+  local x1 = bounds.x1 + Camera.targetBiasX
+  local y1 = bounds.y1 + Camera.targetBiasY
+  local x2 = bounds.x2 + Camera.targetBiasX
+  local y2 = bounds.y2 + Camera.targetBiasY
 
   -- Update cached min/max for clamping
-  Camera._minX = min(Camera._bounds.x1, Camera._bounds.x2)
-  Camera._maxX = max(Camera._bounds.x1, Camera._bounds.x2)
-  Camera._minY = min(Camera._bounds.y1, Camera._bounds.y2)
-  Camera._maxY = max(Camera._bounds.y1, Camera._bounds.y2)
+  Camera._minX = min(x1, x2)
+  Camera._maxX = max(x1, x2)
+  Camera._minY = min(y1, y2)
+  Camera._maxY = max(y1, y2)
   Camera._hasBounds = true
 end
 
@@ -206,6 +265,161 @@ local function _validateTarget(target)
   return nil
 end
 
+-- ! Resolve Follow Target
+-- Calculates the desired follow point and the clamped interpolation target
+local function _resolveFollowTarget(px, py)
+  local desiredX = (px - CENTER_X) + Camera.targetBiasX
+  local desiredY = (py - CENTER_Y) + Camera.targetBiasY
+
+  if Camera._deadZoneWidth > 0 and Camera._deadZoneHeight > 0 then
+    local dx = desiredX - Camera._targetX
+    local dy = desiredY - Camera._targetY
+    if abs(dx) > Camera._deadZoneHalfW then
+      desiredX = Camera._targetX + (dx > 0 and Camera._deadZoneHalfW or -Camera._deadZoneHalfW)
+    else
+      desiredX = Camera._targetX
+    end
+    if abs(dy) > Camera._deadZoneHalfH then
+      desiredY = Camera._targetY + (dy > 0 and Camera._deadZoneHalfH or -Camera._deadZoneHalfH)
+    else
+      desiredY = Camera._targetY
+    end
+  end
+
+  local targetX = desiredX
+  local targetY = desiredY
+  local hasSmoothing = Camera.smoothing > 0
+  if Camera._hasBounds and hasSmoothing then
+    targetX = clamp(targetX, Camera._minX, Camera._maxX)
+    targetY = clamp(targetY, Camera._minY, Camera._maxY)
+  end
+
+  return desiredX, desiredY, targetX, targetY, hasSmoothing
+end
+
+-- ! Can Skip Follow
+-- Returns true when an identical follow update would be a complete no-op
+local function _canSkipFollow(px, py, dt)
+  return Camera._followIdleValid
+    and type(dt) == "number"
+    and Camera.target == Camera._followIdleTarget
+    and px == Camera._followIdlePX
+    and py == Camera._followIdlePY
+    and Camera.x == Camera._followIdleX
+    and Camera.y == Camera._followIdleY
+    and Camera._targetX == Camera._followIdleTargetX
+    and Camera._targetY == Camera._followIdleTargetY
+    and Camera._velocityX == 0
+    and Camera._velocityY == 0
+    and Camera._velocityX == Camera._followIdleVelocityX
+    and Camera._velocityY == Camera._followIdleVelocityY
+    and Camera._lastX == Camera._followIdleLastX
+    and Camera._lastY == Camera._followIdleLastY
+    and Camera._screenLeft == Camera._followIdleScreenLeft
+    and Camera._screenTop == Camera._followIdleScreenTop
+    and Camera._screenRight == Camera._followIdleScreenRight
+    and Camera._screenBottom == Camera._followIdleScreenBottom
+    and Camera._isActive == Camera._followIdleIsActive
+    and Camera.smoothing == Camera._followIdleSmoothing
+    and Camera.mode == Camera._followIdleMode
+    -- Let spring rebuild if any derived coefficient is missing.
+    and (Camera.mode ~= "spring" or _hasFreshSpringCoefficients())
+    and Camera.springFreq == Camera._followIdleSpringFreq
+    and Camera.springDamp == Camera._followIdleSpringDamp
+    and Camera.targetBiasX == Camera._followIdleTargetBiasX
+    and Camera.targetBiasY == Camera._followIdleTargetBiasY
+    and Camera._deadZoneWidth == Camera._followIdleDeadZoneWidth
+    and Camera._deadZoneHeight == Camera._followIdleDeadZoneHeight
+    and Camera._deadZoneHalfW == Camera._followIdleDeadZoneHalfW
+    and Camera._deadZoneHalfH == Camera._followIdleDeadZoneHalfH
+    and Camera._hasBounds == Camera._followIdleHasBounds
+    and Camera._minX == Camera._followIdleMinX
+    and Camera._minY == Camera._followIdleMinY
+    and Camera._maxX == Camera._followIdleMaxX
+    and Camera._maxY == Camera._followIdleMaxY
+    and Camera._shakeAmplitude == Camera._followIdleShakeAmplitude
+    and Camera.shakeDuration == Camera._followIdleShakeDuration
+    and Camera._shakeFrequency == Camera._followIdleShakeFrequency
+    and Camera._shakeAngularFreq == Camera._followIdleShakeAngularFreq
+    and Camera._shakeTimer == Camera._followIdleShakeTimer
+    and Camera.shakeDuration <= 0
+    and Camera.x == Camera._targetX
+    and Camera.y == Camera._targetY
+    and _isFollowOffsetCommitted()
+end
+
+-- ! Is Follow Idle Stable
+-- Verifies that a repeated full follow update would leave all follow state unchanged
+local function _isFollowIdleStable(px, py)
+  if Camera.shakeDuration > 0
+    or Camera._velocityX ~= 0
+    or Camera._velocityY ~= 0
+    or Camera.x ~= Camera._targetX
+    or Camera.y ~= Camera._targetY
+    or not _isFollowOffsetCommitted()
+  then
+    return false
+  end
+
+  if Camera._hasBounds
+    and (Camera.x < Camera._minX or Camera.x > Camera._maxX
+      or Camera.y < Camera._minY or Camera.y > Camera._maxY)
+  then
+    return false
+  end
+
+  local _, _, targetX, targetY = _resolveFollowTarget(px, py)
+  return targetX == Camera._targetX
+    and targetY == Camera._targetY
+end
+
+-- ! Remember Follow Idle
+-- Captures the current settled follow state for the next identical frame
+local function _rememberFollowIdle(px, py)
+  if not _isFollowIdleStable(px, py) then
+    _invalidateFollowIdle()
+    return
+  end
+
+  Camera._followIdleValid = true
+  Camera._followIdleTarget = Camera.target
+  Camera._followIdlePX = px
+  Camera._followIdlePY = py
+  Camera._followIdleX = Camera.x
+  Camera._followIdleY = Camera.y
+  Camera._followIdleTargetX = Camera._targetX
+  Camera._followIdleTargetY = Camera._targetY
+  Camera._followIdleVelocityX = Camera._velocityX
+  Camera._followIdleVelocityY = Camera._velocityY
+  Camera._followIdleLastX = Camera._lastX
+  Camera._followIdleLastY = Camera._lastY
+  Camera._followIdleScreenLeft = Camera._screenLeft
+  Camera._followIdleScreenTop = Camera._screenTop
+  Camera._followIdleScreenRight = Camera._screenRight
+  Camera._followIdleScreenBottom = Camera._screenBottom
+  Camera._followIdleIsActive = Camera._isActive
+  Camera._followIdleSmoothing = Camera.smoothing
+  Camera._followIdleMode = Camera.mode
+  Camera._followIdleSpringFreq = Camera.springFreq
+  Camera._followIdleSpringDamp = Camera.springDamp
+  Camera._followIdleTargetBiasX = Camera.targetBiasX
+  Camera._followIdleTargetBiasY = Camera.targetBiasY
+  Camera._followIdleDeadZoneWidth = Camera._deadZoneWidth
+  Camera._followIdleDeadZoneHeight = Camera._deadZoneHeight
+  Camera._followIdleDeadZoneHalfW = Camera._deadZoneHalfW
+  Camera._followIdleDeadZoneHalfH = Camera._deadZoneHalfH
+  Camera._followIdleHasBounds = Camera._hasBounds
+  Camera._followIdleMinX = Camera._minX
+  Camera._followIdleMinY = Camera._minY
+  Camera._followIdleMaxX = Camera._maxX
+  Camera._followIdleMaxY = Camera._maxY
+  Camera._followIdleShakeAmplitude = Camera._shakeAmplitude
+  Camera._followIdleShakeDuration = Camera.shakeDuration
+  Camera._followIdleShakeFrequency = Camera._shakeFrequency
+  Camera._followIdleShakeAngularFreq = Camera._shakeAngularFreq
+  Camera._followIdleShakeTimer = Camera._shakeTimer
+end
+
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
@@ -215,7 +429,7 @@ end
 function Camera.setPosition(x, y)
   --#DEBUG START
   if type(x) ~= "number" or type(y) ~= "number" then
-    Log.error("[Camera.setPosition] Invalid position: expected numbers (x, y)", 2)
+    error("[Camera.setPosition] Invalid position: expected numbers (x, y)", 2)
   end
   --#DEBUG END
 
@@ -227,6 +441,7 @@ function Camera.setPosition(x, y)
   Camera._velocityY = 0
   Camera._updateFunc = Camera.updateStatic
   Camera._isActive = true
+  _invalidateFollowIdle()
 end
 
 -- ! Set Pan Velocity
@@ -235,7 +450,7 @@ end
 function Camera.setPanVelocity(vx, vy)
   --#DEBUG START
   if vx ~= nil and type(vx) ~= "number" then
-    Log.error("[Camera.setPanVelocity] Invalid vx: expected a number or nil", 2)
+    error("[Camera.setPanVelocity] Invalid vx: expected a number or nil", 2)
   end
   --#DEBUG END
 
@@ -245,7 +460,7 @@ function Camera.setPanVelocity(vx, vy)
 
   --#DEBUG START
   if type(vy) ~= "number" then
-    Log.error("[Camera.setPanVelocity] Invalid vy: expected a number or nil", 2)
+    error("[Camera.setPanVelocity] Invalid vy: expected a number or nil", 2)
   end
   --#DEBUG END
 
@@ -253,6 +468,7 @@ function Camera.setPanVelocity(vx, vy)
   Camera._velocityY = vy
   Camera._updateFunc = Camera.updateManualPan
   Camera._isActive = true
+  _invalidateFollowIdle()
 end
 
 -- ! Set Target
@@ -263,7 +479,7 @@ end
 function Camera.setTarget(sprite, smoothing)
   --#DEBUG START
   if sprite and not sprite.getPosition then
-    Log.error("[Camera.setTarget] Invalid sprite: expected a sprite with getPosition method", 2)
+    error("[Camera.setTarget] Invalid sprite: expected a sprite with getPosition method", 2)
   end
   --#DEBUG END
 
@@ -275,6 +491,7 @@ function Camera.setTarget(sprite, smoothing)
   -- Default to static when no target
   Camera._updateFunc = sprite and Camera.updateFollow or Camera.updateStatic
   Camera._isActive = true
+  _invalidateFollowIdle()
 end
 
 -- ! Set Smoothing
@@ -282,10 +499,11 @@ end
 function Camera.setSmoothing(rate)
   --#DEBUG START
   if type(rate) ~= "number" then
-    Log.error("[Camera.setSmoothing] Invalid smoothing rate: expected a number", 2)
+    error("[Camera.setSmoothing] Invalid smoothing rate: expected a number", 2)
   end
   --#DEBUG END
   Camera.smoothing = max(rate, 0)
+  _invalidateFollowIdle()
 end
 
 -- ! Shake
@@ -293,7 +511,7 @@ end
 function Camera.shake(amplitude, duration, frequency)
   --#DEBUG START
   if type(amplitude) ~= "number" or type(duration) ~= "number" or type(frequency) ~= "number" then
-    Log.error("[Camera.shake] Invalid shake parameters: expected numbers (amplitude, duration, frequency)", 2)
+    error("[Camera.shake] Invalid shake parameters: expected numbers (amplitude, duration, frequency)", 2)
   end
   --#DEBUG END
 
@@ -303,6 +521,7 @@ function Camera.shake(amplitude, duration, frequency)
   Camera._shakeAngularFreq = Camera._shakeFrequency * 2 * pi
   Camera._shakeTimer = 0
   Camera._isActive = true
+  _invalidateFollowIdle()
 end
 
 -- ! Set Dead Zone
@@ -310,7 +529,7 @@ end
 function Camera.setDeadZone(width, height)
   --#DEBUG START
   if type(width) ~= "number" or type(height) ~= "number" then
-    Log.error("[Camera.setDeadZone] Invalid dead zone: expected numbers (width, height)", 2)
+    error("[Camera.setDeadZone] Invalid dead zone: expected numbers (width, height)", 2)
   end
   --#DEBUG END
 
@@ -318,6 +537,7 @@ function Camera.setDeadZone(width, height)
   Camera._deadZoneHeight = max(height, 0)
   Camera._deadZoneHalfW = Camera._deadZoneWidth / 2
   Camera._deadZoneHalfH = Camera._deadZoneHeight / 2
+  _invalidateFollowIdle()
 end
 
 -- ! Set Friction
@@ -325,7 +545,7 @@ end
 function Camera.setFriction(friction)
   --#DEBUG START
   if type(friction) ~= "number" then
-    Log.error("[Camera.setFriction] Invalid friction: expected a number", 2)
+    error("[Camera.setFriction] Invalid friction: expected a number", 2)
   end
   --#DEBUG END
   Camera.friction = clamp(friction, 0, 1)
@@ -336,29 +556,30 @@ end
 -- Bounds are automatically expanded by camera bias to prevent conflicts
 function Camera.setBounds(bounds)
   if not bounds or type(bounds.x1) ~= "number" or type(bounds.y1) ~= "number" or type(bounds.x2) ~= "number" or type(bounds.y2) ~= "number" then
-    Log.error("[Camera.setBounds] Invalid bounds: expected {x1, y1, x2, y2} with numbers", 2) --#DEBUG
+    error("[Camera.setBounds] Invalid bounds: expected {x1, y1, x2, y2} with numbers", 2) --#DEBUG
     Camera._logicalBounds = nil
-    Camera._bounds = nil
     Camera._hasBounds = false
     Camera._minX, Camera._minY = 0, 0
     Camera._maxX, Camera._maxY = 0, 0
+    _invalidateFollowIdle()
     return
   end
 
   Camera._logicalBounds = bounds
   _recalculateEffectiveBounds()
+  _invalidateFollowIdle()
 end
 
 -- ! Clear Bounds
 -- Clears the camera bounds
 function Camera.clearBounds()
   Camera._logicalBounds = nil
-  Camera._bounds = nil
   Camera._hasBounds = false
   Camera._minX = 0
   Camera._minY = 0
   Camera._maxX = 0
   Camera._maxY = 0
+  _invalidateFollowIdle()
 end
 
 -- ! Reset
@@ -378,7 +599,6 @@ function Camera.reset()
   Camera._targetY           = 0
   Camera.target             = nil
   Camera._logicalBounds     = nil
-  Camera._bounds            = nil
   Camera._hasBounds         = false
   Camera._minX              = 0
   Camera._minY              = 0
@@ -390,6 +610,8 @@ function Camera.reset()
   Camera._shakeFrequency    = 0
   Camera._shakeAngularFreq  = 0
   Camera._shakeTimer        = 0
+  Camera._shakeOffsetX      = 0
+  Camera._shakeOffsetY      = 0
   Camera._deadZoneWidth     = 0
   Camera._deadZoneHeight    = 0
   Camera._deadZoneHalfW     = 0
@@ -404,6 +626,7 @@ function Camera.reset()
   Camera.mode               = "lerp"
   Camera.springFreq         = 4.0
   Camera.springDamp         = 0.9
+  _invalidateSpringCoefficients()
   Camera._onOffsetChanged   = {}
 
   -- Immediate screen-space reset
@@ -411,11 +634,12 @@ function Camera.reset()
   redrawBackground()
 
   Camera._isActive = true
+  _invalidateFollowIdle()
 end
 
 -- ! Snapshot State
--- Captures the active camera state so a paused scene can restore ownership after
--- another scene resets the global camera during stack pop cleanup.
+-- Captures the active camera state so a paused scene can restore ownership
+-- Restores correctly after stack pop cleanup resets the global camera
 function Camera._snapshotState()
   return {
     x                 = Camera.x,
@@ -452,6 +676,7 @@ end
 -- Restores a snapshot created by Camera._snapshotState().
 function Camera._restoreState(snapshot)
   if type(snapshot) ~= "table" then return false end
+  _invalidateFollowIdle()
 
   local target = _validateTarget(snapshot.target)
 
@@ -479,6 +704,7 @@ function Camera._restoreState(snapshot)
   Camera.mode               = snapshot.mode or "lerp"
   Camera.springFreq         = snapshot.springFreq or 4.0
   Camera.springDamp         = snapshot.springDamp or 0.9
+  _invalidateSpringCoefficients()
   Camera._onOffsetChanged   = _copyList(snapshot._onOffsetChanged)
   Camera._logicalBounds     = _copyBounds(snapshot._logicalBounds)
 
@@ -507,10 +733,12 @@ function Camera.setBias(x, y)
   if Camera._logicalBounds then
     _recalculateEffectiveBounds()
   end
+  _invalidateFollowIdle()
 end
 
 -- ! Add Offset Listener
-function Camera.addOffsetListener(fn)  -- fn(totalOffsetX, totalOffsetY)
+-- @param fn Function called with totalOffsetX and totalOffsetY when the draw offset changes
+function Camera.addOffsetListener(fn)
   if type(fn) == "function" then table.insert(Camera._onOffsetChanged, fn) end
 end
 
@@ -521,7 +749,10 @@ end
 
 -- ! Set Mode
 function Camera.setMode(mode) -- "lerp" or "spring"
-  if mode == "spring" or mode == "lerp" then Camera.mode = mode end
+  if mode == "spring" or mode == "lerp" then
+    Camera.mode = mode
+    _invalidateFollowIdle()
+  end
 end
 
 -- ! Follow After Delay
@@ -555,7 +786,7 @@ end
 function Camera.updateFollow(dt)
   --#DEBUG START
   if not Camera.target or not Camera.target.getPosition then
-    Log.error("[Camera.updateFollow] Target sprite is invalid or removed", 2)
+    error("[Camera.updateFollow] Target sprite is invalid or removed", 2)
   end
   --#DEBUG END
 
@@ -563,47 +794,25 @@ function Camera.updateFollow(dt)
 
   --#DEBUG START
   if type(px) ~= "number" or type(py) ~= "number" then
-    Log.error("[Camera.updateFollow] Invalid sprite position: expected numbers (x, y)")
+    error("[Camera.updateFollow] Invalid sprite position: expected numbers (x, y)")
   end
   --#DEBUG END
 
+  if _canSkipFollow(px, py, dt) then return end
+
   -- Calculate desired target position (world top-left for screen center)
-  local desiredX = (px - CENTER_X) + Camera.targetBiasX
-  local desiredY = (py - CENTER_Y) + Camera.targetBiasY
-
-  -- Apply dead zone
-  if Camera._deadZoneWidth > 0 and Camera._deadZoneHeight > 0 then
-    local dx = desiredX - Camera._targetX
-    local dy = desiredY - Camera._targetY
-    if abs(dx) > Camera._deadZoneHalfW then
-      desiredX = Camera._targetX + (dx > 0 and Camera._deadZoneHalfW or -Camera._deadZoneHalfW)
-    else
-      desiredX = Camera._targetX
-    end
-    if abs(dy) > Camera._deadZoneHalfH then
-      desiredY = Camera._targetY + (dy > 0 and Camera._deadZoneHalfH or -Camera._deadZoneHalfH)
-    else
-      desiredY = Camera._targetY
-    end
-  end
-  Camera._targetX = desiredX
-  Camera._targetY = desiredY
-
-  -- Clamp target position only if smoothing
-  local hasSmoothing = Camera.smoothing > 0
-  if Camera._hasBounds and hasSmoothing then
-    Camera._targetX = clamp(Camera._targetX, Camera._minX, Camera._maxX)
-    Camera._targetY = clamp(Camera._targetY, Camera._minY, Camera._maxY)
-  end
+  local desiredX, desiredY, targetX, targetY, hasSmoothing = _resolveFollowTarget(px, py)
+  Camera._targetX = targetX
+  Camera._targetY = targetY
 
   -- Interpolate or set position
   if Camera.mode == "spring" then
-    -- Critically damped spring
-    local omega = 2 * pi * Camera.springFreq
-    local zeta  = Camera.springDamp
+    _refreshSpringCoefficients()
+    local omegaSq = Camera._springOmegaSq
+    local damping = Camera._springDamping
     -- Velocity form
-    local ax = omega * omega * (desiredX - Camera.x) - 2 * zeta * omega * Camera._velocityX
-    local ay = omega * omega * (desiredY - Camera.y) - 2 * zeta * omega * Camera._velocityY
+    local ax = omegaSq * (desiredX - Camera.x) - damping * Camera._velocityX
+    local ay = omegaSq * (desiredY - Camera.y) - damping * Camera._velocityY
     Camera._velocityX = Camera._velocityX + ax * dt
     Camera._velocityY = Camera._velocityY + ay * dt
     Camera.x = Camera.x + Camera._velocityX * dt
@@ -637,6 +846,7 @@ function Camera.updateFollow(dt)
   end
 
   _commitOffset(dt)
+  _rememberFollowIdle(px, py)
 end
 
 -- ! Update Manual Pan
@@ -741,6 +951,12 @@ function Camera.getDrawOffset()
   return -Camera._lastX, -Camera._lastY
 end
 
+-- ! Get Shake Offset
+-- Returns the screen-space shake offset included in the committed draw offset
+function Camera.getShakeOffset()
+  return Camera._shakeOffsetX, Camera._shakeOffsetY
+end
+
 --------------------------------------------------------------------------------
 -- Converters
 --------------------------------------------------------------------------------
@@ -808,6 +1024,12 @@ function GameScene:update(dt)
   Camera.update(dt)
 end
 
+-- Spring Follow Feel
+Camera.setMode("spring")
+Camera.springFreq = 4.0
+Camera.springDamp = 0.9
+Camera.setTarget(player, 0)
+
 -- Manual Panning
 Camera.reset()
 Camera.setBounds({ x1 = 0, y1 = 0, x2 = 1200, y2 = 800 })
@@ -822,8 +1044,11 @@ end
 local screenX, screenY = Camera.worldToScreen(player.x, player.y)
 local worldX, worldY = Camera.screenToWorld(200, 120)
 
--- Shake and Stop Following
+-- Shake and Manual Screen-Space Effects
 Camera.shake(6, 0.35, 18)
+-- Read after Camera.update(dt) has committed the frame offset
+local shakeX, shakeY = Camera.getShakeOffset()
+local effectX, effectY = 200 - shakeX, 120 - shakeY
 Camera.setTarget(nil)
 
 --]]
