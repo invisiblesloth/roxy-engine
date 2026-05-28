@@ -272,6 +272,16 @@ function RoxyIsoTilemap:_projectDirtyTileRect(layerConfig, tileX, tileY, tileCou
   return minX, minY, max(1, maxX - minX), max(1, maxY - minY + tallOverdraw)
 end
 
+-- ! Helper: Camera Position
+-- Reuse drawVisible's camera stamp during a frame; otherwise query once.
+local function _cameraPositionFor(self)
+  local cameraX, cameraY = self._cameraX, self._cameraY
+  if cameraX ~= nil and cameraY ~= nil then
+    return cameraX, cameraY
+  end
+  return getCameraPosition()
+end
+
 --
 -- Static Layer Configuration
 --
@@ -732,7 +742,7 @@ function RoxyIsoTilemap:worldToScreen(worldX, worldY, layerData)
 
   local originX, originY = layerData.originX or 0, layerData.originY or 0
   local parallaxX, parallaxY = layerData.parallaxx or 1, layerData.parallaxy or 1
-  local cameraX, cameraY = getCameraPosition()
+  local cameraX, cameraY = _cameraPositionFor(self)
 
   local parallaxOriginX = layerData.parallaxoriginx or 0
   local parallaxOriginY = layerData.parallaxoriginy or 0
@@ -755,7 +765,7 @@ function RoxyIsoTilemap:screenToWorld(screenX, screenY, layerData)
 
   local originX, originY = layerData.originX or 0, layerData.originY or 0
   local parallaxX, parallaxY = layerData.parallaxx or 1, layerData.parallaxy or 1
-  local cameraX, cameraY = getCameraPosition()
+  local cameraX, cameraY = _cameraPositionFor(self)
 
   local parallaxOriginX = layerData.parallaxoriginx or 0
   local parallaxOriginY = layerData.parallaxoriginy or 0
@@ -923,6 +933,8 @@ function RoxyIsoTilemap:drawVisible()
     self._forceDrawFrames -= 1
   end
 
+  self._cameraX, self._cameraY = cameraX, cameraY
+
   self:_primeVisibleChunks()
 
   local ordered = self._orderedLayers
@@ -937,6 +949,9 @@ function RoxyIsoTilemap:drawVisible()
   end
 
   self:_warmSomeChunks()
+
+  -- Clear camera cache after use
+  self._cameraX, self._cameraY = nil, nil
 end
 
 -- ! Draw Visible in Rectangle
@@ -993,7 +1008,7 @@ function RoxyIsoTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, maxC
     local parallaxX, parallaxY  = layerData.parallaxx or 1, layerData.parallaxy or 1
     local parallaxOriginX       = layerData.parallaxoriginx or 0
     local parallaxOriginY       = layerData.parallaxoriginy or 0
-    local cameraX, cameraY      = getCameraPosition()
+    local cameraX, cameraY      = _cameraPositionFor(self)
     local shakeX, shakeY        = getShakeOffset()
 
     local tr = layerData._nativeRenderer
@@ -1055,7 +1070,7 @@ function RoxyIsoTilemap:drawLayerRows(layerName, minRow, maxRow, minColumn, maxC
   local parallaxOriginY       = layerData.parallaxoriginy or 0
   local pivotAdjustX          = parallaxOriginX * (1 - parallaxX)
   local pivotAdjustY          = parallaxOriginY * (1 - parallaxY)
-  local cameraX, cameraY      = getCameraPosition()
+  local cameraX, cameraY      = _cameraPositionFor(self)
   local shakeX, shakeY        = getShakeOffset()
   local halfWidth, halfHeight = layerData.halfWidth, layerData.halfHeight
 
