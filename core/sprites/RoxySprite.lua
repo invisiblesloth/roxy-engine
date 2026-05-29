@@ -150,6 +150,9 @@ function RoxySprite:init(options, scene)
   self._collisionsActive        = true
   self._restoreCollisionsOnAdd  = false
   self._destroyed               = false -- Prevent use-after-destroy
+  -- Authoritative Roxy culling anchor; center changes must route through setCenter.
+  self._centerX                 = 0.5
+  self._centerY                 = 0.5
 
   -- Parallax (optional; only active if configured)
   self.worldX, self.worldY        = nil, nil
@@ -259,6 +262,8 @@ function RoxySprite:setCenter(x, y)
   end
 
   RoxySprite.super.setCenter(self, x, y)
+  self._centerX = x
+  self._centerY = y
   return self
 end
 
@@ -1046,7 +1051,8 @@ function RoxySprite:isOnScreen(cachedCamX, cachedCamY)
   local spriteY = self.y or 0
   local spriteWidth = self.width or 0
   local spriteHeight = self.height or 0
-  local centerX, centerY = self:getCenter()
+  local centerX = self._centerX or 0.5
+  local centerY = self._centerY or 0.5
 
   -- Calculate actual bounds based on center anchor
   local left = spriteX - spriteWidth * centerX
