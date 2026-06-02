@@ -33,22 +33,68 @@ static const int DEFAULT_REPEAT_COUNT  = 1;
  *  Helpers
  ***********************************************/
 
+static float durationOrDefault(float duration)
+{
+    return (!isfinite(duration) || duration <= 0.0f) ? DEFAULT_DURATION : duration;
+}
+
+static float durationOrZero(float duration)
+{
+    return (!isfinite(duration) || duration < 0.0f) ? 0.0f : duration;
+}
+
+static void resetPlaybackState(EasingArray* ea)
+{
+    ea->currentTime = 0.0f;
+    ea->completed   = 0;
+    ea->travelAccum = 0.0f;
+    ea->isForward   = 1;
+}
+
+static void resetLoopConfiguration(EasingArray* ea)
+{
+    ea->loopType  = 0;
+    ea->loopCount = 0.0f;
+    resetPlaybackState(ea);
+}
+
+static void recomputeTimelineMetadata(EasingArray* ea)
+{
+    ea->isSorted = 1;
+    float maxEnd = 0.0f;
+    for (int i = 0; i < ea->count; ++i) {
+        if (i > 0 && ea->segments[i].timestamp < ea->segments[i - 1].timestamp) ea->isSorted = 0;
+        if (ea->segments[i].endTime > maxEnd) maxEnd = ea->segments[i].endTime;
+    }
+    ea->totalDuration = maxEnd;
+}
+
+static int ensureCapacity(EasingArray* ea, size_t needed)
+{
+    if (needed > (SIZE_MAX / sizeof(EasingSegment)) || needed > (size_t)INT_MAX) return 0;
+    if (needed <= (size_t)ea->capacity) return 1;
+
+    int newCap = ea->capacity;
+    while ((size_t)newCap < needed) {
+        if (newCap > INT_MAX / 2) return 0;
+        newCap *= 2;
+    }
+
+    EasingSegment* newPtr = (EasingSegment*)roxy_realloc(
+        ea->segments, (size_t)newCap * sizeof(EasingSegment));
+    if (!newPtr) return 0;
+
+    ea->segments = newPtr;
+    ea->capacity = newCap;
+    ROXY_LABEL(ea->segments, "RoxySequenceC.segments");
+    return 1;
+}
+
 // ! Ensure Capacity and Insert
 static EasingSegment* ensureCapacityAndInsert(EasingArray* ea)
 {
-    if (ea->count == ea->capacity) {
-        int newCap = ea->capacity * 2;
-        // overflow guard
-        if ((size_t)newCap > (SIZE_MAX / sizeof(EasingSegment))) return NULL;
+    if (!ensureCapacity(ea, (size_t)ea->count + 1)) return NULL;
 
-        EasingSegment* newPtr = (EasingSegment*)roxy_realloc(
-            ea->segments, (size_t)newCap * sizeof(EasingSegment));
-        if (!newPtr) return NULL;
-
-        ea->segments = newPtr;
-        ea->capacity = newCap;
-        ROXY_LABEL(ea->segments, "RoxySequenceC.segments");
-    }
     // Return pointer to the next slot, but also increment
     EasingSegment* seg = &ea->segments[ea->count];
     ea->count++;
@@ -157,14 +203,15 @@ static char* duplicateString(const char* source)
 }
 
 // ! Evaluate At Time
-// Evaluate value at an absolute time (uses same search logic as getValue)
-static float evalAtTime(const EasingArray* ea, float t)
+static const EasingSegment* findSegmentForTime(const EasingArray* ea, float t, float* clampedOut)
 {
-    if (!ea || ea->count == 0) return 0.0f;
+    if (!ea || ea->count == 0) return NULL;
 
     float clamped = roxy_math_clamp(t, 0.0f, ea->totalDuration);
+    if (clampedOut) *clampedOut = clamped;
+
     int last = ea->count - 1;
-    if (clamped >= ea->segments[last].endTime) return ea->segments[last].to;
+    if (ea->isSorted && clamped >= ea->segments[last].endTime) return &ea->segments[last];
 
     const EasingSegment* easing = NULL;
 
@@ -191,6 +238,12 @@ static float evalAtTime(const EasingArray* ea, float t)
     if (!easing)
         easing = (clamped < ea->segments[0].timestamp) ? &ea->segments[0] : &ea->segments[last];
 
+    return easing;
+}
+
+static float evaluateSegmentAtTime(const EasingArray* ea, const EasingSegment* easing, float clamped)
+{
+    if (!ea || !easing) return 0.0f;
     if (easing->duration <= 0.0f) return easing->to;
 
     float timeOffset = clamped - easing->timestamp;
@@ -217,6 +270,14 @@ static float evalAtTime(const EasingArray* ea, float t)
         easing->duration,
         0.0f, 0.0f
     );
+}
+
+// Evaluate value at an absolute time (uses same search logic as getValue)
+static float evalAtTime(const EasingArray* ea, float t)
+{
+    float clamped = 0.0f;
+    const EasingSegment* easing = findSegmentForTime(ea, t, &clamped);
+    return evaluateSegmentAtTime(ea, easing, clamped);
 }
 
 // Compute the correct boundary time when the sequence is completed.
@@ -283,8 +344,6 @@ static int easingArray_newobject(lua_State* L)
     ea->loopType            = 0;
     ea->loopCount           = 0.0f;
     ea->travelAccum         = 0.0f;
-    ea->loopCounter         = 0;
-    ea->pingPongHalfCycles  = 0;
     ea->isForward           = 1;
     ea->isSorted            = 1;
 
@@ -344,7 +403,11 @@ static int easingArray_setEasingAt(lua_State* L)
 {
     EasingArray* ea = lua->getArgObject(1, "RoxySequenceC", NULL);
     int idx = lua->getArgInt(2);
-    if (!ea || idx <= 0 || idx > ea->count) { lua->pushBool(0); return 1; }
+    if (!ea || idx <= 0 || idx > ea->count) {
+        lua->pushNil();
+        lua->pushString("invalid index");
+        return 2;
+    }
 
     // NOTE: Modifying a segment in the middle can result in overlapping or
     // out-of-order segments. It is the user's responsibility to maintain
@@ -354,18 +417,13 @@ static int easingArray_setEasingAt(lua_State* L)
     seg->timestamp    = lua->getArgFloat(3);
     seg->from         = lua->getArgFloat(4);
     seg->to           = lua->getArgFloat(5);
-    seg->duration     = lua->getArgFloat(6);
+    seg->duration     = durationOrZero(lua->getArgFloat(6));
     seg->endTime      = seg->timestamp + seg->duration;
     seg->easeFunction = lua->getArgInt(7);
 
     // Re-evaluate sortedness and totalDuration
-    ea->isSorted = 1;
-    float maxEnd = 0.0f;
-    for (int i = 0; i < ea->count; ++i) {
-        if (i > 0 && ea->segments[i].timestamp < ea->segments[i-1].timestamp) ea->isSorted = 0;
-        if (ea->segments[i].endTime > maxEnd) maxEnd = ea->segments[i].endTime;
-    }
-    ea->totalDuration = maxEnd;
+    recomputeTimelineMetadata(ea);
+    resetPlaybackState(ea);
 
     lua->pushBool(1);
     return 1;
@@ -429,7 +487,7 @@ static int easingArray_addEasing(lua_State* L)
     float duration    = lua->getArgFloat(5);
     int easeFunction  = lua->getArgInt(6);
 
-    if (duration < 0.0f) duration = 0.0f;
+    duration = durationOrZero(duration);
 
     // NOTE: For best performance, add easings in increasing timestamp order.
     //       Segments should be non-overlapping and in increasing order.
@@ -452,7 +510,7 @@ static int easingArray_addEasing(lua_State* L)
     ea->isSorted &= (ea->count <= 1 || ea->segments[ea->count-1].timestamp >= ea->segments[ea->count-2].timestamp);
 
     if (seg->endTime > ea->totalDuration) ea->totalDuration = seg->endTime;
-    ea->completed = 0;
+    resetPlaybackState(ea);
 
     lua->pushBool(1);
     return 1;
@@ -465,10 +523,9 @@ static int easingArray_from(lua_State* L)
     if (!ea) { lua->pushNil(); return 1; }
 
     ea->count         = 0;
-    ea->currentTime   = 0.0f;
-    ea->completed     = 0;
     ea->totalDuration = 0.0f;
     ea->isSorted      = 1;
+    resetPlaybackState(ea);
 
     float fromVal = lua->getArgFloat(2);
 
@@ -482,7 +539,7 @@ static int easingArray_from(lua_State* L)
     seg->endTime      = 0.0f;
     seg->easeFunction = 0;
 
-    lua->pushObject(ea, "RoxySequenceC", 0);
+    lua->pushBool(1);
     return 1;
 }
 
@@ -497,18 +554,19 @@ static int easingArray_to(lua_State* L)
     float duration      = (argc >= 3) ? lua->getArgFloat(3) : DEFAULT_DURATION;
     int easeFunction    = (argc >= 4) ? lua->getArgInt(4) : DEFAULT_EASE_FUNCTION;
 
-    if (duration <= 0.0f) duration = DEFAULT_DURATION;
+    duration = durationOrDefault(duration);
     if (easeFunction <= 0) easeFunction = DEFAULT_EASE_FUNCTION;
 
     int lastIdx = ea->count - 1;
-    EasingSegment* lastSeg = &ea->segments[lastIdx];
+    float lastEnd = ea->segments[lastIdx].endTime;
+    float lastTo  = ea->segments[lastIdx].to;
 
     // Append new segment
     EasingSegment* seg = ensureCapacityAndInsert(ea);
     if (!seg) { lua->pushNil(); lua->pushString("oom"); return 2; }
 
-    seg->timestamp    = lastSeg->endTime;
-    seg->from         = lastSeg->to;
+    seg->timestamp    = lastEnd;
+    seg->from         = lastTo;
     seg->to           = newTo;
     seg->duration     = duration;
     seg->endTime      = seg->timestamp + seg->duration;
@@ -519,9 +577,9 @@ static int easingArray_to(lua_State* L)
     ea->isSorted &= (ea->count <= 1 || ea->segments[ea->count-1].timestamp >= ea->segments[ea->count-2].timestamp);
 
     if (seg->endTime > ea->totalDuration) ea->totalDuration = seg->endTime;
-    ea->completed = 0;
+    resetPlaybackState(ea);
 
-    lua->pushObject(ea, "RoxySequenceC", 0);
+    lua->pushBool(1);
     return 1;
 }
 
@@ -545,11 +603,11 @@ static int easingArray_set(lua_State* L)
     seg->endTime      = newTimestamp;
     seg->easeFunction = 0;
 
-    ea->completed     = 0;
     if (seg->endTime > ea->totalDuration) ea->totalDuration = seg->endTime;
     ea->isSorted &= (ea->count <= 1 || ea->segments[ea->count-1].timestamp >= ea->segments[ea->count-2].timestamp);
+    resetPlaybackState(ea);
 
-    lua->pushObject(ea, "RoxySequenceC", 0);
+    lua->pushBool(1);
     return 1;
 }
 
@@ -559,24 +617,26 @@ static int easingArray_sleep(lua_State* L)
     EasingArray* ea = lua->getArgObject(1, "RoxySequenceC", NULL);
     if (!ea || ea->count == 0) { lua->pushNil(); return 1; }
 
-    float duration         = lua->getArgFloat(2);
-    EasingSegment* lastSeg = &ea->segments[ea->count - 1];
+    float duration = durationOrZero(lua->getArgFloat(2));
+    int lastIdx = ea->count - 1;
+    float lastEnd = ea->segments[lastIdx].endTime;
+    float lastTo  = ea->segments[lastIdx].to;
 
     EasingSegment* seg = ensureCapacityAndInsert(ea);
     if (!seg) { lua->pushNil(); lua->pushString("oom"); return 2; }
 
-    seg->timestamp    = lastSeg->endTime;
-    seg->from         = lastSeg->to;
-    seg->to           = lastSeg->to;
+    seg->timestamp    = lastEnd;
+    seg->from         = lastTo;
+    seg->to           = lastTo;
     seg->duration     = duration;
     seg->endTime      = seg->timestamp + seg->duration;
     seg->easeFunction = 0;
 
-    ea->completed     = 0;
     if (seg->endTime > ea->totalDuration) ea->totalDuration = seg->endTime;
     ea->isSorted &= (ea->count <= 1 || ea->segments[ea->count-1].timestamp >= ea->segments[ea->count-2].timestamp);
+    resetPlaybackState(ea);
 
-    lua->pushObject(ea, "RoxySequenceC", 0);
+    lua->pushBool(1);
     return 1;
 }
 
@@ -594,10 +654,8 @@ static int easingArray_setLoopType(lua_State* L)
     if (loopType < 0) loopType = 0;
     if (loopType > 2) loopType = 2;
     ea->loopType    = loopType;
-    ea->loopCount   = (loopCount < 0.0f) ? 0.0f : loopCount;
-    ea->travelAccum = 0.0f;
-    ea->loopCounter = 0;
-    ea->isForward   = 1;
+    ea->loopCount   = (!isfinite(loopCount) || loopCount < 0.0f) ? 0.0f : loopCount;
+    resetPlaybackState(ea);
 
     lua->pushBool(1);
     return 1;
@@ -611,28 +669,17 @@ static int easingArray_again(lua_State* L)
 
     long long rc = (long long)lua->getArgInt(2);
     if (rc <= 0) rc = DEFAULT_REPEAT_COUNT;
+    if (rc > INT_MAX) { lua->pushNil(); lua->pushString("repeat overflow"); return 2; }
+    int repeatCount = (int)rc;
 
     // Needed elements (count + rc) may overflow int; use size_t
-    size_t needed = (size_t)ea->count + (size_t)rc;
+    size_t needed = (size_t)ea->count + (size_t)repeatCount;
     if (needed < (size_t)ea->count) { // overflow wrap
         lua->pushNil(); lua->pushString("repeat overflow"); return 2;
     }
 
-    if ((int)needed > ea->capacity) {
-        int newCap = ea->capacity;
-        while ((int)needed > newCap) {
-            if (newCap > INT_MAX/2) { lua->pushNil(); lua->pushString("capacity overflow"); return 2; }
-            newCap *= 2;
-        }
-        if ((size_t)newCap > SIZE_MAX/sizeof(EasingSegment)) {
-            lua->pushNil(); lua->pushString("size overflow"); return 2;
-        }
-        EasingSegment* newPtr = (EasingSegment*)roxy_realloc(ea->segments, (size_t)newCap * sizeof(EasingSegment));
-        if (!newPtr) { lua->pushNil(); lua->pushString("oom"); return 2; }
-        ea->segments = newPtr;
-        ea->capacity = newCap;
-        ROXY_LABEL(ea->segments, "RoxySequenceC.segments");
-    }
+    if (needed > (size_t)INT_MAX) { lua->pushNil(); lua->pushString("capacity overflow"); return 2; }
+    if (!ensureCapacity(ea, needed)) { lua->pushNil(); lua->pushString("oom"); return 2; }
 
     int lastIdx = ea->count - 1;
     EasingSegment* lastSeg = &ea->segments[lastIdx];
@@ -642,7 +689,7 @@ static int easingArray_again(lua_State* L)
     float newDuration   = lastSeg->duration;
     int newEaseFunction = lastSeg->easeFunction;
 
-    for (int r = 0; r < rc; r++) {
+    for (int r = 0; r < repeatCount; r++) {
         EasingSegment* seg = ensureCapacityAndInsert(ea);
         if (!seg) { lua->pushNil(); lua->pushString("oom"); return 2; }
 
@@ -657,10 +704,10 @@ static int easingArray_again(lua_State* L)
         if (seg->endTime > ea->totalDuration) ea->totalDuration = seg->endTime;
     }
 
-    ea->completed = 0;
     ea->isSorted = 1; // Appends preserve order
+    resetPlaybackState(ea);
 
-    lua->pushObject(ea, "RoxySequenceC", 0);
+    lua->pushBool(1);
     return 1;
 }
 
@@ -671,33 +718,39 @@ static int easingArray_reverse(lua_State* L)
     if (!ea || ea->count == 0) { lua->pushNil(); return 1; }
 
     int appendNew          = lua->getArgBool(2);
-    EasingSegment* lastSeg = &ea->segments[ea->count - 1];
+    int lastIdx            = ea->count - 1;
+    EasingSegment* lastSeg = &ea->segments[lastIdx];
 
     if (!appendNew) {
-        float elapsed = ea->currentTime - lastSeg->timestamp;
         float temp    = lastSeg->from;
         lastSeg->from = lastSeg->to;
         lastSeg->to   = temp;
-        ea->currentTime = lastSeg->timestamp + (lastSeg->duration - elapsed);
-        lua->pushObject(ea, "RoxySequenceC", 0);
+        resetPlaybackState(ea);
+        lua->pushBool(1);
         return 1;
     }
+
+    float lastEnd      = lastSeg->endTime;
+    float lastFrom     = lastSeg->from;
+    float lastTo       = lastSeg->to;
+    float lastDuration = lastSeg->duration;
+    int lastEase       = lastSeg->easeFunction;
 
     EasingSegment* seg = ensureCapacityAndInsert(ea);
     if (!seg) { lua->pushNil(); lua->pushString("oom"); return 2; }
 
-    seg->timestamp    = lastSeg->endTime;
-    seg->from         = lastSeg->to;
-    seg->to           = lastSeg->from;
-    seg->duration     = lastSeg->duration;
+    seg->timestamp    = lastEnd;
+    seg->from         = lastTo;
+    seg->to           = lastFrom;
+    seg->duration     = lastDuration;
     seg->endTime      = seg->timestamp + seg->duration;
-    seg->easeFunction = lastSeg->easeFunction;
+    seg->easeFunction = lastEase;
 
-    ea->completed     = 0;
     if (seg->endTime > ea->totalDuration) ea->totalDuration = seg->endTime;
     ea->isSorted &= (ea->count <= 1 || ea->segments[ea->count-1].timestamp >= ea->segments[ea->count-2].timestamp);
+    resetPlaybackState(ea);
 
-    lua->pushObject(ea, "RoxySequenceC", 0);
+    lua->pushBool(1);
     return 1;
 }
 
@@ -755,7 +808,6 @@ static int easingArray_updateAndGetValue(lua_State* L)
         return 4;
     }
 
-    int lastIdx = ea->count - 1;
     float oldTime = ea->currentTime;
 
     // If already completed, return boundary-correct value (handles fractional loop counts).
@@ -789,23 +841,8 @@ static int easingArray_updateAndGetValue(lua_State* L)
         return 4;
     }
 
-    // Use isSorted and fall back to linear if not sorted
-    EasingSegment* easing = NULL;
-    if (!ea->isSorted || ea->count <= 4) {
-        for (int i = 0; i < ea->count; i++) {
-            EasingSegment* seg = &ea->segments[i];
-            if (ea->currentTime >= seg->timestamp && ea->currentTime <= seg->endTime) { easing = seg; break; }
-        }
-    } else {
-        int left = 0, right = lastIdx;
-        while (left <= right) {
-            int mid = left + (right - left) / 2;
-            EasingSegment* seg = &ea->segments[mid];
-            if (ea->currentTime >= seg->timestamp && ea->currentTime <= seg->endTime) { easing = seg; break; }
-            if (ea->currentTime < seg->timestamp) right = mid - 1; else left = mid + 1;
-        }
-    }
-    if (!easing) easing = (ea->currentTime < ea->segments[0].timestamp) ? &ea->segments[0] : &ea->segments[lastIdx];
+    float clamped = 0.0f;
+    const EasingSegment* easing = findSegmentForTime(ea, ea->currentTime, &clamped);
 
     if (easing->duration <= 0.0f) {
         lua->pushFloat(oldTime);
@@ -817,7 +854,7 @@ static int easingArray_updateAndGetValue(lua_State* L)
 
     lua->pushFloat(oldTime);
     lua->pushFloat(ea->currentTime);
-    lua->pushFloat(evalAtTime(ea, ea->currentTime));
+    lua->pushFloat(evaluateSegmentAtTime(ea, easing, clamped));
     lua->pushBool(0);
     return 4;
 }
@@ -848,12 +885,7 @@ static int easingArray_reset(lua_State* L)
     EasingArray* ea = lua->getArgObject(1, "RoxySequenceC", NULL);
     if (!ea) return 0;
 
-    ea->currentTime         = 0.0f;
-    ea->completed           = 0;
-    ea->travelAccum         = 0.0f;
-    ea->loopCounter         = 0;
-    ea->pingPongHalfCycles  = 0;
-    ea->isForward           = 1;
+    resetPlaybackState(ea);
 
     lua->pushBool(1);
     return 1;
@@ -866,16 +898,9 @@ static int easingArray_clear(lua_State* L)
     if (!ea) return 0;
 
     ea->count               = 0;
-    ea->currentTime         = 0.0f;
-    ea->completed           = 0;
     ea->totalDuration       = 0.0f;
-    ea->loopType            = 0;
-    ea->loopCount           = 0.0f;
-    ea->travelAccum         = 0.0f;
-    ea->loopCounter         = 0;
-    ea->pingPongHalfCycles  = 0;
-    ea->isForward           = 1;
     ea->isSorted            = 1;
+    resetLoopConfiguration(ea);
 
     lua->pushBool(1);
     return 1;
