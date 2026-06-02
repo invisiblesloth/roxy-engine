@@ -36,14 +36,14 @@ typedef struct
     int loopType;           // 0=none,1=loop,2=pingpong
     float loopCount;        // Number of loops; 0.0f = infinite (supports fractions)
     float travelAccum;      // Total forward "path" distance consumed (seconds)
-    int loopCounter;
-    int pingPongHalfCycles;
     int isForward;          // 1 = forward, 0 = backward
     int isSorted;           // 1 = timestamps non-decreasing
 } EasingArray;
 
 typedef void (*LoopHandler)(EasingArray*, float*, float);
 
+// RoxySequenceC is the internal native backing object for RoxySequence.
+// Gameplay code should use the Lua RoxySequence wrapper.
 void registerRoxySequenceC(PlaydateAPI* pd);
 
 #endif /* ROXY_SEQUENCE_H */
