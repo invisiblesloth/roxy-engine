@@ -84,6 +84,7 @@ end
 -- ! Add
 function RoxySequence:add()
   if #self.easingArray == 0 then return self end
+  if self.isRunning then return self end
   addSequence(self)
   self.isRunning = true
   return self
