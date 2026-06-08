@@ -104,6 +104,7 @@ function RoxySequence:clear(clearEasings)
   if clearEasings then
     if self.easingArray:clear() then
       self.currentValue = 0
+      self.loopType = 0
     end
   end
 
