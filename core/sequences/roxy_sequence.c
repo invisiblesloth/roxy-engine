@@ -71,10 +71,13 @@ static void recomputeTimelineMetadata(EasingArray* ea)
 
 static int ensureCapacity(EasingArray* ea, size_t needed)
 {
+    if (!ea || !ea->segments) return 0;
     if (needed > (SIZE_MAX / sizeof(EasingSegment)) || needed > (size_t)INT_MAX) return 0;
-    if (needed <= (size_t)ea->capacity) return 1;
 
     int newCap = ea->capacity;
+    if (newCap <= 0) return 0;
+    if (needed <= (size_t)newCap) return 1;
+
     while ((size_t)newCap < needed) {
         if (newCap > INT_MAX / 2) return 0;
         newCap *= 2;
@@ -93,6 +96,7 @@ static int ensureCapacity(EasingArray* ea, size_t needed)
 // ! Ensure Capacity and Insert
 static EasingSegment* ensureCapacityAndInsert(EasingArray* ea)
 {
+    if (!ea || ea->count < 0 || ea->count >= INT_MAX) return NULL;
     if (!ensureCapacity(ea, (size_t)ea->count + 1)) return NULL;
 
     // Return pointer to the next slot, but also increment
