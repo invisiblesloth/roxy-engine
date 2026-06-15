@@ -31,7 +31,8 @@ local getCameraPosition <const> = Camera.getPosition
 local getShakeOffset    <const> = Camera.getShakeOffset
 
 local newCacheBucket  <const> = Cache.newBucket
-local getOrLoadAsset  <const> = Cache.getOrLoadAsset
+local getCachedAsset  <const> = Cache.getCachedAsset
+local putAsset        <const> = Cache.putAsset
 local evictAsset      <const> = Cache.evictAsset
 local clearCache      <const> = Cache.clearCache
 
@@ -261,29 +262,41 @@ end
 -- Chunk building & drawing
 --------------------------------------------------------------------------------
 
+-- ! Utility: Build Chunk
+-- Build a prerendered chunk image for the given layer and chunk indices.
+function RoxyOrthoTilemap:_buildChunk(layerConfig, chunkX, chunkY)
+  local size, overlap = layerConfig.size, layerConfig.overlap
+  local width, height = layerConfig.bufferWidth, layerConfig.bufferHeight
+  local img = newImage(width, height)
+
+  -- Convert chunk indices to layer pixel origin for this chunk
+  local pixelX = chunkX * size - overlap
+  local pixelY = chunkY * size - overlap
+
+  pushContext(img)
+    setClipRect(0, 0, width, height)
+    clear(COLOR_CLEAR)
+    -- Draw the corresponding source rect from the tilemap into the buffer
+    _drawLayerRegionToBuffer(layerConfig.layer, 0, 0, pixelX, pixelY, width, height)
+    clearClipRect()
+  popContext()
+
+  return img
+end
+
 -- ! Utility: Get or Build Chunk
 -- Build or fetch a prerendered chunk image from the cache
 function RoxyOrthoTilemap:_getOrBuildChunk(layerConfig, chunkX, chunkY)
   local key = layerConfig.keyPrefix .. chunkX .. ":" .. chunkY
-  return getOrLoadAsset(self._globalChunkBucket, key, function()
-    local size, overlap = layerConfig.size, layerConfig.overlap
-    local width, height = layerConfig.bufferWidth, layerConfig.bufferHeight
-    local img = newImage(width, height)
+  local cached = getCachedAsset(self._globalChunkBucket, key)
+  if cached then return cached end
 
-    -- Convert chunk indices to layer pixel origin for this chunk
-    local pixelX = chunkX * size - overlap
-    local pixelY = chunkY * size - overlap
+  local img = self:_buildChunk(layerConfig, chunkX, chunkY)
+  if img and self._globalChunkBucket.maxCacheSize ~= 0 then
+    putAsset(self._globalChunkBucket, key, img)
+  end
 
-    pushContext(img)
-      setClipRect(0, 0, width, height)
-      clear(COLOR_CLEAR)
-      -- Draw the corresponding source rect from the tilemap into the buffer
-      _drawLayerRegionToBuffer(layerConfig.layer, 0, 0, pixelX, pixelY, width, height)
-      clearClipRect()
-    popContext()
-
-    return img
-  end)
+  return img
 end
 
 -- ! Utility: Draw Static Layer Chunked
@@ -661,6 +674,7 @@ local scene = RoxyScene()
 local map = RoxyOrthoTilemap("assets/maps/level-01.json", {
   cameraBounds = true,
   wrapInSprites = false,
+  totalChunkCache = 200,
   layerOptions = {
     Ground = {
       preRenderChunked = true,
@@ -682,7 +696,9 @@ function scene:draw()
   map:drawVisible()
 end
 
+-- setTileAt invalidates chunked layers automatically.
 map:setTileAt("Ground", 12, 8, 4, true)
+-- Use markTilesDirty when external tile data edits touch a larger region.
 map:markTilesDirty("Ground", 10, 8, 3, 2)
 
 local row = map:getRowFromScreen(200, 120, "Ground")
@@ -697,6 +713,7 @@ local previewImage, offsetX, offsetY = map:getLayerImage("Ground", {
   tileY = 1,
   tileWidth = 10,
   tileHeight = 8,
+  compositeLayers = { "Props" },
 })
 
 map:drawVisibleInRect(0, 0, 400, 120)
