@@ -373,6 +373,8 @@ end
 -- ! Warm Some Chunks
 -- Amortize chunk builds across frames
 function RoxyIsoTilemap:_warmSomeChunks()
+  if #self._warmQueue == 0 then return end
+
   local built = 0
   local centerCache = {}
   while built < BUILD_BUDGET and #self._warmQueue > 0 do
