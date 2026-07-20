@@ -53,6 +53,19 @@ local MAX_FRAME_DURATION      <const> = 10
 -- Private Helper Functions
 --------------------------------------------------------------------------------
 
+-- ! Helper: Draw Animation
+local function _drawAnimation(sprite, x, y, flip)
+  sprite.animation:draw(x, y, flip)
+end
+
+-- ! Helper: Draw Simple Animation
+local function _drawSimpleAnimation(sprite, x, y, flip)
+  local simpleAnimation = sprite.simpleAnimation
+  if simpleAnimation and simpleAnimation.imagetable then
+    simpleAnimation.imagetable:drawImage(simpleAnimation.currentFrame, x, y, flip)
+  end
+end
+
 -- ! Helper: Has Parallax
 -- Returns true when the sprite needs camera-relative parallax updates
 local function _hasParallax(sprite)
@@ -396,7 +409,7 @@ local function _setupPooledAnimation(sprite, view)
     sprite.animation = RoxyAnimation.fromPool(view.poolKey)
     sprite._animationRetained = true
     _applySizeFromImageTable(sprite, sprite.animation.imagetable)
-    sprite._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+    sprite._drawFn = _drawAnimation
 
   elseif kind == "animation" then
     -- Pooled full animation object from an Assets pool
@@ -411,7 +424,7 @@ local function _setupPooledAnimation(sprite, view)
     sprite._animationRetained = false
     sprite._animationPoolKey = view.poolKey
     _applySizeFromImageTable(sprite, animation.imagetable)
-    sprite._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+    sprite._drawFn = _drawAnimation
 
   elseif kind == "image" then
     local image = getAsset(view.poolKey)
@@ -454,13 +467,7 @@ local function _setupSimpleAnimation(sprite, imagetable, frameDuration, loop)
   }
 
   _applySizeFromImageTable(sprite, imagetable)
-  -- Use a cached draw function for simpleAnimation
-  sprite._drawFn = function(s, x, y, flip)
-    local simpleAnimation = s.simpleAnimation
-    if simpleAnimation and simpleAnimation.imagetable then
-      simpleAnimation.imagetable:drawImage(simpleAnimation.currentFrame, x, y, flip)
-    end
-  end
+  sprite._drawFn = _drawSimpleAnimation
 end
 
 -- ! Set View
@@ -493,7 +500,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     end
     self.animation = view
     _applySizeFromImageTable(self, view.imagetable)
-    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+    self._drawFn = _drawAnimation
     return self
   end
 
@@ -506,7 +513,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     end
     self.animation = view.animation
     _applySizeFromImageTable(self, view.animation.imagetable)
-    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+    self._drawFn = _drawAnimation
     return self
   end
 
@@ -515,7 +522,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
     self.animation = RoxyAnimation.fromImagetable(view.imagetable)
     self._animationRetained = true
     _applySizeFromImageTable(self, view.imagetable)
-    self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+    self._drawFn = _drawAnimation
     return self
   end
 
@@ -540,7 +547,7 @@ function RoxySprite:setView(view, viewIsSpritesheet, singleAnimation, singleAnim
           error("[RoxySprite:setView] Failed to load spritesheet for RoxySprite", 2)
         end
         _applySizeFromImageTable(self, self.animation.imagetable)
-        self._drawFn = function(s, x, y, flip) s.animation:draw(x, y, flip) end
+        self._drawFn = _drawAnimation
       end
     else
       -- Static image
