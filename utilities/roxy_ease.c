@@ -1076,8 +1076,9 @@ int roxy_ease_in_elastic_l(lua_State* L)
     float b = pd->lua->getArgFloat(2);
     float c = pd->lua->getArgFloat(3);
     float d = pd->lua->getArgFloat(4);
-    float a = (pd->lua->getArgCount() > 4) ? pd->lua->getArgFloat(5) : 1.0f;
-    float p = (pd->lua->getArgCount() > 5) ? pd->lua->getArgFloat(6) : 0.3f;
+    int argc = pd->lua->getArgCount();
+    float a = (argc > 4) ? pd->lua->getArgFloat(5) : 1.0f;
+    float p = (argc > 5) ? pd->lua->getArgFloat(6) : 0.3f;
     float result = roxy_ease_in_elastic(t, b, c, d, a, p);
 
     pd->lua->pushFloat(result);
@@ -1093,8 +1094,9 @@ int roxy_ease_out_elastic_l(lua_State* L)
     float b = pd->lua->getArgFloat(2);
     float c = pd->lua->getArgFloat(3);
     float d = pd->lua->getArgFloat(4);
-    float a = (pd->lua->getArgCount() > 4) ? pd->lua->getArgFloat(5) : 1.0f;
-    float p = (pd->lua->getArgCount() > 5) ? pd->lua->getArgFloat(6) : 0.3f;
+    int argc = pd->lua->getArgCount();
+    float a = (argc > 4) ? pd->lua->getArgFloat(5) : 1.0f;
+    float p = (argc > 5) ? pd->lua->getArgFloat(6) : 0.3f;
     float result = roxy_ease_out_elastic(t, b, c, d, a, p);
 
     pd->lua->pushFloat(result);
@@ -1110,8 +1112,9 @@ int roxy_ease_in_out_elastic_l(lua_State* L)
     float b = pd->lua->getArgFloat(2);
     float c = pd->lua->getArgFloat(3);
     float d = pd->lua->getArgFloat(4);
-    float a = (pd->lua->getArgCount() > 4) ? pd->lua->getArgFloat(5) : 1.0f;
-    float p = (pd->lua->getArgCount() > 5) ? pd->lua->getArgFloat(6) : 0.3f;
+    int argc = pd->lua->getArgCount();
+    float a = (argc > 4) ? pd->lua->getArgFloat(5) : 1.0f;
+    float p = (argc > 5) ? pd->lua->getArgFloat(6) : 0.3f;
     float result = roxy_ease_in_out_elastic(t, b, c, d, a, p);
 
     pd->lua->pushFloat(result);
@@ -1127,8 +1130,9 @@ int roxy_ease_out_in_elastic_l(lua_State* L)
     float b = pd->lua->getArgFloat(2);
     float c = pd->lua->getArgFloat(3);
     float d = pd->lua->getArgFloat(4);
-    float a = (pd->lua->getArgCount() > 4) ? pd->lua->getArgFloat(5) : 1.0f;
-    float p = (pd->lua->getArgCount() > 5) ? pd->lua->getArgFloat(6) : 0.3f;
+    int argc = pd->lua->getArgCount();
+    float a = (argc > 4) ? pd->lua->getArgFloat(5) : 1.0f;
+    float p = (argc > 5) ? pd->lua->getArgFloat(6) : 0.3f;
     float result = roxy_ease_out_in_elastic(t, b, c, d, a, p);
 
     pd->lua->pushFloat(result);
