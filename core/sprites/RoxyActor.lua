@@ -562,9 +562,12 @@ function RoxyActor:updatePhysics(opts)
   -- Use pre-parsed transition rules when available
   local cache = self._transitionRulesCache
   if cache and #cache > 0 then
-    for _, rule in ipairs(cache) do
+    for ruleIndex = 1, #cache do
+      local rule = cache[ruleIndex]
       local allConditionsMet = true
-      for _, condition in ipairs(rule.conditions) do
+      local conditions = rule.conditions
+      for conditionIndex = 1, #conditions do
+        local condition = conditions[conditionIndex]
         if not self:_evaluateCondition(condition, opts) then
           allConditionsMet = false
           break
