@@ -188,6 +188,9 @@ function CrossDissolve:init(opts)
   -- Screenshots
   self._screenshot = nil
   self._drawFrame = nil
+
+  -- Reused sequence callback
+  self._onCompleteFn = function() self:_onComplete() end
 end
 
 --------------------------------------------------------------------------------
@@ -280,7 +283,7 @@ function CrossDissolve:_setupSequence()
   sequence
     :from(0)
     :to(1, duration, ease)
-    :callback(function() self:_onComplete() end)
+    :callback(self._onCompleteFn)
 end
 
 --------------------------------------------------------------------------------

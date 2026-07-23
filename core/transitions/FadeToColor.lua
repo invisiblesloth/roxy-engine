@@ -24,6 +24,10 @@ local isFromPool    <const> = Registry.isFromPool
 -- Math
 local min   <const> = math.min
 local floor <const> = math.floor
+local ceil  <const> = math.ceil
+
+-- Table operations
+local tableRemove <const> = table.remove
 
 -- Graphics
 local pushContext       <const> = Graphics.pushContext
@@ -44,6 +48,12 @@ local STACK_OP_POP      <const> = RoxyTransition.STACK_OP_POP
 
 -- Transition binding cache
 local transitionBindingCache = {}
+
+-- FadeToColor pattern cache
+local patternCache = {}
+local patternCacheEntries = {}
+local patternCacheBytes = 0
+local patternCacheAccess = 0
 
 local function resolveTransitionBinding(bindingName)
   local fn = transitionBindingCache[bindingName]
@@ -72,6 +82,12 @@ local DITHER_DEFAULT      <const> = DITHER_BAYER_8X8
 local FADE_STEPS_DEFAULT  <const> = 65
 local PATCH_SIZE_DEFAULT  <const> = 16
 
+-- Pattern cache limits
+-- The byte limit is an estimated bitmap-payload admission budget. It does not
+-- represent a physical cap on native bitmap or Lua object allocations.
+local PATTERN_CACHE_MAX_ENTRIES <const> = 4
+local PATTERN_CACHE_MAX_BYTES   <const> = 64 * 1024
+
 -- Dither pattern configs
 local DITHER_LIMITS <const> = {
   [Image.kDitherTypeNone]           = { size = 8,  steps = 2  },
@@ -94,6 +110,107 @@ local EMPTY_TABLE       <const> = {}
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
+
+-- ! Get Pattern Cache Bucket
+-- Return the pattern cache bucket for an effective visual configuration.
+local function getPatternCacheBucket(dither, patchSize, fadeSteps)
+  local byDither = patternCache[dither]
+  if not byDither then
+    byDither = {}
+    patternCache[dither] = byDither
+  end
+
+  local byPatchSize = byDither[patchSize]
+  if not byPatchSize then
+    byPatchSize = {}
+    byDither[patchSize] = byPatchSize
+  end
+
+  local byFadeSteps = byPatchSize[fadeSteps]
+  if not byFadeSteps then
+    byFadeSteps = {}
+    byPatchSize[fadeSteps] = byFadeSteps
+  end
+
+  return byFadeSteps, byPatchSize, byDither
+end
+
+-- ! Get Cached Pattern Entry
+-- Look up a cache entry without creating empty buckets for uncached values.
+local function getCachedPatternEntry(dither, patchSize, fadeSteps, color)
+  local byDither = patternCache[dither]
+  local byPatchSize = byDither and byDither[patchSize]
+  local byFadeSteps = byPatchSize and byPatchSize[fadeSteps]
+  return byFadeSteps and byFadeSteps[color]
+end
+
+-- ! Estimate Pattern Bytes
+-- Estimate one-bit bitmap payload bytes for cache admission only.
+local function estimatePatternBytes(patchSize, fadeSteps)
+  return fadeSteps * patchSize * ceil(patchSize / 8)
+end
+
+-- ! Is Cacheable Patch Size
+-- Cache only valid bitmap dimensions so invalid runtime options continue to
+-- reach the graphics API's existing validation path.
+local function isCacheablePatchSize(patchSize)
+  return type(patchSize) == "number"
+    and patchSize > 0
+    and patchSize < math.huge
+    and patchSize == floor(patchSize)
+end
+
+-- ! Touch Pattern Cache Entry
+-- Update recency for the small fixed-size LRU cache.
+local function touchPatternCacheEntry(entry)
+  patternCacheAccess += 1
+  entry.lastUsed = patternCacheAccess
+end
+
+-- ! Remove Pattern Cache Entry
+-- Drop the cache's strong reference while active transition instances retain
+-- their own references until cleanup.
+local function removePatternCacheEntry(entry)
+  entry.byFadeSteps[entry.color] = nil
+
+  if next(entry.byFadeSteps) == nil then
+    entry.byPatchSize[entry.fadeSteps] = nil
+    if next(entry.byPatchSize) == nil then
+      entry.byDither[entry.patchSize] = nil
+      if next(entry.byDither) == nil then
+        patternCache[entry.dither] = nil
+      end
+    end
+  end
+
+  for i = #patternCacheEntries, 1, -1 do
+    if patternCacheEntries[i] == entry then
+      tableRemove(patternCacheEntries, i)
+      break
+    end
+  end
+
+  patternCacheBytes -= entry.bytes
+end
+
+-- ! Evict Pattern Cache Entries
+-- Evict least-recently-used entries until a new cacheable entry fits.
+local function evictPatternCacheEntries(requiredBytes)
+  while #patternCacheEntries >= PATTERN_CACHE_MAX_ENTRIES
+      or patternCacheBytes + requiredBytes > PATTERN_CACHE_MAX_BYTES do
+    local oldestEntry = patternCacheEntries[1]
+    if not oldestEntry then return end
+
+    for i = 2, #patternCacheEntries do
+      local entry = patternCacheEntries[i]
+      if entry.lastUsed < oldestEntry.lastUsed then
+        oldestEntry = entry
+      end
+    end
+
+    removePatternCacheEntry(oldestEntry)
+  end
+end
 
 -- ! Initialize Asset Pool
 -- Initialize asset pools (called once per module)
@@ -166,6 +283,14 @@ function FadeToColor:init(opts)
   -- Initialize patterns and sequence
   self.patterns = self:_createPatternArray()
   self:_acquireSequence()
+
+  -- Reused sequence callbacks
+  self._onMidpointFn = function() self:_onMidpoint() end
+  self._onHoldElapsedFn = function() self:_onHoldElapsed() end
+  self._onCompleteFn = function() self:_onComplete() end
+
+  -- Draw binding resolved during execute
+  self._drawFrame = nil
 end
 
 --------------------------------------------------------------------------------
@@ -180,6 +305,19 @@ function FadeToColor:_createPatternArray()
   local fadeSteps = self.fadeSteps
   local patchSize = self.patchSize
   local color = self.color
+  local cacheable = isCacheablePatchSize(patchSize)
+  local estimatedBytes
+
+  if cacheable then
+    local cachedEntry = getCachedPatternEntry(dither, patchSize, fadeSteps, color)
+    if cachedEntry then
+      touchPatternCacheEntry(cachedEntry)
+      return cachedEntry.patterns
+    end
+
+    estimatedBytes = estimatePatternBytes(patchSize, fadeSteps)
+  end
+
   local oneOverSteps = 1 / (fadeSteps - 1)
 
   local patterns = {}
@@ -194,6 +332,29 @@ function FadeToColor:_createPatternArray()
     popContext()
     patterns[i] = img
   end
+
+  if not cacheable or estimatedBytes > PATTERN_CACHE_MAX_BYTES then
+    return patterns
+  end
+
+  evictPatternCacheEntries(estimatedBytes)
+  local byFadeSteps, byPatchSize, byDither = getPatternCacheBucket(dither, patchSize, fadeSteps)
+
+  local entry = {
+    patterns = patterns,
+    bytes = estimatedBytes,
+    dither = dither,
+    patchSize = patchSize,
+    fadeSteps = fadeSteps,
+    color = color,
+    byFadeSteps = byFadeSteps,
+    byPatchSize = byPatchSize,
+    byDither = byDither,
+  }
+  touchPatternCacheEntry(entry)
+  byFadeSteps[color] = entry
+  patternCacheEntries[#patternCacheEntries + 1] = entry
+  patternCacheBytes += estimatedBytes
 
   return patterns
 end
@@ -244,12 +405,12 @@ function FadeToColor:_setupSequence()
   sequence
     :from(0)
     :to(1, enterTime, easeEnter)
-    :callback(function() self:_onMidpoint() end)
+    :callback(self._onMidpointFn)
     :sleep(holdTime)
-    :callback(function() self:_onHoldElapsed() end)
+    :callback(self._onHoldElapsedFn)
     :to(1, 0)
     :to(0, exitTime, easeExit)
-    :callback(function() self:_onComplete() end)
+    :callback(self._onCompleteFn)
 end
 
 --------------------------------------------------------------------------------
@@ -261,6 +422,7 @@ end
 function FadeToColor:execute(newScene, currentScene)
   FadeToColor.super.execute(self, newScene, currentScene)
 
+  self._drawFrame = resolveTransitionBinding("fadeToColorDrawFrame")
   self:_setupSequence()
   self:_onStart()
   self.sequence:play()
@@ -284,7 +446,11 @@ function FadeToColor:draw()
   local idx = min(fadeSteps, floor(alpha * fadeStepsMinus1) + 1)
   -- patterns[idx]:drawTiled(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT)
   local pattern = patterns[idx]
-  local drawFrame = resolveTransitionBinding("fadeToColorDrawFrame")
+  local drawFrame = self._drawFrame
+  if not drawFrame then
+    drawFrame = resolveTransitionBinding("fadeToColorDrawFrame")
+    self._drawFrame = drawFrame
+  end
   drawFrame(pattern)
 end
 
@@ -297,6 +463,7 @@ function FadeToColor:cleanup()
   self:_releaseSequence()
 
   self.patterns = nil
+  self._drawFrame = nil
 
   Log.debug("Transition '" .. self.name .. "' cleanup completed") --#DEBUG
 end
