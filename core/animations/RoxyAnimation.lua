@@ -67,20 +67,38 @@ local PATH_IMAGETABLE_CACHE_PREFIX  <const> = "RoxyAnimation.imagetable:"
 -- Private Helper Functions
 --------------------------------------------------------------------------------
 
+-- ! Helper: Probe Image Table Draw Image
+-- Reads drawImage through pcall so hostile userdata/table access stays protected
+local function _probeImageTableDrawImage(value)
+  return value.drawImage
+end
+
+-- ! Helper: Probe Image Table Length
+-- Reads table length through pcall so unsupported length operations stay protected
+local function _probeImageTableLength(imagetable)
+  return #imagetable
+end
+
+-- ! Helper: Construct From Image Table
+-- Builds an animation through pcall while forwarding the imagetable explicitly
+local function _constructFromImagetable(imagetable)
+  return RoxyAnimation.fromImagetable(imagetable)
+end
+
 -- ! Helper: Is Image Table
 -- Returns true for Playdate imagetable-like values
 local function _isImageTable(value)
   local valueType = type(value)
   if valueType ~= "table" and valueType ~= "userdata" then return false end
 
-  local ok, drawImage = pcall(function() return value.drawImage end)
+  local ok, drawImage = pcall(_probeImageTableDrawImage, value)
   return ok and type(drawImage) == "function"
 end
 
 -- ! Helper: Get Image Table Length
 -- Reads frame count from table length, then Playdate-style getLength()
 local function _getImageTableLength(imagetable)
-  local ok, length = pcall(function() return #imagetable end)
+  local ok, length = pcall(_probeImageTableLength, imagetable)
   if ok and type(length) == "number" and length > 0 then
     return length
   end
@@ -183,9 +201,7 @@ function RoxyAnimation.fromPool(poolKey)
     return nil
   end
 
-  local ok, animation = pcall(function()
-    return RoxyAnimation.fromImagetable(imagetable)
-  end)
+  local ok, animation = pcall(_constructFromImagetable, imagetable)
 
   if not ok then
     -- Return checked-out image data before rethrowing construction errors
