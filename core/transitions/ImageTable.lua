@@ -237,6 +237,14 @@ function ImageTable:init(opts)
 
   -- Initialize sequence
   self:_acquireSequence()
+
+  -- Reused sequence callbacks
+  self._onMidpointFn = function() self:_onMidpoint() end
+  self._onHoldElapsedFn = function() self:_onHoldElapsed() end
+  self._onCompleteFn = function() self:_onComplete() end
+
+  -- Draw binding resolved during execute
+  self._drawFrame = nil
 end
 
 --------------------------------------------------------------------------------
@@ -359,12 +367,12 @@ function ImageTable:_setupSequence()
   sequence
     :from(self.sequenceStartValue)
     :to(self.sequenceMidpointValue, enterTime, easeEnter)
-    :callback(function() self:_onMidpoint() end)
+    :callback(self._onMidpointFn)
     :sleep(holdTime)
-    :callback(function() self:_onHoldElapsed() end)
+    :callback(self._onHoldElapsedFn)
     :set(self.sequenceResumeValue)
     :to(self.sequenceCompleteValue, exitTime, easeExit)
-    :callback(function() self:_onComplete() end)
+    :callback(self._onCompleteFn)
 end
 
 --------------------------------------------------------------------------------
@@ -377,6 +385,7 @@ function ImageTable:execute(newScene, currentScene)
   ImageTable.super.execute(self, newScene, currentScene)
 
   -- ImageTable-specific execution
+  self._drawFrame = resolveTransitionBinding("imageTableDrawFrame")
   self:_setupSequence()
   self:_onStart()
   self.sequence:play()
@@ -391,7 +400,11 @@ function ImageTable:draw()
   local value = sequence:getValue()
   if not value then return end
 
-  local drawFrame = resolveTransitionBinding("imageTableDrawFrame")
+  local drawFrame = self._drawFrame
+  if not drawFrame then
+    drawFrame = resolveTransitionBinding("imageTableDrawFrame")
+    self._drawFrame = drawFrame
+  end
   drawFrame(
     self.imageTableEnter, self.frameCountEnter, self.flipValueEnter,
     self.imageTableExit,  self.frameCountExit,  self.flipValueExit,
@@ -407,6 +420,7 @@ function ImageTable:cleanup()
   self:_releaseImageTableEnter()
   self:_releaseImageTableExit()
   self:_releaseSequence()
+  self._drawFrame = nil
 
   -- Call parent cleanup
   ImageTable.super.cleanup(self)
