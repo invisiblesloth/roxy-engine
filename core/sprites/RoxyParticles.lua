@@ -154,6 +154,14 @@ function RoxyParticles:init(x, y, opts)
   self.shape = opts.shape
   self.shapeID = SHAPE_MAP[self.shape] or 0
   self.color = opts.color
+  self.lifetimeMin = opts.lifetime[1]
+  self.lifetimeMax = opts.lifetime[2]
+  self.speedMin = opts.speed[1]
+  self.speedMax = opts.speed[2]
+  self.sizeMin = opts.size[1]
+  self.sizeMax = opts.size[2]
+  self.angleMin = opts.angleRange[1]
+  self.angleMax = opts.angleRange[2]
 
   -- Image table handling
   if opts.imageTable then
@@ -234,10 +242,10 @@ end
 function RoxyParticles:spawn()
   return spawn_C(
     self.cpool,
-    self.opts.lifetime[1], self.opts.lifetime[2],
-    self.opts.speed[1], self.opts.speed[2],
-    self.opts.size[1], self.opts.size[2],
-    self.opts.angleRange[1], self.opts.angleRange[2],
+    self.lifetimeMin, self.lifetimeMax,
+    self.speedMin, self.speedMax,
+    self.sizeMin, self.sizeMax,
+    self.angleMin, self.angleMax,
     self.emitterOffsetX, self.emitterOffsetY
   )
 end
@@ -250,10 +258,10 @@ function RoxyParticles:spawnMultiple(count)
   return spawnMultiple_C(
     self.cpool,
     count,
-    self.opts.lifetime[1], self.opts.lifetime[2],
-    self.opts.speed[1], self.opts.speed[2],
-    self.opts.size[1], self.opts.size[2],
-    self.opts.angleRange[1], self.opts.angleRange[2],
+    self.lifetimeMin, self.lifetimeMax,
+    self.speedMin, self.speedMax,
+    self.sizeMin, self.sizeMax,
+    self.angleMin, self.angleMax,
     self.emitterOffsetX, self.emitterOffsetY
   )
 end
@@ -396,28 +404,38 @@ end
 
 -- ! Set Lifetime Range
 function RoxyParticles:setLifetimeRange(minLife, maxLife)
-  self.opts.lifetime = { minLife, maxLife }
+  self.opts.lifetime[1] = minLife
+  self.opts.lifetime[2] = maxLife
+  self.lifetimeMin = minLife
+  self.lifetimeMax = maxLife
   self:_recalcAABB()
   self:markDirty()
 end
 
 -- ! Set Speed Range
 function RoxyParticles:setSpeedRange(minSpeed, maxSpeed)
-  self.opts.speed = { minSpeed, maxSpeed }
+  self.opts.speed[1] = minSpeed
+  self.opts.speed[2] = maxSpeed
+  self.speedMin = minSpeed
+  self.speedMax = maxSpeed
   self:_recalcAABB()
   self:markDirty()
 end
 
 -- ! Set Angle Range
 function RoxyParticles:setAngleRange(a, b)
-  self.opts.angleRange = { a, b }
+  self.opts.angleRange[1] = a
+  self.opts.angleRange[2] = b
+  self.angleMin = a
+  self.angleMax = b
   self:_recalcAABB()
   self:markDirty()
 end
 
 -- ! Set Acceleration
 function RoxyParticles:setAccel(xx, yy)
-  self.opts.accel = { x = xx, y = yy }
+  self.opts.accel.x = xx
+  self.opts.accel.y = yy
   -- Cache the values for hot loop
   self.accelX = xx
   self.accelY = yy
@@ -427,7 +445,10 @@ end
 
 -- ! Set Size Range
 function RoxyParticles:setSizeRange(minSize, maxSize)
-  self.opts.size = { minSize, maxSize }
+  self.opts.size[1] = minSize
+  self.opts.size[2] = maxSize
+  self.sizeMin = minSize
+  self.sizeMax = maxSize
   self:_recalcAABB()
   self:markDirty()
 end
