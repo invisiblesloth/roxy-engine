@@ -1,37 +1,52 @@
 -- core/modules/Debug.lua
 
-local pd  = playdate
+local pd <const> = playdate
 
 roxy = roxy or {}
-local Debug = roxy.Debug or {}
-roxy.Debug = Debug
+roxy.Debug = roxy.Debug or {}
+local Debug <const> = roxy.Debug
 
 local max   <const> = math.max
 local floor <const> = math.floor
 
 local performAfterDelay <const> = pd.timer.performAfterDelay
 
-local c_heapGuardVerifyAll  <const> = roxy.heapGuardVerifyAll
-local c_heapGuardDumpActive <const> = roxy.heapGuardDumpActive
-local c_heapGuardSnap       <const> = roxy.heapGuardSnap
+-- C heap guard bindings are optional in non-debug builds.
+local heapGuardVerifyAll_C  <const> = roxy.heapGuardVerifyAll
+local heapGuardDumpActive_C <const> = roxy.heapGuardDumpActive
+local heapGuardSnap_C       <const> = roxy.heapGuardSnap
 
-local HG_ON = (type(c_heapGuardVerifyAll) == "function")
-Debug.heapGuardEnabled = HG_ON
+local HEAP_GUARD_ENABLED <const> = (type(heapGuardVerifyAll_C) == "function")
+Debug.heapGuardEnabled = HEAP_GUARD_ENABLED
 
-local debugCheckingEnabled = false
-local debugChecksActive    = false
+local debugCheckingEnabled  = false
+local debugChecksActive     = false
 
 Debug.visualDebug = false
 
 -- ! Capture Original Functions
--- Store original Playdate SDK functions for tamper detection
+-- Store expected Playdate SDK handlers for tamper detection.
+--
+-- 'roxy.*' values are read inside this function, never aliased at module scope:
+-- Debug is imported near the start of roxy.lua, before the lifecycle forwarders
+-- are defined, so a load-time alias would capture nil. By the time this runs --
+-- from roxy.init() via enableDebugChecking() -- they exist.
 local debugFunctions = {}
 local function captureOriginalFunctions()
+  -- 'pd.update' and the crank callbacks have no Roxy-owned counterpart, so the
+  -- installed value is the only available baseline.
   debugFunctions.update = pd.update
   debugFunctions.crankDocked = pd.crankDocked
   debugFunctions.crankUndocked = pd.crankUndocked
-  debugFunctions.gameWillPause = pd.gameWillPause
-  debugFunctions.gameWillResume = pd.gameWillResume
+
+  -- Roxy owns these, so the baseline is Roxy's own function, not whatever is
+  -- currently installed. Reading a pd.* value here would canonize a game's
+  -- pre-init override and defeat the check entirely.
+  debugFunctions.gameWillPause = roxy.gameWillPause
+  debugFunctions.gameWillResume = roxy.gameWillResume
+  debugFunctions.gameWillTerminate = roxy.gameWillTerminate
+  debugFunctions.deviceWillSleep = roxy.deviceWillSleep
+  debugFunctions.deviceWillLock = roxy.deviceWillLock
 end
 
 --------------------------------------------------------------------------------
@@ -64,27 +79,27 @@ end
 
 -- ! Heap Guard Verify All
 function Debug.heapGuardVerify()
-  if HG_ON then c_heapGuardVerifyAll() end
+  if HEAP_GUARD_ENABLED then heapGuardVerifyAll_C() end
 end
 
 -- ! Heap Guard Dump Active
 function Debug.heapGuardDump()
-  if HG_ON then c_heapGuardDumpActive() end
+  if HEAP_GUARD_ENABLED then heapGuardDumpActive_C() end
 end
 
 -- ! Heap Guard Snap
 function Debug.heapGuardSnap(tag)
-  if HG_ON then c_heapGuardSnap(tag) end
+  if HEAP_GUARD_ENABLED then heapGuardSnap_C(tag) end
 end
 
 -- ! Heap Guard Verify For (Frames)
 -- Verify for N frames without touching pd.update
 function Debug.heapGuardVerifyFor(frames)
-  if not HG_ON then return end
+  if not HEAP_GUARD_ENABLED then return end
   local n = max(1, floor(frames or 60))
   local function tick()
     if n <= 0 then return end
-    c_heapGuardVerifyAll()
+    heapGuardVerifyAll_C()
     n = n - 1
     performAfterDelay(0, tick) -- Schedule next frame
   end
@@ -160,10 +175,17 @@ function Debug.runChecks()
   end
   if debugChecksActive then
     check(pd.update, debugFunctions.update, "playdate.update")
+    -- 'crankDocked' / 'crankUndocked' are never assigned by the engine: those
+    -- events reach scenes through 'playdate.inputHandlers', so installing the
+    -- globals would double-fire. The checks are kept for games that install
+    -- them.
     check(pd.crankDocked, debugFunctions.crankDocked, "playdate.crankDocked")
     check(pd.crankUndocked, debugFunctions.crankUndocked, "playdate.crankUndocked")
     check(pd.gameWillPause, debugFunctions.gameWillPause, "playdate.gameWillPause")
     check(pd.gameWillResume, debugFunctions.gameWillResume, "playdate.gameWillResume")
+    check(pd.gameWillTerminate, debugFunctions.gameWillTerminate, "playdate.gameWillTerminate")
+    check(pd.deviceWillSleep, debugFunctions.deviceWillSleep, "playdate.deviceWillSleep")
+    check(pd.deviceWillLock, debugFunctions.deviceWillLock, "playdate.deviceWillLock")
   end
 end
 
@@ -173,3 +195,33 @@ function Debug.update()
     Debug.runChecks()
   end
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+Debug provides runtime diagnostics for debug builds.
+
+-- Enable Checks Through Roxy Configuration
+roxy.init({
+  debugging = {
+    enableDebugChecks = true,
+    enableVisualDebugChecks = true,
+  },
+})
+
+-- Toggle Visual Diagnostics at Runtime
+Debug.toggleVisualDebug()
+Debug.disableVisualDebug()
+
+-- Inspect Native Heap Guards When Available
+if Debug.heapGuardEnabled then
+  Debug.heapGuardSnap("before-level-load")
+  loadLevel()
+  Debug.heapGuardVerifyFor(120)
+  Debug.heapGuardDump()
+end
+
+--]]

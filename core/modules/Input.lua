@@ -4,27 +4,31 @@ roxy = roxy or {}
 roxy.Input = roxy.Input or {}
 local Input <const> = roxy.Input
 
-local pd  <const> = playdate
-local r   <const> = roxy
+local pd              <const> = playdate
+local CrankIndicator  <const> = pd.ui.crankIndicator
+
+local r       <const> = roxy
+local Config  <const> = r.Config
 
 local tableInsert <const> = table.insert
 local tableRemove <const> = table.remove
 local tableSort   <const> = table.sort
 
+local max <const> = math.max
+
 local getButtonState    <const> = pd.getButtonState
 local pushInputHandlers <const> = pd.inputHandlers.push
 local popInputHandlers  <const> = pd.inputHandlers.pop
-local CrankIndicator    <const> = pd.ui.crankIndicator
 
-local getConfig <const> = roxy.Config.get
+local getConfig <const> = Config.get
 
 -- Configuration constants
-local BUTTON_HOLD_BUFFER_DEFAULT <const> = 3
-local CRANK_DIRECTION_DEFAULT    <const> = 1
+local BUTTON_HOLD_BUFFER_DEFAULT  <const> = 3
+local CRANK_DIRECTION_DEFAULT     <const> = 1
 
 -- Pre-defined array for efficient iteration instead of pairs()
-local BUTTON_NAMES <const> = { "A", "B", "up", "down", "left", "right" }
-local BUTTON_COUNT <const> = #BUTTON_NAMES
+local BUTTON_NAMES  <const> = { "A", "B", "up", "down", "left", "right" }
+local BUTTON_COUNT  <const> = #BUTTON_NAMES
 
 -- Input event keys - kept in sync with handler merging system
 local INPUT_KEYS <const> = {
@@ -61,6 +65,11 @@ local handlerRegistry = {}
 local activeMergedHandler = nil
 local persistentMergedHandler = {} -- Reused table to avoid allocation
 
+-- Monotonic registration counter. Breaks priority ties deterministically:
+-- table.sort is not stable, so equal-priority handlers would otherwise swap
+-- precedence whenever the registry is rebuilt.
+local handlerSeq = 0
+
 -- Cache hold callbacks to avoid repeated table lookups in hot path
 local cachedHoldCallbacks = {}
 
@@ -88,9 +97,14 @@ Input._paused = false  -- Pauses all input callbacks until resumed
 --------------------------------------------------------------------------------
 
 -- ! Priority Comparator
--- Cached comparison function to avoid creating closures repeatedly
+-- Cached comparison function to avoid creating closures repeatedly.
+-- Ties break on registration order so precedence is deterministic across the
+-- unstable sort in mergeHandlers().
 local function priorityComparator(a, b)
-  return a.priority > b.priority
+  if a.priority ~= b.priority then
+    return a.priority > b.priority
+  end
+  return a.seq < b.seq
 end
 
 -- ! Reset Button Flags
@@ -221,6 +235,7 @@ function Input.init()
   Input._paused = false
 
   handlerRegistry = {}
+  handlerSeq = 0
   activeMergedHandler = nil
   autoFlushEnabled = true
   pendingRegistryDirty = false
@@ -228,20 +243,21 @@ function Input.init()
   resetButtonFlags()
 end
 
--- ! Add Handler
--- Register or update a handler with given priority (higher = more important)
-function Input.addHandler(owner, tbl, priority)
-  Log.assert(owner and tbl, "[Input.addHandler] Must provide owner and table.", 2) --#DEBUG
-  priority = priority or 0
-
-  -- Replace existing handler in-place to avoid array shifts
+-- ! Helper: Register Handler
+-- Shared path for Input.addHandler and Input._restoreHandler. A nil 'seq' mints
+-- a fresh registration sequence; a non-nil 'seq' reinstates a captured one.
+local function registerHandler(owner, tbl, priority, seq)
+  -- Replace existing handler in-place to avoid array shifts. Mutating the
+  -- record (rather than rebuilding it) preserves 'seq' for free.
   for i = 1, #handlerRegistry do
-    if handlerRegistry[i].owner == owner then
-      handlerRegistry[i] = {
-        owner = owner,
-        tbl = tbl,
-        priority = priority
-      }
+    local existing = handlerRegistry[i]
+    if existing.owner == owner then
+      existing.tbl = tbl
+      existing.priority = priority
+      if seq then
+        existing.seq = seq
+        handlerSeq = max(handlerSeq, seq + 1)
+      end
       if autoFlushEnabled then
         Input.flush()
       else
@@ -252,16 +268,50 @@ function Input.addHandler(owner, tbl, priority)
   end
 
   -- Add new handler
+  local assigned = seq or handlerSeq
   tableInsert(handlerRegistry, {
     owner = owner,
     tbl = tbl,
-    priority = priority
+    priority = priority,
+    seq = assigned
   })
+  -- Keep the counter ahead of any restored sequence so a future registration
+  -- can never tie an existing one.
+  handlerSeq = max(handlerSeq, assigned + 1)
 
   if autoFlushEnabled then
     Input.flush()
   else
     pendingRegistryDirty = true
+  end
+end
+
+-- ! Add Handler
+-- Register or update a handler with given priority (higher = more important).
+-- New owners mint a registration sequence; updating an existing owner preserves
+-- it. A removed-then-re-added owner therefore sorts last among equal priorities.
+function Input.addHandler(owner, tbl, priority)
+  Log.assert(owner and tbl, "[Input.addHandler] Must provide owner and table.", 2) --#DEBUG
+  registerHandler(owner, tbl, priority or 0, nil)
+end
+
+-- ! Restore Handler (internal)
+-- Lifecycle-only: re-registers an owner at a previously captured priority and
+-- sequence so precedence survives a pause/resume cycle. Registration sequence is
+-- engine bookkeeping, not a game-facing contract -- games use Input.addHandler.
+function Input._restoreHandler(owner, tbl, priority, seq)
+  Log.assert(owner and tbl, "[Input._restoreHandler] Must provide owner and table.", 2) --#DEBUG
+  registerHandler(owner, tbl, priority or 0, seq)
+end
+
+-- ! Get Handler Registration (internal)
+-- Returns priority, seq for an owner; nil, nil when not registered.
+function Input._getHandlerRegistration(owner)
+  for i = 1, #handlerRegistry do
+    local entry = handlerRegistry[i]
+    if entry.owner == owner then
+      return entry.priority, entry.seq
+    end
   end
 end
 
@@ -558,16 +608,42 @@ function Input.setIsEnabled(value)
   Log.debug("[Input.setIsEnabled] Set to " .. tostring(value)) --#DEBUG
 end
 
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
 --[[
-USAGE EXAMPLE:
+
+Input merges prioritized handlers and centralizes hold, crank, and pause state.
+
+-- Register Gameplay Controls
+local playerControls = {
+  AButtonDown = function() player:jump() end,
+  AButtonHold = function() player:chargeJump() end,
+  cranked = function(change) player:turnCrank(change) end,
+}
+
+Input.setButtonHoldBufferAmount(4)
 Input.addHandler(player, playerControls, 0)
-Input.addHandler(menu, menuControls, 100) -- Higher priority
+Input.addHandler(companion, companionControls, 0)
+-- Earlier registration wins shared keys when priorities are equal.
+
+-- Add a Modal Menu Above Gameplay
+local menuControls = Input.makeModalHandler({
+  BButtonDown = function() menu:close() end,
+})
+Input.addHandler(menu, menuControls, 100)
 Input.removeHandler(menu)
 
--- Batch operations for better performance
+-- Batch Handler Changes into One Rebuild
 Input.suspendAutoFlush()
 for _, widget in ipairs(widgets) do
   Input.addHandler(widget, widget:getInputTable(), 20)
 end
 Input.resumeAutoFlush()
-]]--
+
+-- Pause Input and Wait for Released Buttons Before Resuming
+Input.pause()
+Input.resume(true)
+
+--]]
