@@ -61,13 +61,13 @@ import "libraries/roxy/core/scenes/RoxyScene"
 roxy = roxy or {}
 
 -- Aliases
-
 local pd        <const> = playdate
 local Graphics  <const> = pd.graphics
 local Sprite    <const> = Graphics.sprite
 
 local r           <const> = roxy
 local Debug       <const> = r.Debug
+local GameData    <const> = r.GameData
 local Cache       <const> = r.Cache
 local Config      <const> = r.Config
 local Input       <const> = r.Input
@@ -216,24 +216,107 @@ function r.start(startingSceneFn)
 end
 
 --------------------------------------------------------------------------------
--- Pause and Resume
+-- System Lifecycle
 --------------------------------------------------------------------------------
+
+-- Roxy owns the Playdate system-event globals. Every forwarder runs an optional
+-- game hook. Pause, terminate, sleep, and lock force a GameData autosave; pause
+-- and resume also drive the current scene. Games set 'roxy.onGameWillPause' etc.
+-- instead of assigning the corresponding Playdate globals, which would bypass
+-- Roxy's autosave or scene forwarding and, when debug checks are enabled, trip
+-- the tamper check.
+--
+-- 'GameData' is a '<const>' table alias, but 'autosave' is intentionally looked
+-- up on that table at each call.
+
+-- Records the exact scene this module paused, so a system resume never
+-- un-pauses a scene that game code paused itself. Cleared on every resume.
+local systemPausedScene = nil
+
+-- ! Utility: Call Game Hook
+-- Runs an optional game hook under protection so a broken hook cannot defeat
+-- autosave or scene pause. Returns pcall's success flag and value separately:
+-- 'error(nil)' and 'error(false)' are legal, so branching on the value alone
+-- would swallow those failures.
+local function callGameHook(hook)
+  if not hook then return true, nil end
+  return pcall(hook)
+end
 
 -- ! Game Will Pause
 function r.gameWillPause()
+  -- Hook first: GameData mutations are synchronous but the save I/O defers
+  -- through a zero-delay timer that cannot fire while paused, so the autosave
+  -- below must be the thing that observes whatever the hook staged.
+  local hookOk, hookErr = callGameHook(r.onGameWillPause)
+
+  GameData.autosave()
+
   local currentScene = Scene.currentScene
-  if currentScene.pause then
+  if currentScene and not currentScene.isPaused and currentScene.pause then
     currentScene:pause()
+    systemPausedScene = currentScene
   end
+
+  -- Rethrow only after persistence and scene pause are complete.
+  if not hookOk then error(hookErr, 0) end
 end
 
 -- ! Game Will Resume
 function r.gameWillResume()
-  local currentScene = Scene.currentScene
-  if currentScene.resume then
-    currentScene:resume()
+  -- Clear first so a stale reference can never drive a later resume and never
+  -- anchors a replaced scene's sprite graph.
+  local pausedScene = systemPausedScene
+  systemPausedScene = nil
+
+  if pausedScene and pausedScene == Scene.currentScene and pausedScene.resume then
+    pausedScene:resume()
   end
+
+  -- Unprotected: the scene is already restored, so an error can propagate.
+  local onGameWillResume = r.onGameWillResume
+  if onGameWillResume then onGameWillResume() end
 end
+
+-- ! Game Will Terminate
+function r.gameWillTerminate()
+  local hookOk, hookErr = callGameHook(r.onGameWillTerminate)
+  GameData.autosave()
+  if not hookOk then error(hookErr, 0) end
+end
+
+-- ! Device Will Sleep
+-- Save point only: Roxy has no paired wake callback to resume the scene.
+function r.deviceWillSleep()
+  local hookOk, hookErr = callGameHook(r.onDeviceWillSleep)
+  GameData.autosave()
+  if not hookOk then error(hookErr, 0) end
+end
+
+-- ! Device Will Lock
+-- Save point only: Playdate provides deviceDidUnlock, but Roxy does not use
+-- lock/unlock to drive scene pause state.
+function r.deviceWillLock()
+  local hookOk, hookErr = callGameHook(r.onDeviceWillLock)
+  GameData.autosave()
+  if not hookOk then error(hookErr, 0) end
+end
+
+--#DEBUG START
+-- ! Reset System Pause State (unit tests)
+function r._resetSystemPauseState()
+  systemPausedScene = nil
+end
+--#DEBUG END
+
+-- Install at file scope after GameData is imported so Roxy is the last writer,
+-- and before 'roxy.init()' so Debug.captureOriginalFunctions snapshots these as
+-- the originals. Same seam as 'pd.update' below.
+pd.gameWillPause      = r.gameWillPause
+pd.gameWillResume     = r.gameWillResume
+pd.gameWillTerminate  = r.gameWillTerminate
+pd.deviceWillSleep    = r.deviceWillSleep
+pd.deviceWillLock     = r.deviceWillLock
 
 --------------------------------------------------------------------------------
 -- Main Game Loop
@@ -298,3 +381,39 @@ function pd.update()
   updateDebug() --#DEBUG
   if showFPS then drawFPS(fpsX, fpsY) end --#DEBUG
 end
+
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+-- Extend Roxy's lifecycle handling; do not replace the playdate callbacks.
+local function stageSessionState()
+  roxy.GameData.set({
+    room = currentRoom,
+    checkpoint = currentCheckpoint,
+  })
+end
+
+roxy.onGameWillPause = stageSessionState
+roxy.onGameWillTerminate = stageSessionState
+roxy.onDeviceWillSleep = stageSessionState
+roxy.onDeviceWillLock = stageSessionState
+
+roxy.onGameWillResume = function()
+  refreshControllerState()
+end
+
+-- Keep scene-specific pause behavior on the scene.
+function GameplayScene:pause()
+  GameplayScene.super.pause(self)
+  self.ambientTrack:pause()
+end
+
+function GameplayScene:resume()
+  GameplayScene.super.resume(self)
+  self.ambientTrack:play()
+end
+
+--]]

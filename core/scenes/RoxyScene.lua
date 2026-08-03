@@ -10,11 +10,12 @@ local Input   <const> = r.Input
 local Camera  <const> = r.Camera
 local Scene   <const> = r.Scene
 
-local tableInsert <const> = table.insert
-local tableRemove <const> = table.remove
-local setMetatable <const> = setmetatable
-local rawGet <const> = rawget
-local rawSet <const> = rawset
+local tableInsert   <const> = table.insert
+local tableRemove   <const> = table.remove
+local setMetatable  <const> = setmetatable
+local rawGet        <const> = rawget
+local rawSet        <const> = rawset
+local luaType       <const> = type
 
 local clearScreen         <const> = Graphics.clear
 local setColor            <const> = Graphics.setColor
@@ -30,6 +31,11 @@ local addHandler    <const> = Input.addHandler
 local pauseHandler  <const> = Input.pause
 local resumeHandler <const> = Input.resume
 local removeHandler <const> = Input.removeHandler
+
+local restoreHandler          <const> = Input._restoreHandler
+local getHandlerRegistration  <const> = Input._getHandlerRegistration
+
+local getSpritePauseMask <const> = Scene._getSpritePauseMask
 
 local resetCamera           <const> = Camera.reset
 local setCameraBounds       <const> = Camera.setBounds
@@ -71,9 +77,7 @@ local SNAPSHOT_COLLISIONS_OFF <const> = SCENE_PAUSE_COLLISIONS << SNAPSHOT_STATE
 local SNAPSHOT_COLLISIONS_ON  <const> = SNAPSHOT_COLLISIONS_OFF + RESTORE_COLLISIONS
 local SNAPSHOT_ALL_BASE       <const> = SCENE_PAUSE_ALL << SNAPSHOT_STATE_BITS
 
-local NO_OP_BG_DRAW       <const> = function(x, y, width, height) end
-local getSpritePauseMask  <const> = Scene._getSpritePauseMask
-local luaType             <const> = type
+local NO_OP_BG_DRAW <const> = function(x, y, width, height) end
 
 local _colorCallbacks = {} -- Cache: color --> fn
 local _imageCallbacks = setMetatable({}, { __mode = "k" }) -- Cache: image --> fn, weak keys
@@ -913,6 +917,8 @@ function RoxyScene:init(background)
   self._spriteAutoAddIndex = {}
   self._pauseSpriteSnapshots = {}
   self._pauseSpriteSnapshotList = {}
+  self._pausedHandlerPriority = nil
+  self._pausedHandlerSeq = nil
   self._sceneStackSpritesHidden = false
   self._sceneStackVisibilitySnapshotList = {}
   self._sequenceAutoStartQueue = {}
@@ -1200,6 +1206,10 @@ function RoxyScene:pause()
     _pauseSceneSequence(self, sequences[i])
   end
 
+  -- Capture the exact registration so resume() can reinstate precedence.
+  -- removeHandler discards the record, so a plain re-add would mint a later
+  -- sequence and hand equal-priority peers the shared keys.
+  self._pausedHandlerPriority, self._pausedHandlerSeq = getHandlerRegistration(self)
   removeHandler(self)
 end
 
@@ -1311,7 +1321,15 @@ function RoxyScene:resume()
     self._roxyScenePauseCameraSnapshot = nil
   end
 
-  self:addHandler()
+  -- Restore only when pause() actually captured a registration. A nil sequence
+  -- means the scene was not registered at pause time, and 'inputHandler'
+  -- defaults to {}, so an unconditional add would register a handler that did
+  -- not exist before.
+  local pausedPriority, pausedSeq = self._pausedHandlerPriority, self._pausedHandlerSeq
+  self._pausedHandlerPriority, self._pausedHandlerSeq = nil, nil
+  if pausedSeq then
+    self:_restoreHandler(pausedPriority, pausedSeq)
+  end
 end
 
 -- ! Exit
@@ -1346,6 +1364,8 @@ function RoxyScene:cleanup()
   self._sequenceAutoStartQueue = {}
   self._sceneStackSpritesHidden = false
   self._sceneStackVisibilitySnapshotList = {}
+  self._pausedHandlerPriority = nil
+  self._pausedHandlerSeq = nil
 
   self.backgroundColor = nil
   self.backgroundImage = nil
@@ -1750,6 +1770,15 @@ function RoxyScene:addHandler()
   local inputHandler = self.inputHandler
   if inputHandler and (luaType(inputHandler) == "table" or luaType(inputHandler) == "function") then
     addHandler(self, inputHandler, 0)
+  end
+end
+
+-- ! Restore Input Handler (internal)
+-- Lifecycle-only: reinstates the exact registration captured by pause().
+function RoxyScene:_restoreHandler(priority, seq)
+  local inputHandler = self.inputHandler
+  if inputHandler and (luaType(inputHandler) == "table" or luaType(inputHandler) == "function") then
+    restoreHandler(self, inputHandler, priority or 0, seq)
   end
 end
 

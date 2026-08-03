@@ -9,32 +9,26 @@ local pd        <const> = playdate
 local File      <const> = pd.file
 local Datastore <const> = pd.datastore
 
--- Time helpers
+local r       <const> = roxy
+local Config  <const> = r.Config
+local Table   <const> = r.Table
+
+local max           <const> = math.max
+local stringFormat  <const> = string.format
+
+local cloneDeep <const> = Table.cloneWithCycles
+
 local getTime       <const> = pd.getGMTTime
 local epochFromTime <const> = pd.epochFromGMTTime
 local timeFromEpoch <const> = pd.timeFromEpoch
+local fileExists    <const> = File.exists
+local renameFile    <const> = File.rename
+local writeData     <const> = Datastore.write
+local readData      <const> = Datastore.read
+local deleteData    <const> = Datastore.delete
 
-local stringFormat <const> = string.format
-
-local max <const> = math.max
-
--- Roxy utilities
-local clamp     <const> = roxy.Math.clamp
-local cloneDeep <const> = roxy.Table.cloneWithCycles
-
-local getConfig <const> = roxy.Config.get
-
--- File I/O
-local fileExists <const> = File.exists
-local renameFile <const> = File.rename
-local writeData  <const> = Datastore.write
-local readData   <const> = Datastore.read
-local deleteData <const> = Datastore.delete
-
--- Timer for zero-delay batching
 local performAfterDelay <const> = pd.timer.performAfterDelay
-
-local getConfig <const> = roxy.Config.get
+local getConfig         <const> = Config.get
 
 --------------------------------------------------------------------------------
 -- Configurable slot count (no hard limit)
@@ -424,15 +418,59 @@ function GameData.setCurrentSlot(slot)
 end
 
 --------------------------------------------------------------------------------
--- Auto-save on quit/pause
+-- Autosave
 --------------------------------------------------------------------------------
 
--- ! Get Will Terminate
-function playdate.gameWillTerminate()
-  GameData.saveAll(true)
+-- ! Autosave
+-- Force-save every existing slot. Roxy calls this from the system lifecycle
+-- handlers it owns; see roxy.lua. GameData deliberately does not claim
+-- 'playdate.gameWillPause' / 'gameWillTerminate' itself -- import order decided
+-- the winner and the last writer silently dropped the other handler.
+function GameData.autosave()
+  return GameData.saveAll(true)
 end
 
--- ! Get Will Pause
-function playdate.gameWillPause()
-  GameData.saveAll(true)
-end
+--------------------------------------------------------------------------------
+-- Usage Examples
+--------------------------------------------------------------------------------
+
+--[[
+
+GameData manages typed save data across one or more slots.
+
+-- Define Defaults and Create Three Slots
+GameData.setup({
+  level = 1,
+  score = 0,
+  inventory = {},
+}, 3)
+
+-- Read and Update a Slot
+local score = GameData.get("score", 1)
+local inventory = GameData.get("inventory", 1)
+GameData.set("score", score + 500, 1, {
+  updateTimestamp = true,
+  save = true,
+})
+
+-- Replace and Select a Slot
+GameData.setSlot({
+  level = 4,
+  score = 6800,
+  inventory = { "observatory-key" },
+}, 2, {
+  updateTimestamp = true,
+  save = true,
+})
+GameData.setCurrentSlot(2)
+local activeSlot = GameData.getSlot()
+
+-- Read Without a Defensive Copy on Performance-Sensitive Paths
+local inventoryView = GameData.getFast("inventory")
+-- Treat inventoryView as read-only; direct mutations bypass dirty tracking.
+
+-- Restore Defaults
+GameData.reset("score", 2, { updateTimestamp = true, save = true })
+GameData.resetSlot(3, { updateTimestamp = true, save = true })
+
+--]]
