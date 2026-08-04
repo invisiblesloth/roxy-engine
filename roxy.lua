@@ -230,7 +230,10 @@ end
 -- up on that table at each call.
 
 -- Records the exact scene this module paused, so a system resume never
--- un-pauses a scene that game code paused itself. Cleared on every resume.
+-- un-pauses a scene that game code paused itself. System resume requires the
+-- RoxyScene boolean 'isPaused' state to distinguish partial pause work from a
+-- pause override that failed before it reached the superclass. Cleared on
+-- every resume.
 local systemPausedScene = nil
 
 -- ! Utility: Call Game Hook
@@ -250,16 +253,22 @@ function r.gameWillPause()
   -- below must be the thing that observes whatever the hook staged.
   local hookOk, hookErr = callGameHook(r.onGameWillPause)
 
-  GameData.autosave()
+  local autosaveOk, autosaveErr = pcall(GameData.autosave)
 
+  local pauseOk, pauseErr = true, nil
   local currentScene = Scene.currentScene
-  if currentScene and not currentScene.isPaused and currentScene.pause then
-    currentScene:pause()
+  if currentScene and currentScene.isPaused ~= true and currentScene.pause then
+    -- Record ownership before the fallible pause work. RoxyScene:pause() sets
+    -- isPaused before its internal sprite, sequence, camera, and input work.
     systemPausedScene = currentScene
+    pauseOk, pauseErr = pcall(currentScene.pause, currentScene)
   end
 
-  -- Rethrow only after persistence and scene pause are complete.
+  -- Rethrow only after persistence and scene pause are complete. The first
+  -- lifecycle failure wins so later failures cannot hide the original cause.
   if not hookOk then error(hookErr, 0) end
+  if not autosaveOk then error(autosaveErr, 0) end
+  if not pauseOk then error(pauseErr, 0) end
 end
 
 -- ! Game Will Resume
@@ -269,7 +278,8 @@ function r.gameWillResume()
   local pausedScene = systemPausedScene
   systemPausedScene = nil
 
-  if pausedScene and pausedScene == Scene.currentScene and pausedScene.resume then
+  if pausedScene and pausedScene == Scene.currentScene
+    and pausedScene.isPaused == true and pausedScene.resume then
     pausedScene:resume()
   end
 
