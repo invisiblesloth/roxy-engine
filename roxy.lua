@@ -229,6 +229,18 @@ end
 -- 'GameData' is a '<const>' table alias, but 'autosave' is intentionally looked
 -- up on that table at each call.
 
+--#DEBUG START
+-- A repeated import may encounter the forwarders from the prior Roxy import.
+-- Preserve them so the migration diagnostic does not mistake them for game code.
+local priorLifecycleForwarders <const> = {
+  gameWillPause     = r.gameWillPause,
+  gameWillResume    = r.gameWillResume,
+  gameWillTerminate = r.gameWillTerminate,
+  deviceWillSleep   = r.deviceWillSleep,
+  deviceWillLock    = r.deviceWillLock,
+}
+--#DEBUG END
+
 -- Records the exact scene this module paused, so a system resume never
 -- un-pauses a scene that game code paused itself. System resume requires the
 -- RoxyScene boolean 'isPaused' state to distinguish partial pause work from a
@@ -322,6 +334,34 @@ end
 -- Install at file scope after GameData is imported so Roxy is the last writer,
 -- and before 'roxy.init()' so Debug.captureOriginalFunctions snapshots these as
 -- the originals. Same seam as 'pd.update' below.
+
+--#DEBUG START
+local lifecycleCallbacks <const> = {
+  { playdateName = "gameWillPause",     forwarderName = "gameWillPause",     hookName = "onGameWillPause" },
+  { playdateName = "gameWillResume",    forwarderName = "gameWillResume",    hookName = "onGameWillResume" },
+  { playdateName = "gameWillTerminate", forwarderName = "gameWillTerminate", hookName = "onGameWillTerminate" },
+  { playdateName = "deviceWillSleep",   forwarderName = "deviceWillSleep",   hookName = "onDeviceWillSleep" },
+  { playdateName = "deviceWillLock",    forwarderName = "deviceWillLock",    hookName = "onDeviceWillLock" },
+}
+
+local replacedLifecycleCallbacks = {}
+for i = 1, #lifecycleCallbacks do
+  local callback = lifecycleCallbacks[i]
+  local existingCallback = pd[callback.playdateName]
+  if existingCallback ~= nil and existingCallback ~= priorLifecycleForwarders[callback.forwarderName] then
+    replacedLifecycleCallbacks[#replacedLifecycleCallbacks + 1] =
+      "playdate." .. callback.playdateName .. " (use roxy." .. callback.hookName .. ")"
+  end
+end
+
+if #replacedLifecycleCallbacks > 0 then
+  Log.warn(
+    "[Roxy] Roxy owns these Playdate lifecycle globals and will replace their pre-existing values: "
+      .. table.concat(replacedLifecycleCallbacks, ", ") .. "."
+  )
+end
+--#DEBUG END
+
 pd.gameWillPause      = r.gameWillPause
 pd.gameWillResume     = r.gameWillResume
 pd.gameWillTerminate  = r.gameWillTerminate

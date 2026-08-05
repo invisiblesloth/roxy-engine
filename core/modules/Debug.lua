@@ -175,10 +175,10 @@ function Debug.runChecks()
   end
   if debugChecksActive then
     check(pd.update, debugFunctions.update, "playdate.update")
-    -- 'crankDocked' / 'crankUndocked' are never assigned by the engine: those
-    -- events reach scenes through 'playdate.inputHandlers', so installing the
-    -- globals would double-fire. The checks are kept for games that install
-    -- them.
+    -- Roxy does not assign 'crankDocked' / 'crankUndocked': scenes receive
+    -- those events through 'playdate.inputHandlers', so globals would
+    -- double-fire. Debug checking snapshots their values when checks begin and
+    -- treats a later replacement as tampering.
     check(pd.crankDocked, debugFunctions.crankDocked, "playdate.crankDocked")
     check(pd.crankUndocked, debugFunctions.crankUndocked, "playdate.crankUndocked")
     check(pd.gameWillPause, debugFunctions.gameWillPause, "playdate.gameWillPause")
