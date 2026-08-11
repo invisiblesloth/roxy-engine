@@ -1206,9 +1206,9 @@ function RoxyScene:pause()
     _pauseSceneSequence(self, sequences[i])
   end
 
-  -- Capture the exact registration so resume() can reinstate precedence.
-  -- removeHandler discards the record, so a plain re-add would mint a later
-  -- sequence and hand equal-priority peers the shared keys.
+  -- Capture registration metadata so resume() can reinstate precedence.
+  -- removeHandler discards the record, so lifecycle restoration must recover
+  -- the sequence without overwriting an explicit paused-time registration.
   self._pausedHandlerPriority, self._pausedHandlerSeq = getHandlerRegistration(self)
   removeHandler(self)
 end
@@ -1321,10 +1321,11 @@ function RoxyScene:resume()
     self._roxyScenePauseCameraSnapshot = nil
   end
 
-  -- Restore only when pause() actually captured a registration. A nil sequence
-  -- means the scene was not registered at pause time, and 'inputHandler'
-  -- defaults to {}, so an unconditional add would register a handler that did
-  -- not exist before.
+  -- Reconcile only when pause() captured a registration. A missing owner is
+  -- restored from the snapshot; an explicit paused-time registration keeps its
+  -- handler and priority while recovering captured sequence precedence. A nil
+  -- sequence means the scene was not registered at pause time, so resume leaves
+  -- any current registration untouched.
   local pausedPriority, pausedSeq = self._pausedHandlerPriority, self._pausedHandlerSeq
   self._pausedHandlerPriority, self._pausedHandlerSeq = nil, nil
   if pausedSeq then
@@ -1774,9 +1775,14 @@ function RoxyScene:addHandler()
 end
 
 -- ! Restore Input Handler (internal)
--- Lifecycle-only: reinstates the exact registration captured by pause().
+-- Lifecycle-only: restores missing captured state or reconciles the captured
+-- sequence with an explicit paused-time handler and priority.
 function RoxyScene:_restoreHandler(priority, seq)
+  -- Prefer a handler explicitly registered while paused. The scene property may
+  -- have changed or been cleared, but the live registry entry remains valid.
+  local _, registeredSeq, registeredHandler = getHandlerRegistration(self)
   local inputHandler = self.inputHandler
+  if registeredSeq ~= nil then inputHandler = registeredHandler end
   if inputHandler and (luaType(inputHandler) == "table" or luaType(inputHandler) == "function") then
     restoreHandler(self, inputHandler, priority or 0, seq)
   end
