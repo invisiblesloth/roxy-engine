@@ -244,19 +244,23 @@ function Input.init()
 end
 
 -- ! Helper: Register Handler
--- Shared path for Input.addHandler and Input._restoreHandler. A nil 'seq' mints
--- a fresh registration sequence; a non-nil 'seq' reinstates a captured one.
+-- Shared path for Input.addHandler and Input._restoreHandler. A nil 'seq'
+-- performs an ordinary add/update; a non-nil 'seq' reconciles lifecycle state.
 local function registerHandler(owner, tbl, priority, seq)
   -- Replace existing handler in-place to avoid array shifts. Mutating the
-  -- record (rather than rebuilding it) preserves 'seq' for free.
+  -- record (rather than rebuilding it) preserves ordinary update ordering.
   for i = 1, #handlerRegistry do
     local existing = handlerRegistry[i]
     if existing.owner == owner then
-      existing.tbl = tbl
-      existing.priority = priority
-      if seq then
+      if seq ~= nil then
+        -- The owner was explicitly re-registered while lifecycle code held a
+        -- snapshot. Preserve that visible handler/priority change while
+        -- returning the owner to its captured equal-priority position.
         existing.seq = seq
         handlerSeq = max(handlerSeq, seq + 1)
+      else
+        existing.tbl = tbl
+        existing.priority = priority
       end
       if autoFlushEnabled then
         Input.flush()
@@ -296,21 +300,22 @@ function Input.addHandler(owner, tbl, priority)
 end
 
 -- ! Restore Handler (internal)
--- Lifecycle-only: re-registers an owner at a previously captured priority and
--- sequence so precedence survives a pause/resume cycle. Registration sequence is
--- engine bookkeeping, not a game-facing contract -- games use Input.addHandler.
+-- Lifecycle-only: restores a missing owner from captured state. If the owner
+-- was explicitly re-registered, preserves its handler and priority while
+-- reinstating captured sequence precedence. Registration sequence is engine
+-- bookkeeping, not a game-facing contract -- games use Input.addHandler.
 function Input._restoreHandler(owner, tbl, priority, seq)
   Log.assert(owner and tbl, "[Input._restoreHandler] Must provide owner and table.", 2) --#DEBUG
   registerHandler(owner, tbl, priority or 0, seq)
 end
 
 -- ! Get Handler Registration (internal)
--- Returns priority, seq for an owner; nil, nil when not registered.
+-- Returns priority, seq, handler table for an owner; nil values when absent.
 function Input._getHandlerRegistration(owner)
   for i = 1, #handlerRegistry do
     local entry = handlerRegistry[i]
     if entry.owner == owner then
-      return entry.priority, entry.seq
+      return entry.priority, entry.seq, entry.tbl
     end
   end
 end
