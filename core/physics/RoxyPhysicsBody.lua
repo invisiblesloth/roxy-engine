@@ -22,6 +22,7 @@ function RoxyPhysicsBody:init(owner, opts)
   self.vy = opts.vy or 0
   self.ax = 0
   self.ay = opts.gravity or 200
+  self.friction = opts.friction
   self.onGround = false
   self.onCollision = opts.onCollision -- Optional user function
 
